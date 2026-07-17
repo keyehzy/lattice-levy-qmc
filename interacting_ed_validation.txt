@@ -1,0 +1,13 @@
+Finite-U continuous-time lattice-Levy validation
+=================================================
+N=2, L=3, d=1, beta=0.8, t=1.0, U=1.2
+samples=12000, burn_in=2000, batch_size=200
+global acceptance=0.829214
+Hilbert dimension=6
+
+observable              exact                Monte Carlo
+--------------------------------------------------------------
+total_energy         -3.1421047841    -3.1246488398 +/- 0.0254681265
+kinetic_energy       -3.4840757439    -3.4669791667 +/- 0.0252726532
+interaction_energy    0.3419709598     0.3423303269 +/- 0.0042728795
+pair_count            0.2849757998     0.2852752724 +/- 0.0035607329
