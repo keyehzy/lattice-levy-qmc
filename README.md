@@ -1,54 +1,86 @@
+# Canonical lattice Lévy QMC for Bose–Hubbard world lines
 
-# Lattice Lévy sampler for ideal Bose–Hubbard world lines
+This repository is a compact reference implementation of canonical-ensemble
+world-line sampling for bosons on a periodic hypercubic lattice. It contains
+two related samplers:
 
-This implementation samples the canonical noninteracting Bose–Hubbard model
+| Module | Target | Path representation | Role |
+| --- | --- | --- | --- |
+| `lattice_levy.py` | Ideal gas, \(U=0\) | Positions at \(M+1\) times per particle | Exact ideal-gas samples and visualization |
+| `interacting_lattice_levy.py` | Finite \(U\) | Continuous-time nearest-neighbor jump events | Metropolis Monte Carlo for the Bose–Hubbard model |
+
+The code is deliberately small and explicit. [Architecture and
+algorithms](docs/ARCHITECTURE.md) explains how it works; [C++ porting
+guide](docs/CPP_PORT.md) records the data structures, interfaces, invariants,
+and numerical details that a rewrite should preserve.
+
+## Model
+
+At fixed particle number \(N\), the Hamiltonian is
 
 \[
-H_0=-t\sum_{\langle ij\rangle}(a_i^\dagger a_j+a_j^\dagger a_i)
+H=-t\sum_{\langle ij\rangle}
+  (a_i^\dagger a_j+a_j^\dagger a_i)
+  +\frac{U}{2}\sum_i n_i(n_i-1)
 \]
 
-on an \(L^d\) periodic hypercubic lattice.
+on an \(L^d\) periodic hypercubic lattice. The ideal sampler draws directly
+from the \(U=0\) canonical measure. The interacting sampler uses that measure
+for proposals and accepts a proposed path configuration \(R'\) with
 
-## Included
+\[
+\min\left(1,\exp[-S_U(R')+S_U(R)]\right),\qquad
+S_U(R)=U\int_0^\beta d\tau\sum_x\frac{n_x(\tau)(n_x(\tau)-1)}{2}.
+\]
 
-- Exact free bridges on the covering lattice \(\mathbb Z^d\).
-- Unequal recursive splitting, so the number of links need not be a power of two.
-- A rejection-free midpoint draw based on conditional Poisson jump counts.
-- Exact finite-torus one-particle traces from the momentum sum.
-- Exact canonical cycle recursion in log space.
-- Explicit winding-sector sampling.
-- Conversion of long permutation cycles into labeled world lines.
-- Verification tests, including a comparison against direct permutation enumeration.
+Free bridges are conditioned continuous-time random walks. The interacting
+algorithm therefore has no Trotter time discretization. In the ideal skeleton
+sampler, `M` selects which points of an exact bridge are retained; it is an
+output resolution, not a Trotter approximation.
 
-The inversion samplers omit a tail whose relative weight is bounded by
-`tail_tol` (default `1e-14`). Apart from floating-point arithmetic and this
-chosen tolerance, the \(V=0\) skeleton sampler is exact.
+The discrete inversion samplers omit a tail whose relative weight is bounded
+by `tail_tol` (default `1e-14`). Subject to that tolerance and floating-point
+roundoff, the free proposals are exact. Finite-\(U\) results are still Monte
+Carlo estimates and require equilibration, autocorrelation analysis, and
+statistical error bars.
 
-## Install
+## Repository map
+
+| Path | Purpose |
+| --- | --- |
+| `lattice_levy.py` | Free bridge primitives, torus traces, canonical cycle recursion, windings, and ideal skeleton assembly |
+| `interacting_lattice_levy.py` | Event-driven paths, interaction action, update moves, observables, and the finite-\(U\) sampler |
+| `demo.py` | One-dimensional ideal-world-line plot |
+| `demo_interacting.py` | Finite-\(U\) trace and acceptance-rate demo |
+| `validate_interacting_ed.py` | Small-system comparison with exact diagonalization |
+| `test_lattice_levy.py` | Free-kernel, recursion, winding, bridge, and configuration tests |
+| `test_interacting_lattice_levy.py` | Continuous-path, action, update, and state-invariant tests |
+| `interacting_ed_validation.txt` | Checked-in reference output from the exact-diagonalization comparison |
+
+## Install and verify
+
+Python 3.10 or newer is recommended. Install the numerical and test
+dependencies in an isolated environment:
 
 ```bash
-python -m pip install numpy scipy matplotlib pytest
-```
-
-## Run tests
-
-```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
 pytest -q
 ```
 
-or
+The tests include empirical sampling checks, so their exact run time depends
+on the machine. The checked-in validation can be regenerated with:
 
 ```bash
-python test_lattice_levy.py
+python validate_interacting_ed.py
 ```
 
-## Generate a 1D demonstration
+That program compares the Monte Carlo total, kinetic, and interaction
+energies and pair occupancy with exact diagonalization for \(N=2\), \(L=3\).
+Agreement is statistical rather than bit-for-bit.
 
-```bash
-python demo.py --N 4 --L 12 --M 64 --beta 1.0 --t 1.0
-```
-
-## Minimal use
+## Ideal-gas use
 
 ```python
 import numpy as np
@@ -65,47 +97,107 @@ cfg = sample_ideal_boson_configuration(
     rng=rng,
 )
 
+print(cfg.log_ZN)
 print(cfg.permutation)
 print([cycle.labels for cycle in cfg.cycles])
 print([cycle.winding.tolist() for cycle in cfg.cycles])
-print(cfg.worldlines.shape)  # (N, M+1, d)
+print(cfg.worldlines.shape)  # (N, M+1, d), reduced modulo L
 ```
 
-For every particle label `i`,
+`cfg.worldlines_covering` contains the corresponding unwrapped coordinates.
+For every particle label `i`, the endpoint joins the next permutation label:
 
 ```python
-cfg.worldlines[i, -1] == cfg.worldlines[cfg.permutation[i], 0]
+j = cfg.permutation[i]
+assert np.array_equal(cfg.worldlines[i, -1], cfg.worldlines[j, 0])
 ```
 
-modulo the periodic lattice.
+Generate the checked-in style of one-dimensional plot with:
 
-## Midpoint law
+```bash
+python demo.py --N 4 --L 12 --M 64 --beta 1.0 --t 1.0
+```
 
-`sample_midpoint_covering_1d(a,b,tau_left,tau_right,t,rng)` samples
+## Interacting use
 
-\[
-P(k|a,b)=
-\frac{
-I_{|k-a|}(2t\tau_L)I_{|b-k|}(2t\tau_R)
-}{
-I_{|b-a|}(2t(\tau_L+\tau_R))
-}.
-\]
+```python
+import numpy as np
+from interacting_lattice_levy import InteractingLatticeLevySampler
 
-Internally it uses the equivalent continuous-time random-walk representation.
-This avoids a fixed absolute spatial window, which fails for widely separated
-endpoints.
+sampler = InteractingLatticeLevySampler(
+    N=6,
+    beta=1.5,
+    L=8,
+    d=1,
+    t=1.0,
+    U=2.0,
+    rng=np.random.default_rng(20260717),
+)
 
-## Finite-volume trace
+# Equilibrate. Global moves are what change the permutation-cycle structure.
+for _ in range(500):
+    sampler.sweep(
+        segment_updates=sampler.N,
+        segment_fraction=0.35,
+        cycle_updates=1,
+        global_updates=1,
+    )
 
-The exact one-particle trace used for a cycle of duration \(s\) is
+samples = sampler.run(
+    2_000,
+    thin=2,
+    segment_fraction=0.35,
+    cycle_updates=1,
+    global_updates=1,
+)
+print(samples[-1])
+print({name: stat.acceptance for name, stat in sampler.statistics.items()})
+```
 
-\[
-Z_1(s)=
-\left[
-\sum_{n=0}^{L-1}
-e^{2ts\cos(2\pi n/L)}
-\right]^d.
-\]
+`observables()` and `run()` return:
 
-This includes all periodic images and winding sectors.
+| Key | Meaning |
+| --- | --- |
+| `action` | \(U\) times the integrated on-site pair count |
+| `pair_overlap_time` | \(\int d\tau\sum_x n_x(n_x-1)/2\) |
+| `double_occupancy_per_site` | Pair-overlap time divided by \(\beta L^d\) |
+| `kinetic_energy` | Continuous-time expansion estimator \(-K/\beta\), with \(K\) the total jump count |
+| `interaction_energy` | \(U\) times pair-overlap time divided by \(\beta\) |
+| `total_energy` | Sum of the two energy estimators |
+| `n_events` | Total number of hopping events in the configuration |
+| `winding` | Total covering-space displacement divided by \(L\) |
+| `cycle_lengths` | Current permutation-cycle lengths |
+
+The demonstration driver runs the same workflow and plots running means:
+
+```bash
+python demo_interacting.py --N 6 --L 8 --beta 1.5 --t 1.0 --U 2.0
+```
+
+## Important conventions
+
+- Particle labels index world-line segments of duration `beta`; permutation
+  cycles connect their endpoints into longer bosonic loops.
+- Covering-space coordinates are signed integers and may lie outside
+  `[0, L)`. Physical positions use Euclidean reduction modulo `L`.
+- `ContinuousPath` is piecewise constant and right-continuous: an event at
+  time `tau` is included in `position_at(tau)`.
+- Segment moves preserve fixed covering-space endpoints. Cycle moves preserve
+  cycle labels but can change their geometry and winding. Only global moves
+  replace the permutation-cycle structure.
+- The implementation is canonical. A chemical-potential contribution is
+  constant at fixed `N` and is not part of Metropolis decisions.
+- The same `numpy.random.Generator` drives every random decision, making a
+  Python run reproducible for a fixed seed and dependency stack.
+
+## Scope and current limitations
+
+This is a research/reference implementation, not a tuned production engine.
+It assumes one hopping amplitude and one length for every dimension. The
+interaction overlap is recomputed for the whole configuration after each
+proposal, which keeps the detailed-balance logic transparent but costs
+\(O(E\log E)\) for \(E\) jump events. Global ideal-gas proposals guarantee
+access to different permutation sectors, but their acceptance can become poor
+for larger systems or stronger interactions. Checkpointing, parallel chains,
+automatic error analysis, and production diagnostics are outside the current
+scope.
