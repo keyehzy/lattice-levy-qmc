@@ -2,31 +2,59 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cxxopts.hpp>
 #include <exception>
 #include <iomanip>
 #include <iostream>
-#include <limits>
-#include <stdexcept>
-#include <string>
-#include <string_view>
+#include <optional>
 
 namespace {
 
-std::size_t parse_size(const char *text, const std::string_view name) {
-  const auto parsed = std::stoull(text);
-  if (parsed > std::numeric_limits<std::size_t>::max()) {
-    throw std::out_of_range(std::string(name) + " exceeds size_t");
-  }
-  return static_cast<std::size_t>(parsed);
-}
+struct CommandLine {
+  qmc::Model model;
+  std::size_t time_links;
+  std::uint64_t seed;
+};
 
-qmc::Coord parse_coord(const char *text, const std::string_view name) {
-  const auto parsed = std::stoll(text);
-  if (parsed < std::numeric_limits<qmc::Coord>::min() ||
-      parsed > std::numeric_limits<qmc::Coord>::max()) {
-    throw std::out_of_range(std::string(name) + " exceeds Coord");
+std::optional<CommandLine> parse_command_line(const int argc, char **argv) {
+  cxxopts::Options options(argv[0], "Sample an ideal-boson world-line configuration");
+  options.positional_help("[N] [beta] [M] [L] [d] [t] [seed]").show_positional_help();
+  options.add_options(
+      "",
+      {
+          {"n,particles", "Particle count (N)", cxxopts::value<std::size_t>()->default_value("4")},
+          {"b,beta", "Inverse temperature (beta)", cxxopts::value<double>()->default_value("1.0")},
+          {"m,time-links", "Retained time links per beta (M)",
+           cxxopts::value<std::size_t>()->default_value("64")},
+          {"l,linear-size", "Linear lattice size (L)",
+           cxxopts::value<qmc::Coord>()->default_value("12")},
+          {"d,dimension", "Spatial dimension (d)",
+           cxxopts::value<std::size_t>()->default_value("1")},
+          {"t,hopping", "Hopping amplitude (t)", cxxopts::value<double>()->default_value("1.0")},
+          {"s,seed", "Random seed", cxxopts::value<std::uint64_t>()->default_value("2026")},
+          {"h,help", "Print help"},
+      });
+  options.parse_positional(
+      {"particles", "beta", "time-links", "linear-size", "dimension", "hopping", "seed"});
+
+  const auto result = options.parse(argc, argv);
+  if (result.contains("help")) {
+    std::cout << options.help();
+    return std::nullopt;
   }
-  return static_cast<qmc::Coord>(parsed);
+
+  return CommandLine{
+      .model =
+          {
+              .particle_count = result["particles"].as<std::size_t>(),
+              .beta = result["beta"].as<double>(),
+              .linear_size = result["linear-size"].as<qmc::Coord>(),
+              .dimension = result["dimension"].as<std::size_t>(),
+              .hopping = result["hopping"].as<double>(),
+          },
+      .time_links = result["time-links"].as<std::size_t>(),
+      .seed = result["seed"].as<std::uint64_t>(),
+  };
 }
 
 void print_site(const qmc::Site &site) {
@@ -44,23 +72,14 @@ void print_site(const qmc::Site &site) {
 
 int main(const int argc, char **argv) {
   try {
-    if (argc > 8) {
-      std::cerr << "usage: " << argv[0] << " [N beta M L d t seed]\n";
-      return 2;
+    const auto command_line = parse_command_line(argc, argv);
+    if (!command_line.has_value()) {
+      return 0;
     }
 
-    qmc::Model model{
-        .particle_count = argc > 1 ? parse_size(argv[1], "N") : 4,
-        .beta = argc > 2 ? std::stod(argv[2]) : 1.0,
-        .linear_size = argc > 4 ? parse_coord(argv[4], "L") : 12,
-        .dimension = argc > 5 ? parse_size(argv[5], "d") : 1,
-        .hopping = argc > 6 ? std::stod(argv[6]) : 1.0,
-    };
-    const std::size_t time_links = argc > 3 ? parse_size(argv[3], "M") : 64;
-    const std::uint64_t seed = argc > 7 ? std::stoull(argv[7]) : 2026;
-
-    qmc::Random random(seed);
-    const auto configuration = qmc::sample_ideal_boson_configuration(model, time_links, random);
+    qmc::Random random(command_line->seed);
+    const auto configuration = qmc::sample_ideal_boson_configuration(
+        command_line->model, command_line->time_links, random);
 
     std::cout << std::setprecision(12) << "log Z_N = " << configuration.log_ZN << '\n';
     std::cout << "permutation = [";
@@ -87,6 +106,10 @@ int main(const int argc, char **argv) {
       print_site(cycle.winding);
       std::cout << '\n';
     }
+  } catch (const cxxopts::exceptions::exception &error) {
+    std::cerr << "error: " << error.what() << '\n';
+    std::cerr << "Try '" << argv[0] << " --help' for usage.\n";
+    return 2;
   } catch (const std::exception &error) {
     std::cerr << "error: " << error.what() << '\n';
     return 1;

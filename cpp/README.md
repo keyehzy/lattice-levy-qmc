@@ -6,8 +6,10 @@ traces, canonical partition recursion, labeled permutation cycles, explicit
 winding sectors, and dense ideal-world-line configuration assembly.
 
 The build requires CMake 3.24 or newer, a C++20 compiler, Ninja, and GSL 2.7
-or newer. Tests use an installed GoogleTest 1.17 when available and otherwise
-download its pinned upstream revision.
+or newer. Examples use an installed cxxopts 3.3 or newer when available and
+otherwise download a pinned upstream revision. Tests similarly use an installed
+GoogleTest 1.17 when available and otherwise download its pinned upstream
+revision.
 
 ## Build and test
 
@@ -45,7 +47,8 @@ cmake --build --preset sanitizers
 ctest --preset sanitizers
 ```
 
-Release builds do not download test dependencies:
+Release builds do not download test dependencies. When examples are enabled,
+cxxopts may still be downloaded if it is not installed:
 
 ```sh
 cmake --preset release
@@ -78,8 +81,13 @@ unwrapped coordinates and therefore the winding information. `64` is the
 number of retained time links per interval `beta`; it is an observation
 resolution, not a Trotter discretization.
 
-The example executable accepts `[N beta M L d t seed]`:
+The example executable provides named options for every parameter:
 
 ```sh
-./build/dev/examples/qmc_ideal_demo 8 2.0 64 16 2 1.0 2026
+./build/dev/examples/qmc_ideal_demo \
+  --particles 8 --beta 2.0 --time-links 64 --linear-size 16 \
+  --dimension 2 --hopping 1.0 --seed 2026
 ```
+
+Run it with `--help` to see parameter descriptions and defaults. The positional
+form `[N beta M L d t seed]` remains supported for compatibility.
