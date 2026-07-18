@@ -29,7 +29,7 @@ std::optional<CommandLine> parse_command_line(const int argc, char **argv) {
           {"l,linear-size", "Linear lattice size (L)",
            cxxopts::value<qmc::Coord>()->default_value("12")},
           {"d,dimension", "Spatial dimension (d)",
-           cxxopts::value<std::size_t>()->default_value("1")},
+           cxxopts::value<std::size_t>()->default_value("2")},
           {"t,hopping", "Hopping amplitude (t)", cxxopts::value<double>()->default_value("1.0")},
           {"s,seed", "Random seed", cxxopts::value<std::uint64_t>()->default_value("2026")},
           {"h,help", "Print help"},
