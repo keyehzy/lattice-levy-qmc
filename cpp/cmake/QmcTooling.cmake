@@ -36,6 +36,24 @@ function(qmc_enable_clang_tidy target)
   )
 endfunction()
 
+function(qmc_enable_sanitizers target)
+  if(NOT QMC_ENABLE_SANITIZERS)
+    return()
+  endif()
+  if(MSVC)
+    message(FATAL_ERROR "QMC_ENABLE_SANITIZERS currently requires Clang or GCC")
+  endif()
+
+  target_compile_options(
+    ${target}
+    PRIVATE
+      -fsanitize=address,undefined
+      -fno-omit-frame-pointer
+      -fno-sanitize-recover=all
+  )
+  target_link_options(${target} PRIVATE -fsanitize=address,undefined -fno-sanitize-recover=all)
+endfunction()
+
 function(qmc_add_format_targets)
   find_program(QMC_CLANG_FORMAT_EXECUTABLE NAMES clang-format clang-format-21)
   if(NOT QMC_CLANG_FORMAT_EXECUTABLE)

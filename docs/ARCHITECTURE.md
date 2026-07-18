@@ -27,8 +27,8 @@ finite-U Markov chain
   free proposals -> exact interaction action -> Metropolis -> observables
 ```
 
-`lattice_levy.py` implements the first two layers and a grid-observed ideal
-configuration. `interacting_lattice_levy.py` reuses the ideal thermodynamics
+`python/lattice_levy.py` implements the first two layers and a grid-observed ideal
+configuration. `python/interacting_lattice_levy.py` reuses the ideal thermodynamics
 and winding machinery, introduces sparse continuous-time paths, and implements
 the final two layers.
 
@@ -347,7 +347,7 @@ The tests are organized around the derivation:
 - The overlap integral is checked on a hand-built piecewise path.
 - All move families are required to accept at `U=0`, and finite-`U` sweeps are
   repeatedly validated for structural and cache consistency.
-- `validate_interacting_ed.py` supplies an independent small-system physics
+- `python/validate_interacting_ed.py` supplies an independent small-system physics
   comparison using exact diagonalization.
 
 These checks cover correctness of the main formulas and invariants. They do

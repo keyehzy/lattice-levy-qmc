@@ -28,6 +28,25 @@
       }
     },
     {
+      "name": "statistical",
+      "displayName": "Developer build with statistical tests",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build/statistical",
+      "cacheVariables": {
+        "QMC_BUILD_STATISTICAL_TESTS": "ON"
+      }
+    },
+    {
+      "name": "sanitizers",
+      "displayName": "Developer build with ASan and UBSan",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build/sanitizers",
+      "cacheVariables": {
+        "QMC_BUILD_STATISTICAL_TESTS": "ON",
+        "QMC_ENABLE_SANITIZERS": "ON"
+      }
+    },
+    {
       "name": "release",
       "displayName": "Release build",
       "generator": "Ninja",
@@ -48,6 +67,14 @@
       "configurePreset": "tidy"
     },
     {
+      "name": "statistical",
+      "configurePreset": "statistical"
+    },
+    {
+      "name": "sanitizers",
+      "configurePreset": "sanitizers"
+    },
+    {
       "name": "release",
       "configurePreset": "release"
     }
@@ -63,6 +90,20 @@
     {
       "name": "tidy",
       "configurePreset": "tidy",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "statistical",
+      "configurePreset": "statistical",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "sanitizers",
+      "configurePreset": "sanitizers",
       "output": {
         "outputOnFailure": true
       }

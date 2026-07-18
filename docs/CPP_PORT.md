@@ -6,6 +6,12 @@ calling out semantics that must survive the change of language. It does not
 require the C++ implementation to reproduce NumPy's memory layout or random
 stream byte for byte.
 
+The ideal-sampler stages described in sections 8–10 are implemented under
+`cpp/` in the `qmc` namespace. GSL supplies the scaled modified Bessel
+function, and the deterministic and statistical GoogleTests compare the port
+with the Python/SciPy reference. Continuous paths and finite-`U` sampling remain
+Python-only and outside the current C++ port.
+
 ## 1. Porting contract
 
 A faithful implementation should preserve:
@@ -29,7 +35,7 @@ invariants.
 ## 2. Recommended source boundaries
 
 ```text
-include/levy/
+include/qmc/
   model.hpp             validated parameters and numerical options
   random.hpp            all stochastic primitives behind one RNG object
   free_numerics.hpp     log-sum-exp, Bessel count and winding inversion
@@ -58,7 +64,7 @@ model to free functions.
 The following declarations are illustrative interfaces, not mandated syntax:
 
 ```cpp
-namespace levy {
+namespace qmc {
 
 using Coord = std::int64_t;
 using ParticleId = std::uint32_t;
@@ -124,7 +130,7 @@ struct MoveStatistics {
   std::optional<double> acceptance() const;
 };
 
-} // namespace levy
+} // namespace qmc
 ```
 
 Python stores every jump as a dense `d`-component vector. `JumpEvent` stores

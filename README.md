@@ -6,8 +6,9 @@ two related samplers:
 
 | Module | Target | Path representation | Role |
 | --- | --- | --- | --- |
-| `lattice_levy.py` | Ideal gas, \(U=0\) | Positions at \(M+1\) times per particle | Exact ideal-gas samples and visualization |
-| `interacting_lattice_levy.py` | Finite \(U\) | Continuous-time nearest-neighbor jump events | Metropolis Monte Carlo for the Bose–Hubbard model |
+| `python/lattice_levy.py` | Ideal gas, \(U=0\) | Positions at \(M+1\) times per particle | Exact ideal-gas samples and visualization |
+| `python/interacting_lattice_levy.py` | Finite \(U\) | Continuous-time nearest-neighbor jump events | Metropolis Monte Carlo for the Bose–Hubbard model |
+| `cpp/` | Ideal gas, \(U=0\) | Positions at \(M+1\) times per particle | C++20 port of the ideal sampler |
 
 The code is deliberately small and explicit. [Architecture and
 algorithms](docs/ARCHITECTURE.md) explains how it works; [C++ porting
@@ -48,13 +49,14 @@ statistical error bars.
 
 | Path | Purpose |
 | --- | --- |
-| `lattice_levy.py` | Free bridge primitives, torus traces, canonical cycle recursion, windings, and ideal skeleton assembly |
-| `interacting_lattice_levy.py` | Event-driven paths, interaction action, update moves, observables, and the finite-\(U\) sampler |
-| `demo.py` | One-dimensional ideal-world-line plot |
-| `demo_interacting.py` | Finite-\(U\) trace and acceptance-rate demo |
-| `validate_interacting_ed.py` | Small-system comparison with exact diagonalization |
-| `test_lattice_levy.py` | Free-kernel, recursion, winding, bridge, and configuration tests |
-| `test_interacting_lattice_levy.py` | Continuous-path, action, update, and state-invariant tests |
+| `python/lattice_levy.py` | Free bridge primitives, torus traces, canonical cycle recursion, windings, and ideal skeleton assembly |
+| `python/interacting_lattice_levy.py` | Event-driven paths, interaction action, update moves, observables, and the finite-\(U\) sampler |
+| `python/demo.py` | One-dimensional ideal-world-line plot |
+| `python/demo_interacting.py` | Finite-\(U\) trace and acceptance-rate demo |
+| `python/validate_interacting_ed.py` | Small-system comparison with exact diagonalization |
+| `python/test_lattice_levy.py` | Free-kernel, recursion, winding, bridge, and configuration tests |
+| `python/test_interacting_lattice_levy.py` | Continuous-path, action, update, and state-invariant tests |
+| `cpp/` | C++20 ideal-gas library, example, CMake build, and GoogleTests |
 | `interacting_ed_validation.txt` | Checked-in reference output from the exact-diagonalization comparison |
 
 ## Install and verify
@@ -65,15 +67,15 @@ dependencies in an isolated environment:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt
-pytest -q
+python -m pip install -r python/requirements.txt
+pytest -q python
 ```
 
 The tests include empirical sampling checks, so their exact run time depends
 on the machine. The checked-in validation can be regenerated with:
 
 ```bash
-python validate_interacting_ed.py
+python python/validate_interacting_ed.py
 ```
 
 That program compares the Monte Carlo total, kinetic, and interaction
@@ -81,6 +83,9 @@ energies and pair occupancy with exact diagonalization for \(N=2\), \(L=3\).
 Agreement is statistical rather than bit-for-bit.
 
 ## Ideal-gas use
+
+The import examples assume `python/` is the current directory or is present on
+`PYTHONPATH`.
 
 ```python
 import numpy as np
@@ -115,7 +120,7 @@ assert np.array_equal(cfg.worldlines[i, -1], cfg.worldlines[j, 0])
 Generate the checked-in style of one-dimensional plot with:
 
 ```bash
-python demo.py --N 4 --L 12 --M 64 --beta 1.0 --t 1.0
+python python/demo.py --N 4 --L 12 --M 64 --beta 1.0 --t 1.0
 ```
 
 ## Interacting use
@@ -171,7 +176,7 @@ print({name: stat.acceptance for name, stat in sampler.statistics.items()})
 The demonstration driver runs the same workflow and plots running means:
 
 ```bash
-python demo_interacting.py --N 6 --L 8 --beta 1.5 --t 1.0 --U 2.0
+python python/demo_interacting.py --N 6 --L 8 --beta 1.5 --t 1.0 --U 2.0
 ```
 
 ## Important conventions

@@ -18,9 +18,24 @@ endif()
 
 include(GoogleTest)
 
-add_executable(qmc_scaffold_test scaffold_test.cpp)
-target_link_libraries(qmc_scaffold_test PRIVATE qmc::ideal GTest::gtest_main)
-qmc_set_project_warnings(qmc_scaffold_test)
-qmc_enable_clang_tidy(qmc_scaffold_test)
+add_executable(
+  qmc_unit_tests
+  test_configuration.cpp
+  test_free_boson.cpp
+  test_free_numerics.cpp
+  test_model.cpp
+)
+target_link_libraries(qmc_unit_tests PRIVATE qmc::ideal GTest::gtest_main)
+qmc_set_project_warnings(qmc_unit_tests)
+qmc_enable_clang_tidy(qmc_unit_tests)
+qmc_enable_sanitizers(qmc_unit_tests)
+gtest_discover_tests(qmc_unit_tests PROPERTIES LABELS unit)
 
-gtest_discover_tests(qmc_scaffold_test)
+if(QMC_BUILD_STATISTICAL_TESTS)
+  add_executable(qmc_statistical_tests test_sampling_statistical.cpp)
+  target_link_libraries(qmc_statistical_tests PRIVATE qmc::ideal GTest::gtest_main)
+  qmc_set_project_warnings(qmc_statistical_tests)
+  qmc_enable_clang_tidy(qmc_statistical_tests)
+  qmc_enable_sanitizers(qmc_statistical_tests)
+  gtest_discover_tests(qmc_statistical_tests PROPERTIES LABELS statistical)
+endif()

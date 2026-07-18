@@ -1,0 +1,5 @@
+add_executable(qmc_ideal_demo ideal_demo.cpp)
+target_link_libraries(qmc_ideal_demo PRIVATE qmc::ideal)
+qmc_set_project_warnings(qmc_ideal_demo)
+qmc_enable_clang_tidy(qmc_ideal_demo)
+qmc_enable_sanitizers(qmc_ideal_demo)
