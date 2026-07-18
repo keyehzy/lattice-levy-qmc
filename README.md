@@ -12,7 +12,9 @@ two related samplers:
 The code is deliberately small and explicit. [Architecture and
 algorithms](docs/ARCHITECTURE.md) explains how it works; [C++ porting
 guide](docs/CPP_PORT.md) records the data structures, interfaces, invariants,
-and numerical details that a rewrite should preserve.
+and numerical details that a rewrite should preserve. The finite-size
+acceptance correction is derived in [random-seam heat-bath Lévy
+stitching](docs/RANDOM_SEAM_STITCH.md).
 
 ## Model
 
@@ -50,8 +52,11 @@ statistical error bars.
 | --- | --- |
 | `lattice_levy.py` | Free bridge primitives, torus traces, canonical cycle recursion, windings, and ideal skeleton assembly |
 | `interacting_lattice_levy.py` | Event-driven paths, interaction action, update moves, observables, and the finite-\(U\) sampler |
+| `docs/RANDOM_SEAM_STITCH.md` | Closed permutation reconnection, detailed-balance proof, scaling, and tuning |
 | `demo.py` | One-dimensional ideal-world-line plot |
 | `demo_interacting.py` | Finite-\(U\) trace and acceptance-rate demo |
+| `benchmark_random_seam_stitch.py` | Acceptance, topology-rate, timing, and energy-ESS comparison |
+| `compare_40_site_energy.py` | Reproducible 40-site ground-energy comparison with calibrated stitch slabs |
 | `validate_interacting_ed.py` | Small-system comparison with exact diagonalization |
 | `test_lattice_levy.py` | Free-kernel, recursion, winding, bridge, and configuration tests |
 | `test_interacting_lattice_levy.py` | Continuous-path, action, update, and state-invariant tests |
@@ -134,24 +139,24 @@ sampler = InteractingLatticeLevySampler(
     rng=np.random.default_rng(20260717),
 )
 
-# Equilibrate. Global moves are what change the permutation-cycle structure.
+# Equilibrate with the reversible random-seam stitch macro-kernel. It changes
+# geometry, winding, and permutation-cycle structure without open paths.
 for _ in range(500):
-    sampler.sweep(
-        segment_updates=sampler.N,
-        segment_fraction=0.35,
-        cycle_updates=1,
-        global_updates=1,
+    sampler.random_seam_stitch_sweep(
+        updates=max(1, sampler.N // 2),
+        fraction=0.75,
     )
 
-samples = sampler.run(
-    2_000,
-    thin=2,
-    segment_fraction=0.35,
-    cycle_updates=1,
-    global_updates=1,
-)
+samples = []
+for _ in range(2_000):
+    sampler.random_seam_stitch_sweep(
+        updates=max(1, sampler.N // 2),
+        fraction=0.75,
+    )
+    samples.append(sampler.observables())
 print(samples[-1])
 print({name: stat.acceptance for name, stat in sampler.statistics.items()})
+print(sampler.statistics["stitch"].topology_change_rate)
 ```
 
 `observables()` and `run()` return:
@@ -174,6 +179,19 @@ The demonstration driver runs the same workflow and plots running means:
 python demo_interacting.py --N 6 --L 8 --beta 1.5 --t 1.0 --U 2.0
 ```
 
+Reproduce the 40-site, 40-boson energy comparison with the calibrated
+ground-state schedule using:
+
+```bash
+python3 compare_40_site_energy.py \
+    --output energy_40_site_comparison.csv \
+    --plot energy_40_site_comparison.png
+```
+
+The production defaults run parallel chains and can take several minutes.
+Use `--quick --U-values 0 5 20 --spot-U` to test the workflow without treating
+the resulting short-chain energies as converged measurements.
+
 ## Important conventions
 
 - Particle labels index world-line segments of duration `beta`; permutation
@@ -183,8 +201,10 @@ python demo_interacting.py --N 6 --L 8 --beta 1.5 --t 1.0 --U 2.0
 - `ContinuousPath` is piecewise constant and right-continuous: an event at
   time `tau` is included in `position_at(tau)`.
 - Segment moves preserve fixed covering-space endpoints. Cycle moves preserve
-  cycle labels but can change their geometry and winding. Only global moves
-  replace the permutation-cycle structure.
+  cycle labels but can change their geometry and winding. Stitch moves redraw
+  a closed slab and exchange suffixes, so pair transpositions split and merge
+  permutation cycles. Global moves remain available as an exact small-system
+  accelerator and independent cross-check.
 - The implementation is canonical. A chemical-potential contribution is
   constant at fixed `N` and is not part of Metropolis decisions.
 - The same `numpy.random.Generator` drives every random decision, making a
@@ -193,11 +213,10 @@ python demo_interacting.py --N 6 --L 8 --beta 1.5 --t 1.0 --U 2.0
 ## Scope and current limitations
 
 This is a research/reference implementation, not a tuned production engine.
-It assumes one hopping amplitude and one length for every dimension. The
-interaction overlap is recomputed for the whole configuration after each
-proposal, which keeps the detailed-balance logic transparent but costs
-\(O(E\log E)\) for \(E\) jump events. Global ideal-gas proposals guarantee
-access to different permutation sectors, but their acceptance can become poor
-for larger systems or stronger interactions. Checkpointing, parallel chains,
-automatic error analysis, and production diagnostics are outside the current
-scope.
+It assumes one hopping amplitude and one length for every dimension. Local
+action changes use a sparse per-site occupancy ledger; full recomputation is
+retained as the authoritative validator. Global ideal-gas proposals are still
+available, but their acceptance can become poor for larger systems or stronger
+interactions, so production-sized runs should use the stitch or a hybrid
+schedule. Checkpointing, parallel chains, automatic error analysis, and
+production diagnostics are outside the current scope.

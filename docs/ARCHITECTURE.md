@@ -205,8 +205,8 @@ events and splits them at multiples of `beta`.
 | `IdealBosonConfiguration` | model parameters, tuple of cycles, permutation, dense world-line arrays, `log_ZN` | Frozen top-level ideal sample; dense arrays have shape `(N, M+1, d)` |
 | `ContinuousPath` | duration, start/end vectors, sorted times, jump matrix | Frozen, value-like record; each jump has one `+1` or `-1`; sum of jumps exactly connects start to end; positions are right-continuous |
 | `ContinuousConfiguration` | model parameters, cycle list, permutation, list of paths, `log_Z0_N` | Mutable path container used by moves; cycles partition labels; path `i` ends at the start of `permutation[i]` modulo `L` |
-| `MoveStatistics` | attempts, accepts | Mutable counters; `acceptance` is NaN before an attempt |
-| `InteractingLatticeLevySampler` | model, RNG, state, cached overlap/action, counters | Owns the Markov chain; `action == U*pair_overlap`; cached values describe the accepted state |
+| `MoveStatistics` | attempts, accepts, topology changes | Mutable counters; rates are NaN before an attempt |
+| `InteractingLatticeLevySampler` | model, RNG, state, cached overlap/action, occupancy index, counters | Owns the Markov chain; `action == U*pair_overlap`; cached values describe the accepted state |
 
 Arrays use signed 64-bit integers for positions and jumps and double precision
 for times and log weights. The frozen dataclasses are frozen at the attribute
@@ -234,24 +234,36 @@ sum of covering displacements is divisible by `L` in every dimension.
    final interval to `beta`.
 
 This is exact for the piecewise-constant paths. It costs `O(E log E + N)` time
-and `O(E + N)` auxiliary memory for `E` events. It is deliberately recomputed
-over the full proposed configuration rather than maintained incrementally.
+and `O(E + N)` auxiliary memory for `E` events and remains the authoritative
+full validator.
+
+Accepted-state updates use `_OccupancyIndex`, a sparse site-by-site event
+ledger. It integrates the current occupancy along removed and added paths, so
+each affected pair is counted exactly once. Rejected proposals roll the ledger
+back. At fixed density and fixed `beta`, a fixed-size path replacement has
+expected cost independent of `N` apart from occasional `O(N)` seam/bucket
+maintenance.
 
 ## 7. Markov moves and detailed balance
 
 The sampler starts from an independent ideal configuration and caches its pair
-overlap and action. There are three move families:
+overlap and action. There are five move families:
 
 | Move | Proposed change | Preserved | Changes cycle topology? |
 | --- | --- | --- | --- |
 | Segment | One fixed-endpoint interval on one labeled path | Path start/end, permutation, winding | No |
 | Cycle | All paths belonging to one selected cycle | That cycle's ordered labels and length | No; base point, events, and winding may change |
+| Stitch | Two exact torus bridges in a closed slab; retain or exchange the two right suffixes | Exterior physical occupancy | Yes; a successor transposition splits or merges cycles |
+| Time shift | Uniform cyclic rotation of every closed loop in imaginary time | All physical observables and topology | No |
 | Global | A complete independent ideal configuration | Only model parameters | Yes |
 
-For segment and cycle moves, `_try_paths_replacement` temporarily installs the
-new immutable paths, recomputes the full overlap, and either updates the cache
-or restores the old references. The global move replaces the whole
-configuration only on acceptance. All three use
+Segment and cycle proposals use exact free conditionals. Stitching additionally
+heat-bath samples the two endpoint matchings with products of exact torus
+kernels, then samples their exact continuous-time bridges. The free factors
+therefore cancel and the Metropolis decision again contains only the action
+difference. Time shifts are measure-preserving and rejection-free. The global
+move replaces the whole configuration only on acceptance. Interaction-corrected
+moves use
 
 ```text
 accept immediately if delta_action <= 0
@@ -259,15 +271,21 @@ otherwise accept if log(U[0,1)) < -delta_action
 ```
 
 and explicitly reject exponents beyond the useful double-precision range.
-At `U=0`, every nonempty proposed move is accepted. Segment and cycle moves
-improve local geometry sampling; global updates are the mechanism that makes
-different permutation sectors reachable.
+At `U=0`, every nonempty proposed move is accepted. Stitch successor
+transpositions generate all permutation sectors while remaining entirely in
+the space of closed configurations. A small uniform-partner component prevents
+the locality heuristic from disconnecting the chain.
 
-`sweep()` is only a scheduler. By default it attempts `N` segment moves and
-one cycle move; global moves default to zero and must be requested when cycle
-topology needs to evolve. `run()` applies burn-in and thinning in units of
-these configured sweeps and returns snapshots of observables, not saved path
-configurations.
+`random_seam_stitch_sweep(m)` applies a palindromic kernel `A B**m A`, where
+`A` is the reversible uniform time-origin rotation and `B` is the fixed-seam
+random-scan stitch kernel. This macro-kernel itself satisfies detailed balance
+and amortizes one spatial bucket build over all stitch attempts. See
+`RANDOM_SEAM_STITCH.md` for the derivation.
+
+`sweep()` remains a configurable scheduler. `random_seam_stitch_sweep()` is
+the recommended strictly reversible large-system macro-kernel. `run()` applies
+burn-in and thinning in units of configured `sweep()` calls and returns
+snapshots of observables, not saved path configurations.
 
 ## 8. Observables
 
@@ -326,7 +344,9 @@ retained winding support.
 | Ideal skeleton | `O(N*M*d)` midpoint draws plus inversion work | `O(N*M*d)` |
 | Continuous bridge | Jump-count inversion plus `O(E log E)` sort | `O(E*d)` in the current jump matrix |
 | Pair-overlap action | `O(E log E + N)` | `O(E + N)` |
-| Each accepted or rejected finite-`U` proposal | Proposal cost plus one full action evaluation | Temporary paths plus action workspace |
+| Fixed-size local action update | Expected local event/timeline work at fixed density | Sparse per-site timelines |
+| Random-seam stitch macro-step | `O(N)` for fixed attempts per particle | `O(E + N)` |
+| Global finite-`U` proposal | Ideal sample plus one full action evaluation | Temporary full configuration |
 
 The torus trace uses `L` momentum terms and then multiplies its logarithm by
 `d`; it does not enumerate `V` sites.
@@ -344,7 +364,12 @@ The tests are organized around the derivation:
   checked directly.
 - Continuous bridges, splitting, and interval replacement are checked for
   endpoint and event preservation.
+- Open torus bridges are checked for the requested endpoint modulo `L`.
 - The overlap integral is checked on a hand-built piecewise path.
+- Stitch updates are required to change topology, preserve structural
+  invariants, and agree with both the full overlap sweep and occupancy ledger.
+- Time-origin rotations are checked to preserve event count, winding, and
+  interaction action.
 - All move families are required to accept at `U=0`, and finite-`U` sweeps are
   repeatedly validated for structural and cache consistency.
 - `validate_interacting_ed.py` supplies an independent small-system physics

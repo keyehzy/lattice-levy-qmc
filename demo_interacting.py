@@ -16,6 +16,7 @@ def main() -> None:
     parser.add_argument("--beta", type=float, default=1.5)
     parser.add_argument("--t", type=float, default=1.0)
     parser.add_argument("--U", type=float, default=2.0)
+    parser.add_argument("--stitch-fraction", type=float, default=0.75)
     parser.add_argument("--sweeps", type=int, default=3000)
     parser.add_argument("--burn-in", type=int, default=500)
     parser.add_argument("--seed", type=int, default=20260717)
@@ -35,11 +36,9 @@ def main() -> None:
     )
 
     for _ in range(args.burn_in):
-        sampler.sweep(
-            segment_updates=args.N,
-            segment_fraction=0.35,
-            cycle_updates=1,
-            global_updates=1,
+        sampler.random_seam_stitch_sweep(
+            updates=max(1, args.N // 2),
+            fraction=args.stitch_fraction,
         )
 
     energy = np.empty(args.sweeps)
@@ -47,11 +46,9 @@ def main() -> None:
     winding_squared = np.empty(args.sweeps)
 
     for sweep in range(args.sweeps):
-        sampler.sweep(
-            segment_updates=args.N,
-            segment_fraction=0.35,
-            cycle_updates=1,
-            global_updates=1,
+        sampler.random_seam_stitch_sweep(
+            updates=max(1, args.N // 2),
+            fraction=args.stitch_fraction,
         )
         observable = sampler.observables()
         energy[sweep] = float(observable["total_energy"])
@@ -81,6 +78,11 @@ def main() -> None:
     print(f"<W^2> = {winding_squared.mean():.8f}")
     for name, stats in sampler.statistics.items():
         print(f"{name} acceptance = {stats.acceptance:.6f}")
+        if stats.topology_changes:
+            print(
+                f"{name} topology changes/attempt = "
+                f"{stats.topology_change_rate:.6f}"
+            )
 
 
 if __name__ == "__main__":
