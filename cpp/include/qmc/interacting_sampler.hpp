@@ -21,7 +21,8 @@ namespace qmc {
 
 namespace detail {
 class OccupancyIndex;
-}
+struct InteractingSamplerTestAccess;
+} // namespace detail
 
 enum class MoveKind : std::uint8_t {
   SegmentMove = 0,
@@ -144,6 +145,8 @@ public:
   [[nodiscard]] const MoveStatistics &statistics(MoveKind move) const;
 
 private:
+  friend struct detail::InteractingSamplerTestAccess;
+
   using LabeledPath = std::pair<ParticleId, ContinuousPath>;
 
   struct StitchProposal {
@@ -152,7 +155,14 @@ private:
     std::size_t successor_changes = 0;
   };
 
+  struct LocalProposal {
+    std::vector<LabeledPath> replacements;
+    std::optional<std::vector<ParticleId>> permutation;
+    std::size_t successor_changes = 0;
+  };
+
   bool try_path_replacements(std::vector<LabeledPath> replacements, MoveKind move);
+  bool try_proposal(LocalProposal proposal, MoveStatistics &move_statistics);
   [[nodiscard]] StitchProposal sample_stitch_proposal(std::span<const ParticleId> strands,
                                                       double tau0, double tau1);
   [[nodiscard]] bool try_stitch_strands(std::span<const ParticleId> strands, double tau0,

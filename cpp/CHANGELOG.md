@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Document the C++ refactoring audit, including correctness, performance,
   testing, packaging, and API follow-up work.
 
+### Fixed
+
+- Make local interacting-path replacements strongly transactional by staging
+  affected occupancy timelines and committing state, topology, action caches,
+  and counters only after all potentially throwing preparation succeeds.
+
 ## [0.5.0] - 2026-07-19
 
 ### Added

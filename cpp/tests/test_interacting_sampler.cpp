@@ -1,6 +1,7 @@
-#include "../src/stitch_matching.hpp"
+#include "occupancy_index.hpp"
 #include "qmc/interacting_sampler.hpp"
 #include "qmc/interaction.hpp"
+#include "stitch_matching.hpp"
 
 #include <algorithm>
 #include <array>
@@ -13,6 +14,38 @@
 #include <vector>
 
 namespace qmc {
+
+namespace detail {
+
+struct InteractingSamplerTestAccess {
+  static bool occupancy_matches_state(const InteractingSampler &sampler) {
+    return sampler.occupancy_index_->represents(sampler.state_.worldlines);
+  }
+
+  static void set_interaction(InteractingSampler &sampler, const double interaction) {
+    sampler.model_.interaction = interaction;
+  }
+
+  static void set_segment_accepts(InteractingSampler &sampler, const std::uint64_t accepts) {
+    sampler.statistics_[static_cast<std::size_t>(MoveKind::SegmentMove)].accepts = accepts;
+  }
+
+  static bool try_invalid_topology_proposal(InteractingSampler &sampler) {
+    std::vector<InteractingSampler::LabeledPath> replacements;
+    replacements.emplace_back(0, sampler.state_.worldlines[0]);
+    std::vector<ParticleId> invalid_permutation(sampler.state_.worldlines.size(), 0);
+    return sampler.try_proposal(
+        InteractingSampler::LocalProposal{
+            .replacements = std::move(replacements),
+            .permutation = std::move(invalid_permutation),
+            .successor_changes = 1,
+        },
+        sampler.statistics_[static_cast<std::size_t>(MoveKind::StitchMove)]);
+  }
+};
+
+} // namespace detail
+
 namespace {
 
 InteractingModel sampler_model(const double interaction) {
@@ -232,7 +265,7 @@ TEST(InteractingSamplerTest, ExplicitCollectiveStitchValidatesStrands) {
       std::invalid_argument);
 }
 
-TEST(InteractingSamplerTest, RejectedMovesLeaveAcceptedStateUntouched) {
+TEST(InteractingSamplerTest, RejectedGlobalMoveLeavesAcceptedStateUntouched) {
   InteractingModel model{
       .free = {.particle_count = 5, .beta = 2.0, .linear_size = 2, .dimension = 1, .hopping = 1.0},
       .interaction = 100.0,
@@ -251,6 +284,108 @@ TEST(InteractingSamplerTest, RejectedMovesLeaveAcceptedStateUntouched) {
     }
   }
   EXPECT_TRUE(observed_rejection);
+}
+
+TEST(InteractingSamplerTest, RejectedLocalMovesLeaveStateCachesAndCountersUntouched) {
+  const InteractingModel model{
+      .free = {.particle_count = 5, .beta = 2.0, .linear_size = 2, .dimension = 1, .hopping = 1.0},
+      .interaction = 100.0,
+  };
+
+  const auto expect_rejection = [&model](InteractingSampler &sampler, const MoveKind move,
+                                         const auto &attempt) {
+    bool observed_rejection = false;
+    for (int trial = 0; trial < 400 && !observed_rejection; ++trial) {
+      const ContinuousConfiguration before = sampler.state();
+      const double overlap_before = sampler.pair_overlap();
+      const double action_before = sampler.action();
+      const MoveStatistics statistics_before = sampler.statistics(move);
+      if (!attempt()) {
+        observed_rejection = true;
+        EXPECT_TRUE(equal_state(sampler.state(), before));
+        EXPECT_DOUBLE_EQ(sampler.pair_overlap(), overlap_before);
+        EXPECT_DOUBLE_EQ(sampler.action(), action_before);
+        EXPECT_DOUBLE_EQ(pair_overlap_time(sampler.state(), model.free), overlap_before);
+        EXPECT_TRUE(detail::InteractingSamplerTestAccess::occupancy_matches_state(sampler));
+
+        const MoveStatistics &statistics_after = sampler.statistics(move);
+        EXPECT_EQ(statistics_after.attempts, statistics_before.attempts + 1);
+        EXPECT_EQ(statistics_after.accepts, statistics_before.accepts);
+        EXPECT_EQ(statistics_after.topology_changes, statistics_before.topology_changes);
+        EXPECT_EQ(statistics_after.successor_changes, statistics_before.successor_changes);
+      }
+    }
+    EXPECT_TRUE(observed_rejection);
+  };
+
+  InteractingSampler segment_sampler(model, 1'927);
+  expect_rejection(segment_sampler, MoveKind::SegmentMove, [&segment_sampler] {
+    return segment_sampler.segment_update(0, std::pair<double, double>{0.2, 1.7});
+  });
+
+  InteractingSampler stitch_sampler(model, 2'927);
+  expect_rejection(stitch_sampler, MoveKind::StitchMove, [&stitch_sampler] {
+    return stitch_sampler.stitch_update(0, 1, std::pair<double, double>{0.2, 1.7});
+  });
+}
+
+TEST(InteractingSamplerTest, ActionFailureAbandonsPreparedOccupancyReplacement) {
+  const InteractingModel model{
+      .free = {.particle_count = 2, .beta = 2.0, .linear_size = 1, .dimension = 1, .hopping = 0.0},
+      .interaction = 0.0,
+  };
+  InteractingSampler sampler(model, 29);
+  const ContinuousConfiguration before = sampler.state();
+  const double overlap_before = sampler.pair_overlap();
+  const double action_before = sampler.action();
+  const MoveStatistics statistics_before = sampler.statistics(MoveKind::SegmentMove);
+  detail::InteractingSamplerTestAccess::set_interaction(sampler,
+                                                        std::numeric_limits<double>::max());
+
+  EXPECT_THROW(static_cast<void>(sampler.whole_worldline_update(0)), std::overflow_error);
+  EXPECT_TRUE(equal_state(sampler.state(), before));
+  EXPECT_DOUBLE_EQ(sampler.pair_overlap(), overlap_before);
+  EXPECT_DOUBLE_EQ(sampler.action(), action_before);
+  EXPECT_TRUE(detail::InteractingSamplerTestAccess::occupancy_matches_state(sampler));
+  EXPECT_EQ(sampler.statistics(MoveKind::SegmentMove).attempts, statistics_before.attempts + 1);
+  EXPECT_EQ(sampler.statistics(MoveKind::SegmentMove).accepts, statistics_before.accepts);
+}
+
+TEST(InteractingSamplerTest, TopologyPreparationFailureAbandonsPreparedReplacement) {
+  InteractingSampler sampler(sampler_model(1.0), 39);
+  const ContinuousConfiguration before = sampler.state();
+  const double overlap_before = sampler.pair_overlap();
+  const double action_before = sampler.action();
+  const MoveStatistics statistics_before = sampler.statistics(MoveKind::StitchMove);
+
+  EXPECT_THROW(static_cast<void>(
+                   detail::InteractingSamplerTestAccess::try_invalid_topology_proposal(sampler)),
+               std::invalid_argument);
+  EXPECT_TRUE(equal_state(sampler.state(), before));
+  EXPECT_DOUBLE_EQ(sampler.pair_overlap(), overlap_before);
+  EXPECT_DOUBLE_EQ(sampler.action(), action_before);
+  EXPECT_TRUE(detail::InteractingSamplerTestAccess::occupancy_matches_state(sampler));
+  EXPECT_EQ(sampler.statistics(MoveKind::StitchMove).attempts, statistics_before.attempts);
+  EXPECT_EQ(sampler.statistics(MoveKind::StitchMove).accepts, statistics_before.accepts);
+}
+
+TEST(InteractingSamplerTest, AcceptedCounterOverflowCannotPublishPreparedReplacement) {
+  InteractingSampler sampler(sampler_model(0.0), 49);
+  const ContinuousConfiguration before = sampler.state();
+  const double overlap_before = sampler.pair_overlap();
+  const double action_before = sampler.action();
+  const MoveStatistics statistics_before = sampler.statistics(MoveKind::SegmentMove);
+  detail::InteractingSamplerTestAccess::set_segment_accepts(
+      sampler, std::numeric_limits<std::uint64_t>::max());
+
+  EXPECT_THROW(static_cast<void>(sampler.whole_worldline_update(0)), std::overflow_error);
+  EXPECT_TRUE(equal_state(sampler.state(), before));
+  EXPECT_DOUBLE_EQ(sampler.pair_overlap(), overlap_before);
+  EXPECT_DOUBLE_EQ(sampler.action(), action_before);
+  EXPECT_TRUE(detail::InteractingSamplerTestAccess::occupancy_matches_state(sampler));
+  EXPECT_EQ(sampler.statistics(MoveKind::SegmentMove).attempts, statistics_before.attempts + 1);
+  EXPECT_EQ(sampler.statistics(MoveKind::SegmentMove).accepts,
+            std::numeric_limits<std::uint64_t>::max());
 }
 
 TEST(InteractingSamplerTest, RunAppliesBurnInThinningAndReturnsTypedMeasurements) {

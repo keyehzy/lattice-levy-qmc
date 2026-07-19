@@ -38,9 +38,11 @@ add_executable(
   test_continuous_configuration.cpp
   test_interacting_sampler.cpp
   test_interaction.cpp
+  test_occupancy_index.cpp
   test_path.cpp
 )
 target_link_libraries(qmc_interacting_unit_tests PRIVATE qmc::interacting GTest::gtest_main)
+target_include_directories(qmc_interacting_unit_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 qmc_set_project_warnings(qmc_interacting_unit_tests)
 qmc_enable_clang_tidy(qmc_interacting_unit_tests)
 qmc_enable_sanitizers(qmc_interacting_unit_tests)

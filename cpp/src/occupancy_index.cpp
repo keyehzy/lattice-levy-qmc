@@ -5,9 +5,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <limits>
 #include <ranges>
 #include <stdexcept>
+#include <type_traits>
+#include <utility>
 
 namespace qmc::detail {
 
@@ -103,6 +106,57 @@ double OccupancyIndex::SiteTimeline::pair_integral(const double beta) {
   return total;
 }
 
+bool OccupancyIndex::SiteTimeline::empty() const noexcept { return initial == 0 && deltas.empty(); }
+
+bool OccupancyIndex::SiteLess::operator()(const Site &left, const Site &right) const noexcept {
+  return std::ranges::lexicographical_compare(left, right);
+}
+
+OccupancyIndex::ReplacementTransaction::ReplacementTransaction(
+    OccupancyIndex &owner, const double proposed_overlap, TimelineMap staged_timelines) noexcept
+    : owner_(&owner), proposed_overlap_(proposed_overlap),
+      staged_timelines_(std::move(staged_timelines)) {}
+
+OccupancyIndex::ReplacementTransaction::ReplacementTransaction(
+    ReplacementTransaction &&other) noexcept
+    : owner_(std::exchange(other.owner_, nullptr)), proposed_overlap_(other.proposed_overlap_),
+      staged_timelines_(std::move(other.staged_timelines_)) {}
+
+void OccupancyIndex::ReplacementTransaction::commit() noexcept {
+  static_assert(std::is_nothrow_move_constructible_v<TimelineMap>);
+  static_assert(std::is_nothrow_swappable_v<SiteTimeline>);
+  if (owner_ == nullptr) {
+    return;
+  }
+
+  // Every key and value is already allocated. Existing values are swapped,
+  // obsolete entries are erased, and new entries transfer their map nodes.
+  // SiteLess and all involved destructors are non-throwing.
+  while (!staged_timelines_.empty()) {
+    auto staged = staged_timelines_.begin();
+    auto accepted = owner_->timelines_.find(staged->first);
+    if (staged->second.empty()) {
+      if (accepted != owner_->timelines_.end()) {
+        owner_->timelines_.erase(accepted);
+      }
+      staged_timelines_.erase(staged);
+      continue;
+    }
+    if (accepted != owner_->timelines_.end()) {
+      std::ranges::swap(accepted->second, staged->second);
+      staged_timelines_.erase(staged);
+      continue;
+    }
+
+    auto node = staged_timelines_.extract(staged);
+    const auto inserted = owner_->timelines_.insert(std::move(node));
+    if (!inserted.inserted) {
+      std::terminate();
+    }
+  }
+  owner_ = nullptr;
+}
+
 OccupancyIndex::OccupancyIndex(const Model &model)
     : linear_size_(model.linear_size), dimension_(model.dimension), beta_(model.beta) {
   model.validate();
@@ -122,15 +176,43 @@ Site OccupancyIndex::site_key(const Site &position) const {
   return key;
 }
 
-OccupancyIndex::SiteTimeline &OccupancyIndex::timeline(const Site &key) { return timelines_[key]; }
+OccupancyIndex::SiteTimeline &OccupancyIndex::timeline(TimelineMap &timelines, const Site &key) {
+  return timelines[key];
+}
 
-void OccupancyIndex::adjust_path(const ContinuousPath &path, const std::int64_t sign) {
+void OccupancyIndex::stage_path_timelines(const ContinuousPath &path, TimelineMap &staged) const {
+  path.validate(dimension_);
+  Site position = site_key(path.start);
+  const auto stage_site = [this, &staged](const Site &key) {
+    if (staged.contains(key)) {
+      return;
+    }
+    const auto accepted = timelines_.find(key);
+    if (accepted == timelines_.end()) {
+      staged.try_emplace(key);
+    } else {
+      staged.emplace(key, accepted->second);
+    }
+  };
+
+  stage_site(position);
+  for (const JumpEvent &event : path.events) {
+    position[event.axis] =
+        torus_mod(checked_add(position[event.axis], static_cast<Coord>(event.direction),
+                              "occupancy path coordinate exceeds int64 range"),
+                  linear_size_);
+    stage_site(position);
+  }
+}
+
+void OccupancyIndex::adjust_path(TimelineMap &timelines, const ContinuousPath &path,
+                                 const std::int64_t sign) const {
   if (sign != -1 && sign != 1) {
     throw std::invalid_argument("occupancy path adjustment sign must be -1 or +1");
   }
   path.validate(dimension_);
   Site position = site_key(path.start);
-  timeline(position).adjust_initial(sign);
+  timeline(timelines, position).adjust_initial(sign);
   for (const JumpEvent &event : path.events) {
     const Site old_key = position;
     position[event.axis] =
@@ -140,66 +222,96 @@ void OccupancyIndex::adjust_path(const ContinuousPath &path, const std::int64_t 
     if (old_key == position) {
       continue;
     }
-    timeline(old_key).adjust_event(event.time, -sign);
-    timeline(position).adjust_event(event.time, sign);
+    timeline(timelines, old_key).adjust_event(event.time, -sign);
+    timeline(timelines, position).adjust_event(event.time, sign);
   }
 }
 
-double OccupancyIndex::integrate_path_occupancy(const ContinuousPath &path) {
+double OccupancyIndex::integrate_path_occupancy(TimelineMap &timelines,
+                                                const ContinuousPath &path) const {
   path.validate(dimension_);
   Site position = site_key(path.start);
   double previous = 0.0;
   double total = 0.0;
   for (const JumpEvent &event : path.events) {
-    total += timeline(position).integral(previous, event.time);
+    total += timeline(timelines, position).integral(previous, event.time);
     position[event.axis] =
         torus_mod(checked_add(position[event.axis], static_cast<Coord>(event.direction),
                               "occupancy path coordinate exceeds int64 range"),
                   linear_size_);
     previous = event.time;
   }
-  total += timeline(position).integral(previous, path.duration);
+  total += timeline(timelines, position).integral(previous, path.duration);
   return total;
 }
 
 void OccupancyIndex::rebuild(const std::span<const ContinuousPath> paths) {
-  timelines_.clear();
+  TimelineMap rebuilt;
   for (const ContinuousPath &path : paths) {
-    adjust_path(path, 1);
+    adjust_path(rebuilt, path, 1);
   }
+  timelines_.swap(rebuilt);
 }
 
-double OccupancyIndex::replace_paths(const std::span<const ContinuousPath *const> old_paths,
-                                     const std::span<const ContinuousPath *const> new_paths,
-                                     const double current_overlap) {
-  double removed = 0.0;
-  for (const ContinuousPath *path : old_paths) {
-    if (path == nullptr) {
-      throw std::invalid_argument("old replacement path must not be null");
+OccupancyIndex::ReplacementTransaction
+OccupancyIndex::begin_replacement(const std::span<const PathReplacementView> replacements,
+                                  const double current_overlap) {
+  for (std::size_t index = 0; index < replacements.size(); ++index) {
+    if (index != 0 && replacements[index - 1].label >= replacements[index].label) {
+      throw std::invalid_argument("occupancy replacement labels must be sorted and unique");
     }
-    removed += integrate_path_occupancy(*path) - path->duration;
-    adjust_path(*path, -1);
+  }
+
+  TimelineMap staged;
+  for (const PathReplacementView &replacement : replacements) {
+    stage_path_timelines(replacement.old_path, staged);
+    stage_path_timelines(replacement.new_path, staged);
+  }
+
+  double removed = 0.0;
+  for (const PathReplacementView &replacement : replacements) {
+    removed +=
+        integrate_path_occupancy(staged, replacement.old_path) - replacement.old_path.duration;
+    adjust_path(staged, replacement.old_path, -1);
   }
 
   double added = 0.0;
-  for (const ContinuousPath *path : new_paths) {
-    if (path == nullptr) {
-      throw std::invalid_argument("new replacement path must not be null");
-    }
-    added += integrate_path_occupancy(*path);
-    adjust_path(*path, 1);
+  for (const PathReplacementView &replacement : replacements) {
+    added += integrate_path_occupancy(staged, replacement.new_path);
+    adjust_path(staged, replacement.new_path, 1);
   }
-  return current_overlap - removed + added;
+  return ReplacementTransaction(*this, current_overlap - removed + added, std::move(staged));
 }
 
-void OccupancyIndex::rollback_replacement(const std::span<const ContinuousPath *const> old_paths,
-                                          const std::span<const ContinuousPath *const> new_paths) {
-  for (const ContinuousPath *path : std::views::reverse(new_paths)) {
-    adjust_path(*path, -1);
+bool OccupancyIndex::same_occupancies(const TimelineMap &left, const TimelineMap &right) noexcept {
+  auto left_entry = left.begin();
+  auto right_entry = right.begin();
+  while (true) {
+    while (left_entry != left.end() && left_entry->second.empty()) {
+      ++left_entry;
+    }
+    while (right_entry != right.end() && right_entry->second.empty()) {
+      ++right_entry;
+    }
+    if (left_entry == left.end() || right_entry == right.end()) {
+      return left_entry == left.end() && right_entry == right.end();
+    }
+    if (left_entry->first != right_entry->first ||
+        left_entry->second.initial != right_entry->second.initial ||
+        left_entry->second.deltas != right_entry->second.deltas) {
+      return false;
+    }
+    ++left_entry;
+    ++right_entry;
   }
-  for (const ContinuousPath *path : old_paths) {
-    adjust_path(*path, 1);
+}
+
+bool OccupancyIndex::represents(const std::span<const ContinuousPath> paths) const {
+  TimelineMap expected;
+  for (const ContinuousPath &path : paths) {
+    adjust_path(expected, path, 1);
   }
+  return same_occupancies(timelines_, expected);
 }
 
 double OccupancyIndex::pair_overlap() {

@@ -32,10 +32,10 @@ numerical setup that are currently needed to defend mutable public structs.
 
 ## Executive recommendation
 
-Before broader reorganization, land two correctness guards: checked derived
-extents on every public flat buffer, and strong transactional replacement of the
-incremental occupancy ledger. Both have concrete failure paths in the current
-code and can be fixed without waiting for a new data model.
+The two immediate correctness guards are complete: public flat-buffer extents
+use checked derived sizes, and local occupancy replacements stage affected
+timelines before an allocation-free commit. Broader reorganization can now
+proceed without either known memory-safety or cache-desynchronization boundary.
 
 The best target architecture is three small, concrete ownership units:
 
@@ -64,7 +64,7 @@ type collects one invariant that is currently spread across several files.
 
 | Priority | Finding | Primary payoff | Estimated size |
 | --- | --- | --- | --- |
-| P0 | Make occupancy replacement transactional | Correctness and simpler move code | Medium |
+| P0 | Make occupancy replacement transactional (done 2026-07-19) | Correctness and simpler move code | Medium |
 | P0/P1 | Checked flat extents (done 2026-07-19); introduce `TorusLayout`/`SiteId` | Memory safety, shared geometry, and fewer allocations | Medium |
 | P0 | Bind model, canonical table, and reusable free numerics | Correctness and large repeated-work reduction | Medium |
 | P0 | Make paths/configurations valid-by-construction | Ownership clarity and removal of nested validation | Large |
@@ -86,7 +86,15 @@ type collects one invariant that is currently spread across several files.
 
 ### 1. P0: make local action replacement a real transaction
 
-Evidence:
+Status (2026-07-19): complete. `ReplacementTransaction` copies only affected
+site timelines into a staged overlay, calculates the proposed overlap there,
+and publishes prepared values/nodes only through a non-throwing commit. Normal
+and stitch replacements now share one proposal-finalization path using paired
+`PathReplacementView` values. Action, topology, and accepted-counter failures,
+local rejection, transaction abandonment, and mid-replacement failure have
+dedicated ledger/state/cache regressions.
+
+Pre-refactor evidence:
 
 - `OccupancyIndex::replace_paths()` mutates timelines incrementally while
   removing and adding paths (`src/occupancy_index.cpp:172-192`).
@@ -887,11 +895,9 @@ visible at the assertion sites.
 
 ## Suggested migration sequence
 
-1. Add the wrapped-flat-shape regression plus local rejection/injected-failure
-   tests. Replace unchecked public extent products immediately, then introduce
-   `ReplacementTransaction` and unify normal/stitch commit logic using the
-   existing representation. Do not defer either correctness boundary for other
-   cleanup.
+1. Completed 2026-07-19: checked public flat extents, local rejection and
+   injected-failure regressions, `ReplacementTransaction`, and unified
+   normal/stitch proposal finalization using the existing representation.
 2. Add a reusable `CanonicalEnsemble`; bind table provenance and route the ideal
    demo and both samplers through it, retaining free-function wrappers.
 3. Add `TorusLayout`, shared checked math, and `SiteId`; migrate encoding,

@@ -11,6 +11,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 
@@ -582,47 +583,76 @@ bool InteractingSampler::metropolis_accept(const double delta_action) {
 
 bool InteractingSampler::try_path_replacements(std::vector<LabeledPath> replacements,
                                                const MoveKind move) {
-  std::ranges::sort(replacements, {}, &LabeledPath::first);
-  std::vector<bool> replaced(state_.worldlines.size(), false);
-  std::vector<const ContinuousPath *> old_paths;
-  std::vector<const ContinuousPath *> new_paths;
-  old_paths.reserve(replacements.size());
-  new_paths.reserve(replacements.size());
-  for (LabeledPath &replacement : replacements) {
+  MoveStatistics &move_statistics = statistics_[move_index(move)];
+  increment_counter(move_statistics.attempts);
+  return try_proposal(
+      LocalProposal{
+          .replacements = std::move(replacements),
+          .permutation = std::nullopt,
+          .successor_changes = 0,
+      },
+      move_statistics);
+}
+
+bool InteractingSampler::try_proposal(LocalProposal proposal, MoveStatistics &move_statistics) {
+  std::ranges::sort(proposal.replacements, {}, &LabeledPath::first);
+  std::vector<detail::PathReplacementView> replacement_views;
+  replacement_views.reserve(proposal.replacements.size());
+  for (std::size_t index = 0; index < proposal.replacements.size(); ++index) {
+    LabeledPath &replacement = proposal.replacements[index];
     const auto label = static_cast<std::size_t>(replacement.first);
-    if (label >= state_.worldlines.size() || replaced[label]) {
+    if (label >= state_.worldlines.size() ||
+        (index != 0 && proposal.replacements[index - 1].first == replacement.first)) {
       throw std::logic_error("path replacements contain an invalid or duplicate label");
     }
     replacement.second.validate(model_.free.dimension);
-    replaced[label] = true;
-    old_paths.push_back(&state_.worldlines[label]);
-    new_paths.push_back(&replacement.second);
+    replacement_views.push_back(detail::PathReplacementView{
+        .label = replacement.first,
+        .old_path = state_.worldlines[label],
+        .new_path = replacement.second,
+    });
   }
 
-  MoveStatistics &move_statistics = statistics_[move_index(move)];
-  increment_counter(move_statistics.attempts);
-  const double new_overlap = occupancy_index_->replace_paths(old_paths, new_paths, pair_overlap_);
-  double new_action = 0.0;
-  bool accepted = false;
-  try {
-    new_action = checked_action(model_.interaction, new_overlap);
-    accepted = metropolis_accept(new_action - action_);
-  } catch (...) {
-    occupancy_index_->rollback_replacement(old_paths, new_paths);
-    throw;
+  auto occupancy_transaction =
+      occupancy_index_->begin_replacement(replacement_views, pair_overlap_);
+  std::vector<Cycle> proposed_cycles;
+  if (proposal.permutation.has_value()) {
+    proposed_cycles = cycles_from_permutation(*proposal.permutation);
+  } else if (proposal.successor_changes != 0) {
+    throw std::logic_error("path-only proposal reports topology changes");
   }
+
+  const double new_overlap = occupancy_transaction.proposed_overlap();
+  const double new_action = checked_action(model_.interaction, new_overlap);
+  const bool accepted = metropolis_accept(new_action - action_);
   if (!accepted) {
-    occupancy_index_->rollback_replacement(old_paths, new_paths);
     return false;
   }
 
   ensure_counter_capacity(move_statistics.accepts);
-  for (LabeledPath &replacement : replacements) {
+  if (proposal.successor_changes != 0) {
+    ensure_counter_capacity(move_statistics.topology_changes);
+    ensure_counter_capacity(move_statistics.successor_changes, proposal.successor_changes);
+  }
+
+  static_assert(std::is_nothrow_swappable_v<ContinuousPath>);
+  static_assert(std::is_nothrow_move_assignable_v<std::vector<ParticleId>>);
+  static_assert(std::is_nothrow_move_assignable_v<std::vector<Cycle>>);
+  for (LabeledPath &replacement : proposal.replacements) {
     std::swap(state_.worldlines[replacement.first], replacement.second);
   }
+  if (proposal.permutation.has_value()) {
+    state_.permutation = std::move(*proposal.permutation);
+    state_.cycles = std::move(proposed_cycles);
+  }
+  occupancy_transaction.commit();
   pair_overlap_ = new_overlap;
   action_ = new_action;
   increment_counter(move_statistics.accepts);
+  if (proposal.successor_changes != 0) {
+    increment_counter(move_statistics.topology_changes);
+    add_counter(move_statistics.successor_changes, proposal.successor_changes);
+  }
   return true;
 }
 
@@ -757,50 +787,13 @@ bool InteractingSampler::try_stitch_strands(const std::span<const ParticleId> st
   MoveStatistics &move_statistics = statistics_[move_index(MoveKind::StitchMove)];
   increment_counter(move_statistics.attempts);
   StitchProposal proposal = sample_stitch_proposal(strands, tau0, tau1);
-  std::ranges::sort(proposal.replacements, {}, &LabeledPath::first);
-  std::vector<Cycle> proposed_cycles = cycles_from_permutation(proposal.permutation);
-
-  std::vector<const ContinuousPath *> old_paths;
-  std::vector<const ContinuousPath *> new_paths;
-  old_paths.reserve(proposal.replacements.size());
-  new_paths.reserve(proposal.replacements.size());
-  for (LabeledPath &replacement : proposal.replacements) {
-    old_paths.push_back(&state_.worldlines[replacement.first]);
-    new_paths.push_back(&replacement.second);
-  }
-  const double new_overlap = occupancy_index_->replace_paths(old_paths, new_paths, pair_overlap_);
-  double new_action = 0.0;
-  bool accepted = false;
-  try {
-    new_action = checked_action(model_.interaction, new_overlap);
-    accepted = metropolis_accept(new_action - action_);
-  } catch (...) {
-    occupancy_index_->rollback_replacement(old_paths, new_paths);
-    throw;
-  }
-  if (!accepted) {
-    occupancy_index_->rollback_replacement(old_paths, new_paths);
-    return false;
-  }
-
-  ensure_counter_capacity(move_statistics.accepts);
-  if (proposal.successor_changes != 0) {
-    ensure_counter_capacity(move_statistics.topology_changes);
-    ensure_counter_capacity(move_statistics.successor_changes, proposal.successor_changes);
-  }
-  for (LabeledPath &replacement : proposal.replacements) {
-    std::swap(state_.worldlines[replacement.first], replacement.second);
-  }
-  state_.permutation = std::move(proposal.permutation);
-  state_.cycles = std::move(proposed_cycles);
-  pair_overlap_ = new_overlap;
-  action_ = new_action;
-  increment_counter(move_statistics.accepts);
-  if (proposal.successor_changes != 0) {
-    increment_counter(move_statistics.topology_changes);
-    add_counter(move_statistics.successor_changes, proposal.successor_changes);
-  }
-  return true;
+  return try_proposal(
+      LocalProposal{
+          .replacements = std::move(proposal.replacements),
+          .permutation = std::move(proposal.permutation),
+          .successor_changes = proposal.successor_changes,
+      },
+      move_statistics);
 }
 
 bool InteractingSampler::k_stitch_update(const std::size_t k,
