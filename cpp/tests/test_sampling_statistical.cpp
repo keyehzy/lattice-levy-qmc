@@ -1,5 +1,7 @@
+#include "qmc/configuration.hpp"
 #include "qmc/free_boson.hpp"
 #include "qmc/free_numerics.hpp"
+#include "qmc/observables.hpp"
 
 #include <cmath>
 #include <cstddef>
@@ -137,6 +139,50 @@ TEST(TorusMidpointDistributionTest, MatchesFiniteRingKernel) {
   for (std::size_t index = 0; index < exact.size(); ++index) {
     const double empirical = static_cast<double>(counts[index]) / sample_count;
     EXPECT_NEAR(empirical, exact[index], 0.007);
+  }
+}
+
+TEST(ConfigurationObservableDistributionTest, MatchesExactCycleWindingAndDensityMeans) {
+  constexpr std::size_t sample_count = 20'000;
+  const qmc::Model model{
+      .particle_count = 3,
+      .beta = 1.1,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 0.8,
+  };
+  const auto table = qmc::canonical_table(model);
+  const auto exact_cycles = qmc::exact_cycle_statistics(model.particle_count, table);
+  const double expected_winding_squared =
+      model.beta * qmc::twist_free_energy_curvature(model, table, 0);
+  std::vector<double> cycle_counts(model.particle_count + 1);
+  std::vector<double> density(model.volume());
+  double winding_squared_sum = 0.0;
+  qmc::Random random(29173);
+  for (std::size_t sample = 0; sample < sample_count; ++sample) {
+    const auto configuration = qmc::sample_ideal_boson_configuration(model, 1, random);
+    const auto histogram = qmc::sampled_cycle_histogram(configuration);
+    for (std::size_t length = 1; length <= model.particle_count; ++length) {
+      cycle_counts[length] += static_cast<double>(histogram[length]);
+    }
+    const auto winding = qmc::total_winding(configuration);
+    const auto winding_value = static_cast<double>(winding.front());
+    winding_squared_sum += winding_value * winding_value;
+    const auto equal_time = qmc::equal_time_observables(configuration);
+    for (std::size_t site = 0; site < density.size(); ++site) {
+      density[site] += equal_time.site_density[site];
+    }
+  }
+  for (std::size_t length = 1; length <= model.particle_count; ++length) {
+    EXPECT_NEAR(cycle_counts[length] / static_cast<double>(sample_count),
+                exact_cycles.expected_cycle_count[length], 0.015);
+  }
+  EXPECT_NEAR(winding_squared_sum / static_cast<double>(sample_count), expected_winding_squared,
+              0.012);
+  const double expected_density =
+      static_cast<double>(model.particle_count) / static_cast<double>(model.volume());
+  for (const double density_sum : density) {
+    EXPECT_NEAR(density_sum / static_cast<double>(sample_count), expected_density, 0.025);
   }
 }
 

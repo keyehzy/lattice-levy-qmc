@@ -21,10 +21,13 @@ Coord checked_scale(const Coord scale, const Coord value) {
   if (scale < 0) {
     throw std::logic_error("coordinate scale must be nonnegative");
   }
+  if (scale == 0) {
+    return 0;
+  }
   if (value > 0 && scale > std::numeric_limits<Coord>::max() / value) {
     throw std::overflow_error("winding displacement exceeds int64 range");
   }
-  if (value < 0 && scale > std::numeric_limits<Coord>::min() / value) {
+  if (value < 0 && value < std::numeric_limits<Coord>::min() / scale) {
     throw std::overflow_error("winding displacement exceeds int64 range");
   }
   return scale * value;

@@ -135,4 +135,18 @@ TEST(IdealConfigurationTest, RepeatsExactlyForTheSameCppSeed) {
   EXPECT_TRUE(samples_are_equal(first, second));
 }
 
+TEST(IdealConfigurationTest, RepeatedSamplingHandlesNegativeUnitWinding) {
+  const qmc::Model model{
+      .particle_count = 4,
+      .beta = 0.8,
+      .linear_size = 5,
+      .dimension = 2,
+      .hopping = 0.9,
+  };
+  qmc::Random random(2026);
+  for (std::size_t sample = 0; sample < 20; ++sample) {
+    EXPECT_NO_THROW(static_cast<void>(qmc::sample_ideal_boson_configuration(model, 8, random)));
+  }
+}
+
 } // namespace

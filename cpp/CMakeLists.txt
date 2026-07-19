@@ -24,6 +24,7 @@ add_library(
   src/free_boson.cpp
   src/free_numerics.cpp
   src/model.cpp
+  src/observables.cpp
   src/random.cpp
 )
 add_library(qmc::ideal ALIAS qmc_ideal)

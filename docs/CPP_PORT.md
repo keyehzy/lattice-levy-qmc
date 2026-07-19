@@ -9,8 +9,11 @@ stream byte for byte.
 The ideal-sampler stages described in sections 8–10 are implemented under
 `cpp/` in the `qmc` namespace. GSL supplies the scaled modified Bessel
 function, and the deterministic and statistical GoogleTests compare the port
-with the Python/SciPy reference. Continuous paths and finite-`U` sampling remain
-Python-only and outside the current C++ port.
+with the Python/SciPy reference. The C++ ideal observables layer implements
+canonical thermodynamics, momentum and one-body measurements, cycle and
+winding statistics, and density/geometry correlations on the exact retained
+imaginary-time grid; see `MEASUREMENTS.md`. Continuous paths and finite-`U`
+sampling remain Python-only and outside the current C++ port.
 
 ## 1. Porting contract
 
@@ -40,6 +43,7 @@ include/qmc/
   random.hpp            all stochastic primitives behind one RNG object
   free_numerics.hpp     log-sum-exp, Bessel count and winding inversion
   free_boson.hpp        torus trace, canonical table, cycle sampling
+  observables.hpp       ideal canonical and retained-grid measurements
   path.hpp              sites, events, continuous paths, bridge operations
   configuration.hpp     ideal and continuous configuration records
   interaction.hpp       overlap/action and observable estimators
