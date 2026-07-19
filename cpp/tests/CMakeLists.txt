@@ -30,7 +30,6 @@ add_executable(
 )
 target_link_libraries(qmc_unit_tests PRIVATE qmc::ideal GTest::gtest_main)
 qmc_set_project_warnings(qmc_unit_tests)
-qmc_enable_clang_tidy(qmc_unit_tests)
 qmc_enable_sanitizers(qmc_unit_tests)
 gtest_discover_tests(qmc_unit_tests PROPERTIES LABELS unit)
 
@@ -45,7 +44,6 @@ add_executable(
 target_link_libraries(qmc_interacting_unit_tests PRIVATE qmc::interacting GTest::gtest_main)
 target_include_directories(qmc_interacting_unit_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 qmc_set_project_warnings(qmc_interacting_unit_tests)
-qmc_enable_clang_tidy(qmc_interacting_unit_tests)
 qmc_enable_sanitizers(qmc_interacting_unit_tests)
 gtest_discover_tests(qmc_interacting_unit_tests PROPERTIES LABELS unit)
 
@@ -57,7 +55,6 @@ if(QMC_BUILD_STATISTICAL_TESTS)
   )
   target_link_libraries(qmc_statistical_tests PRIVATE qmc::interacting GTest::gtest_main)
   qmc_set_project_warnings(qmc_statistical_tests)
-  qmc_enable_clang_tidy(qmc_statistical_tests)
   qmc_enable_sanitizers(qmc_statistical_tests)
   gtest_discover_tests(qmc_statistical_tests PROPERTIES LABELS statistical)
 endif()

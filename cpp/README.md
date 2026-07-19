@@ -43,6 +43,11 @@ cmake --build --preset tidy
 ctest --preset tidy
 ```
 
+The tidy preset analyzes the library and example targets with the project
+`.clang-tidy` profile. GoogleTest translation units still compile in this
+preset, but are excluded from clang-tidy because macro expansion makes their
+diagnostics disproportionately noisy.
+
 Run the distribution-level free and finite-`U` exact-diagonalization tests with:
 
 ```sh

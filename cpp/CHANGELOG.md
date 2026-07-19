@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CanonicalEnsemble`; the ideal demo and interacting sampler now construct the
   canonical recursion once instead of rebuilding or accepting an independently
   supplied table.
+- Exclude GoogleTest translation units from clang-tidy analysis while retaining
+  the existing project check profile for library and example targets.
 
 ### Removed
 

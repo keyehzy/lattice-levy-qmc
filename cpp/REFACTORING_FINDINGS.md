@@ -80,7 +80,7 @@ type collects one invariant that is currently spread across several files.
 | P2 | Add streaming runs, checkpoints, and prepared options | Operational quality of life | Small/medium |
 | P2 | Consolidate local helpers, names, and value equality | Less duplication and review noise | Small |
 | P2 | Split large translation units and demo output code | Navigation and reviewability | Small |
-| P2 | Finish library packaging, CI, tidy, and benchmarks | Consumer and maintainer quality of life | Medium |
+| P2 | Exclude GoogleTest from tidy (done 2026-07-19); finish packaging, CI, and benchmarks | Consumer and maintainer quality of life | Medium |
 | P2 | Isolate the GSL/process-global error policy | Safer library embedding | Small/medium |
 | P2 | Add invariant builders and fault-boundary tests | Safer migration of owning abstractions | Small |
 
@@ -834,6 +834,13 @@ Recommendation:
 
 ### 15. P2: finish the library build/consumer story
 
+Status (2026-07-19): the GoogleTest-noise slice is complete. Test executables
+still compile in the tidy preset but no longer opt into clang-tidy, preventing
+GoogleTest macro expansions from dominating its output. Library and example
+targets retain the existing `.clang-tidy` checks, header filter, and warning
+policy unchanged. Installation, dependency-fetch policy, CI, and benchmark
+targets remain open.
+
 Evidence:
 
 - targets advertise an `$<INSTALL_INTERFACE:include>` but there are no
@@ -845,10 +852,11 @@ Evidence:
   offline/fetch policy switch.
 - there is no repository CI configuration, so Clang/GCC, sanitizer, format, and
   statistical presets are local conventions rather than enforced gates.
-- `.clang-tidy` enables almost every bugprone/modernize/performance/readability
-  check and sets `WarningsAsErrors: ''` (`.clang-tidy:2-16`). The current tidy
-  build succeeds while emitting extensive diagnostics, including noise from
-  GoogleTest macros and LLVM 21 checks. This makes the signal hard to act on.
+- The project intentionally enables broad
+  bugprone/modernize/performance/readability checks with `WarningsAsErrors: ''`
+  (`.clang-tidy:2-16`). Before this slice, the same profile was attached to all
+  GoogleTest targets, whose macro expansions produced the bulk of the output
+  and obscured findings in project code.
 
 Recommendation:
 
@@ -857,10 +865,11 @@ Recommendation:
 - add `QMC_FETCH_DEPENDENCIES` (default suitable for developers, disabled for
   packaging/offline builds) and fail with a clear package instruction when it is
   off;
-- add CI for Clang and GCC fast tests, format, curated production clang-tidy,
+- add CI for Clang and GCC fast tests, format, the project clang-tidy profile,
   and a scheduled/statistical sanitizer job;
-- curate clang-tidy checks by target: enforce a low-noise production set as
-  errors, and exclude or separately configure macro-heavy tests;
+- retain the project clang-tidy profile for libraries and examples while
+  excluding macro-heavy GoogleTest targets; add a separate test profile only if
+  direct test-source analysis becomes useful;
 - add an optional benchmark target for canonical setup/sampling, path slicing,
   retained correlations, stitch proposals, and full/local action evaluation.
 
@@ -943,7 +952,8 @@ visible at the assertion sites.
    correlation kernels from benchmark evidence.
 7. Consolidate canonical derivative/log-distribution numerics.
 8. Split translation units and demos after responsibilities have stabilized.
-9. Add install/CI/tidy/benchmark support and an external consumer test.
+9. GoogleTest exclusion from clang-tidy completed 2026-07-19; add install, CI,
+   benchmark support, and an external consumer test.
 
 Each step should keep the current deterministic, invariant, and statistical
 tests green. Refactors that intentionally change the seeded stream should compare
