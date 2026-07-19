@@ -95,9 +95,8 @@ the Python tree.
 
 ## Style
 
-- Follow the existing `.clang-format` and `.clang-tidy` configurations once
-  present. Until then, use a consistent LLVM-like style with 2-space
-  indentation and a 100-column target.
+- Follow the existing `.clang-format` and `.clang-tidy` configurations and use
+  the checked-in CMake presets for formatting and static-analysis workflows.
 - Use `snake_case` for functions and variables, `PascalCase` for types, and
   `kPascalCase` for named constants. Name files in `snake_case`.
 - Include what each file uses. Order includes as the matching header, C++
@@ -137,6 +136,10 @@ the Python tree.
   bottlenecks without weakening invariants or tests.
 - Update repository documentation when a public API, algorithm, layout, build
   requirement, or supported platform changes.
+- Treat `project(VERSION ...)` in `CMakeLists.txt` as the version source of
+  truth. `<qmc/version.hpp>` is generated from it; do not edit or commit the
+  generated header. Update `CHANGELOG.md` when a public API, algorithm, or build
+  behavior changes.
 - Do not duplicate the mathematical specification in C++ comments. Link to the
   relevant repository documentation and document only implementation-specific
   details nearby.
