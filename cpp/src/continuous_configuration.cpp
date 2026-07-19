@@ -2,6 +2,7 @@
 
 #include "checked_math.hpp"
 #include "continuous_detail.hpp"
+#include "qmc/torus_layout.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -62,7 +63,8 @@ void validate_cycles(const ContinuousConfiguration &configuration, const Model &
   }
 }
 
-void validate_worldlines(const ContinuousConfiguration &configuration, const Model &model) {
+void validate_worldlines(const ContinuousConfiguration &configuration, const Model &model,
+                         const TorusLayout &layout) {
   if (configuration.worldlines.size() != model.particle_count) {
     throw std::logic_error("continuous worldline count does not match particle_count");
   }
@@ -73,12 +75,9 @@ void validate_worldlines(const ContinuousConfiguration &configuration, const Mod
       throw std::logic_error("continuous worldline duration does not match beta");
     }
     const ContinuousPath &successor = configuration.worldlines[configuration.permutation[particle]];
-    for (std::size_t axis = 0; axis < model.dimension; ++axis) {
-      if (torus_mod(path.end[axis], model.linear_size) !=
-          torus_mod(successor.start[axis], model.linear_size)) {
-        throw std::logic_error(
-            "continuous worldline endpoint does not join its permutation successor");
-      }
+    if (layout.encode_covering(path.end) != layout.encode_covering(successor.start)) {
+      throw std::logic_error(
+          "continuous worldline endpoint does not join its permutation successor");
     }
   }
 }
@@ -270,7 +269,7 @@ void ContinuousConfiguration::validate(const Model &model) const {
   }
   validate_permutation(*this, model);
   validate_cycles(*this, model);
-  validate_worldlines(*this, model);
+  validate_worldlines(*this, model, TorusLayout(model.linear_size, model.dimension));
 }
 
 std::size_t ContinuousConfiguration::event_count() const {
@@ -297,13 +296,12 @@ std::vector<Site> ContinuousConfiguration::positions_at(const double tau,
   if (!std::isfinite(tau) || tau < 0.0 || tau > model.beta) {
     throw std::invalid_argument("tau must lie in [0, beta]");
   }
+  const TorusLayout layout(model.linear_size, model.dimension);
   std::vector<Site> positions;
   positions.reserve(worldlines.size());
   for (const ContinuousPath &path : worldlines) {
     Site position = path.position_at(std::min(tau, path.duration));
-    for (Coord &coordinate : position) {
-      coordinate = torus_mod(coordinate, model.linear_size);
-    }
+    layout.reduce_into(position, position);
     positions.push_back(std::move(position));
   }
   return positions;

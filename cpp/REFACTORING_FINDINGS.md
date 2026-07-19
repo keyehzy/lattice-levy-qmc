@@ -67,7 +67,7 @@ type collects one invariant that is currently spread across several files.
 | Priority | Finding | Primary payoff | Estimated size |
 | --- | --- | --- | --- |
 | P0 | Make occupancy replacement transactional (done 2026-07-19) | Correctness and simpler move code | Medium |
-| P0/P1 | Checked flat extents (done 2026-07-19); introduce `TorusLayout`/`SiteId` | Memory safety, shared geometry, and fewer allocations | Medium |
+| P0/P1 | Checked flat extents and `TorusLayout`/`SiteId` (done 2026-07-19); add grid provenance | Memory safety, shared geometry, and fewer allocations | Medium |
 | P0 | Bind model and canonical table (done 2026-07-19); add reusable free numerics | Correctness and large repeated-work reduction | Medium |
 | P0 | Make paths/configurations valid-by-construction | Ownership clarity and removal of nested validation | Large |
 | P1 | Introduce single-pass path cursors/slices | Simpler boundary semantics and faster path surgery | Medium |
@@ -284,11 +284,17 @@ make invalid intermediate states unrepresentable inside the library.
 
 ### 4. P0/P1: check flat extents, then centralize geometry in `TorusLayout`
 
-Status (2026-07-19): the checked-flat-extent slice is complete. Density,
-Matsubara, and retained-geometry buffers now derive their sizes with checked
-products, and a wrapped Matsubara-grid regression proves rejection before
-allocation or indexing. The `TorusLayout`/`SiteId` and grid-provenance work
-remains open.
+Status (2026-07-19): the checked-flat-extent and geometry slices are complete.
+Density, Matsubara, and retained-geometry buffers derive their sizes with
+checked products. `TorusLayout` now owns checked volume/strides, strict and
+covering-space encoding, decoding, flat displacement, coordinate shifts, and
+periodic neighborhood traversal. Full action, transactional occupancy,
+retained measurements, stitch buckets, and demo indexing use its strong
+`SiteId` keys instead of independently flattened integers or vector-valued
+physical sites. Round-trip, displacement, shift, neighborhood uniqueness,
+overflow, and equal-volume/different-layout tests cover the shared geometry;
+the existing action/cache and stitch tests cover its migrated consumers. A
+shape-aware lattice field and retained-grid provenance remain open.
 
 Evidence:
 
@@ -917,8 +923,8 @@ visible at the assertion sites.
 2. Completed 2026-07-19: added reusable `CanonicalEnsemble`, bound canonical
    provenance, and routed the ideal demo and both samplers through it while
    retaining model-only convenience wrappers.
-3. Add `TorusLayout`, shared checked math, and `SiteId`; migrate encoding,
-   checked flat shapes, and occupancy keys without changing public state.
+3. `TorusLayout`/`SiteId` and checked-flat-shape portions completed 2026-07-19;
+   shared validation-helper cleanup and lattice-field/grid provenance remain.
 4. Add `PathCursor`/`PathSlice`; migrate split and resample first, then stitch and
    rotation, with equivalence tests.
 5. Encapsulate `ContinuousPath`, `Permutation`, and configurations. Move full

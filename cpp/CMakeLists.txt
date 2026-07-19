@@ -32,6 +32,7 @@ add_library(
   src/model.cpp
   src/observables.cpp
   src/random.cpp
+  src/torus_layout.cpp
 )
 add_library(qmc::ideal ALIAS qmc_ideal)
 

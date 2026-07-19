@@ -134,14 +134,8 @@ std::size_t axis_cut_flat_index(const std::size_t first_component, const qmc::Mo
 
 std::size_t farthest_flat_index(const qmc::Model &model) {
   const auto component = static_cast<std::size_t>(model.linear_size / 2);
-  const auto size = static_cast<std::size_t>(model.linear_size);
-  std::size_t result = 0;
-  std::size_t stride = 1;
-  for (std::size_t axis = 0; axis < model.dimension; ++axis) {
-    result += component * stride;
-    stride *= size;
-  }
-  return result;
+  const qmc::TorusLayout layout(model.linear_size, model.dimension);
+  return layout.encode(std::vector<std::size_t>(model.dimension, component)).value();
 }
 
 void write_index_components(std::ostream &output, std::span<const std::size_t> components) {

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add `TorusLayout` and the strong `SiteId` physical-site identity for checked
+  lattice volume, encoding, displacement, shifts, and neighborhood traversal.
 - Add an immutable `CanonicalEnsemble` that binds a validated free model to its
   canonical recursion and supports explicit particle-number prefix reuse.
 - Add generated compile-time version metadata in `<qmc/version.hpp>`, sourced
@@ -18,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Use the shared torus layout for retained observables, full and incremental
+  interaction occupancy, stitch locality buckets, and example flat indexing.
 - Route reusable ideal sampling and exact observables through
   `CanonicalEnsemble`; the ideal demo and interacting sampler now construct the
   canonical recursion once instead of rebuilding or accepting an independently

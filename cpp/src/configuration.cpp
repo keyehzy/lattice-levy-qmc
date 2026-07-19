@@ -1,5 +1,7 @@
 #include "qmc/configuration.hpp"
 
+#include "qmc/torus_layout.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -78,7 +80,7 @@ void validate_permutation(const IdealBosonConfiguration &configuration) {
 }
 
 std::size_t validate_cycle_geometry(const IdealBosonConfiguration &configuration,
-                                    const IdealCyclePath &cycle) {
+                                    const IdealCyclePath &cycle, const TorusLayout &layout) {
   if (cycle.labels.empty()) {
     throw std::logic_error("cycles must not be empty");
   }
@@ -98,16 +100,15 @@ std::size_t validate_cycle_geometry(const IdealBosonConfiguration &configuration
     throw std::logic_error("cycle path length is inconsistent with its labels");
   }
 
+  Site reduced(layout.dimension());
   for (std::size_t point = 0; point <= steps; ++point) {
     validate_site(cycle.covering_path[point], configuration.model.dimension,
                   "covering path site has wrong dimension");
     validate_site(cycle.torus_path[point], configuration.model.dimension,
                   "torus path site has wrong dimension");
-    for (std::size_t axis = 0; axis < configuration.model.dimension; ++axis) {
-      if (cycle.torus_path[point][axis] !=
-          torus_mod(cycle.covering_path[point][axis], configuration.model.linear_size)) {
-        throw std::logic_error("torus path is not the reduction of its covering path");
-      }
+    layout.reduce_into(cycle.covering_path[point], reduced);
+    if (cycle.torus_path[point] != reduced) {
+      throw std::logic_error("torus path is not the reduction of its covering path");
     }
   }
   for (std::size_t axis = 0; axis < configuration.model.dimension; ++axis) {
@@ -213,9 +214,10 @@ void IdealBosonConfiguration::validate() const {
 
   validate_dense_buffers(*this);
   validate_permutation(*this);
+  const TorusLayout layout(model.linear_size, model.dimension);
   std::vector<bool> labels_seen(model.particle_count, false);
   for (const IdealCyclePath &cycle : cycles) {
-    static_cast<void>(validate_cycle_geometry(*this, cycle));
+    static_cast<void>(validate_cycle_geometry(*this, cycle, layout));
     validate_cycle_assignment(*this, cycle, labels_seen);
   }
   if (std::ranges::find(labels_seen, false) != labels_seen.end()) {
@@ -230,6 +232,7 @@ IdealBosonConfiguration sample_ideal_boson_configuration(const CanonicalEnsemble
                                                          Random &random,
                                                          const NumericalOptions &options) {
   const Model &model = ensemble.model();
+  const TorusLayout layout(model.linear_size, model.dimension);
   options.validate();
   if (time_links_per_beta < 1) {
     throw std::invalid_argument("time_links_per_beta must be positive");
@@ -276,9 +279,7 @@ IdealBosonConfiguration sample_ideal_boson_configuration(const CanonicalEnsemble
         sample_bridge_covering(base, endpoint, duration, steps, model.hopping, random, options);
     CoveringPath torus(covering.size(), Site(model.dimension));
     for (std::size_t point = 0; point < covering.size(); ++point) {
-      for (std::size_t axis = 0; axis < model.dimension; ++axis) {
-        torus[point][axis] = torus_mod(covering[point][axis], model.linear_size);
-      }
+      layout.reduce_into(covering[point], torus[point]);
     }
 
     for (std::size_t cycle_index = 0; cycle_index < length; ++cycle_index) {

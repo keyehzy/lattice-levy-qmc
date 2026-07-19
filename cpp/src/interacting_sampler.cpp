@@ -66,38 +66,19 @@ double checked_action(const double interaction, const double overlap) {
   return action;
 }
 
-struct SiteHash {
-  std::size_t operator()(const Site &site) const noexcept {
-    std::size_t result = site.size();
-    for (const Coord coordinate : site) {
-      const auto value = static_cast<std::uint64_t>(coordinate);
-      result ^=
-          static_cast<std::size_t>(value + 0x9e3779b97f4a7c15ULL + (result << 6U) + (result >> 2U));
-    }
-    return result;
-  }
-};
+using PartnerBuckets = std::unordered_map<SiteId, std::vector<ParticleId>, SiteIdHash>;
 
-using PartnerBuckets = std::unordered_map<Site, std::vector<ParticleId>, SiteHash>;
-
-bool within_torus_radius(const Site &left, const Site &right, const Coord linear_size,
-                         const std::size_t radius) {
-  if (left.size() != right.size()) {
-    throw std::logic_error("stitch bucket site dimension mismatch");
+std::vector<SiteId> encode_positions(const std::vector<Site> &positions,
+                                     const TorusLayout &layout) {
+  std::vector<SiteId> site_ids;
+  site_ids.reserve(positions.size());
+  for (const Site &position : positions) {
+    site_ids.push_back(layout.encode(position));
   }
-  for (std::size_t axis = 0; axis < left.size(); ++axis) {
-    const Coord direct =
-        left[axis] >= right[axis] ? left[axis] - right[axis] : right[axis] - left[axis];
-    const Coord periodic = linear_size - direct;
-    const Coord distance = std::min(direct, periodic);
-    if (std::cmp_greater(distance, radius)) {
-      return false;
-    }
-  }
-  return true;
+  return site_ids;
 }
 
-PartnerBuckets build_partner_buckets(const std::vector<Site> &positions) {
+PartnerBuckets build_partner_buckets(const std::vector<SiteId> &positions) {
   PartnerBuckets buckets;
   buckets.reserve(positions.size());
   for (std::size_t label = 0; label < positions.size(); ++label) {
@@ -106,49 +87,10 @@ PartnerBuckets build_partner_buckets(const std::vector<Site> &positions) {
   return buckets;
 }
 
-Coord shifted_torus_coordinate(const Coord center, const Coord offset, const Coord linear_size) {
-  if (offset >= 0) {
-    const Coord distance_to_wrap = linear_size - center;
-    return offset < distance_to_wrap ? center + offset : offset - distance_to_wrap;
-  }
-  const Coord magnitude = -offset;
-  return magnitude <= center ? center - magnitude : linear_size - (magnitude - center);
-}
-
-void collect_neighbor_candidates(const std::size_t axis, Site &site, const Site &center,
-                                 const Coord radius, const Coord linear_size,
-                                 const PartnerBuckets &buckets, const ParticleId particle,
-                                 std::vector<ParticleId> &candidates) {
-  if (axis == site.size()) {
-    const auto bucket = buckets.find(site);
-    if (bucket == buckets.end()) {
-      return;
-    }
-    for (const ParticleId label : bucket->second) {
-      if (label != particle) {
-        candidates.push_back(label);
-      }
-    }
-    return;
-  }
-
-  for (Coord offset = -radius;; ++offset) {
-    site[axis] = shifted_torus_coordinate(center[axis], offset, linear_size);
-    collect_neighbor_candidates(axis + 1, site, center, radius, linear_size, buckets, particle,
-                                candidates);
-    if (offset == radius) {
-      break;
-    }
-  }
-}
-
-bool neighborhood_is_small(const Model &model, const std::size_t locality_radius,
+bool neighborhood_is_small(const TorusLayout &layout, const std::size_t locality_radius,
                            const std::size_t occupied_sites) {
-  if (locality_radius > static_cast<std::size_t>(std::numeric_limits<Coord>::max())) {
-    return false;
-  }
-  const auto radius = static_cast<Coord>(locality_radius);
-  if (radius >= (model.linear_size / 2) + (model.linear_size % 2)) {
+  const auto linear_size = static_cast<std::size_t>(layout.linear_size());
+  if (locality_radius >= (linear_size / 2) + (linear_size % 2)) {
     return false;
   }
   const std::size_t width = (2 * locality_radius) + 1;
@@ -156,7 +98,7 @@ bool neighborhood_is_small(const Model &model, const std::size_t locality_radius
                                 ? std::numeric_limits<std::size_t>::max()
                                 : (4 * occupied_sites) + 1;
   std::size_t volume = 1;
-  for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+  for (std::size_t axis = 0; axis < layout.dimension(); ++axis) {
     if (volume > limit / width) {
       return false;
     }
@@ -165,7 +107,7 @@ bool neighborhood_is_small(const Model &model, const std::size_t locality_radius
   return true;
 }
 
-std::vector<ParticleId> same_site_candidates(const ParticleId particle, const Site &position,
+std::vector<ParticleId> same_site_candidates(const ParticleId particle, const SiteId position,
                                              const PartnerBuckets &buckets) {
   std::vector<ParticleId> candidates;
   const auto bucket = buckets.find(position);
@@ -180,12 +122,13 @@ std::vector<ParticleId> same_site_candidates(const ParticleId particle, const Si
   return candidates;
 }
 
-std::vector<ParticleId> scan_neighbor_candidates(const ParticleId particle, const Site &position,
-                                                 const PartnerBuckets &buckets, const Model &model,
+std::vector<ParticleId> scan_neighbor_candidates(const ParticleId particle, const SiteId position,
+                                                 const PartnerBuckets &buckets,
+                                                 const TorusLayout &layout,
                                                  const std::size_t locality_radius) {
   std::vector<ParticleId> candidates;
   for (const auto &[site, labels] : buckets) {
-    if (!within_torus_radius(position, site, model.linear_size, locality_radius)) {
+    if (!layout.within_radius(position, site, locality_radius)) {
       continue;
     }
     for (const ParticleId label : labels) {
@@ -198,26 +141,37 @@ std::vector<ParticleId> scan_neighbor_candidates(const ParticleId particle, cons
 }
 
 std::vector<ParticleId> local_stitch_candidates(const ParticleId particle,
-                                                const std::vector<Site> &positions,
-                                                const PartnerBuckets &buckets, const Model &model,
+                                                const std::vector<SiteId> &positions,
+                                                const PartnerBuckets &buckets,
+                                                const TorusLayout &layout,
                                                 const std::size_t locality_radius) {
   if (locality_radius == 0) {
     return same_site_candidates(particle, positions[particle], buckets);
   }
-  if (!neighborhood_is_small(model, locality_radius, buckets.size())) {
-    return scan_neighbor_candidates(particle, positions[particle], buckets, model, locality_radius);
+  if (!neighborhood_is_small(layout, locality_radius, buckets.size())) {
+    return scan_neighbor_candidates(particle, positions[particle], buckets, layout,
+                                    locality_radius);
   }
 
   std::vector<ParticleId> candidates;
-  Site neighbor(model.dimension, 0);
-  collect_neighbor_candidates(0, neighbor, positions[particle], static_cast<Coord>(locality_radius),
-                              model.linear_size, buckets, particle, candidates);
+  for (const SiteId neighbor :
+       layout.neighbors_within_radius(positions[particle], locality_radius)) {
+    const auto bucket = buckets.find(neighbor);
+    if (bucket == buckets.end()) {
+      continue;
+    }
+    for (const ParticleId label : bucket->second) {
+      if (label != particle) {
+        candidates.push_back(label);
+      }
+    }
+  }
   return candidates;
 }
 
-ParticleId select_stitch_partner(const ParticleId particle, const std::vector<Site> &positions,
-                                 const PartnerBuckets &buckets, const Model &model,
-                                 const std::size_t locality_radius,
+ParticleId select_stitch_partner(const ParticleId particle, const std::vector<SiteId> &positions,
+                                 const PartnerBuckets &buckets, const TorusLayout &layout,
+                                 const Model &model, const std::size_t locality_radius,
                                  const double global_partner_probability, Random &random) {
   if (!std::isfinite(global_partner_probability) || global_partner_probability < 0.0 ||
       global_partner_probability > 1.0) {
@@ -230,7 +184,7 @@ ParticleId select_stitch_partner(const ParticleId particle, const std::vector<Si
   const bool use_global = random.uniform_unit() < global_partner_probability;
   std::vector<ParticleId> candidates;
   if (!use_global) {
-    candidates = local_stitch_candidates(particle, positions, buckets, model, locality_radius);
+    candidates = local_stitch_candidates(particle, positions, buckets, layout, locality_radius);
   }
   if (!candidates.empty()) {
     return candidates[random.uniform_index(static_cast<std::uint64_t>(candidates.size()))];
@@ -270,11 +224,10 @@ ParticleId draw_uniform_unselected(const std::vector<bool> &selected,
   throw std::logic_error("failed to draw an unselected stitch strand");
 }
 
-std::vector<ParticleId>
-select_stitch_strands(const ParticleId anchor, const std::size_t strand_count,
-                      const std::vector<Site> &positions, const PartnerBuckets &buckets,
-                      const Model &model, const std::size_t locality_radius,
-                      const double global_partner_probability, Random &random) {
+std::vector<ParticleId> select_stitch_strands(
+    const ParticleId anchor, const std::size_t strand_count, const std::vector<SiteId> &positions,
+    const PartnerBuckets &buckets, const TorusLayout &layout, const Model &model,
+    const std::size_t locality_radius, const double global_partner_probability, Random &random) {
   if (!std::isfinite(global_partner_probability) || global_partner_probability < 0.0 ||
       global_partner_probability > 1.0) {
     throw std::invalid_argument("global partner probability must lie in [0, 1]");
@@ -288,7 +241,7 @@ select_stitch_strands(const ParticleId anchor, const std::size_t strand_count,
   }
 
   const std::vector<ParticleId> local_pool =
-      local_stitch_candidates(anchor, positions, buckets, model, locality_radius);
+      local_stitch_candidates(anchor, positions, buckets, layout, locality_radius);
   std::vector<bool> selected(model.particle_count, false);
   selected[anchor] = true;
   std::vector<ParticleId> strands{anchor};
@@ -442,10 +395,9 @@ ContinuousPath splice_path_interval(const ContinuousPath &prefix_path,
   if (bridge.start != left || bridge.end.size() != right.size()) {
     throw std::invalid_argument("stitch bridge does not start at the prefix cut");
   }
-  for (std::size_t axis = 0; axis < right.size(); ++axis) {
-    if (torus_mod(bridge.end[axis], linear_size) != torus_mod(right[axis], linear_size)) {
-      throw std::invalid_argument("stitch bridge does not end at the suffix torus site");
-    }
+  const TorusLayout layout(linear_size, right.size());
+  if (layout.encode_covering(bridge.end) != layout.encode_covering(right)) {
+    throw std::invalid_argument("stitch bridge does not end at the suffix torus site");
   }
 
   std::vector<JumpEvent> events;
@@ -529,7 +481,8 @@ std::optional<double> MoveStatistics::successor_changes_per_attempt() const noex
 
 InteractingSampler::InteractingSampler(InteractingModel model, NumericalOptions numerical,
                                        const std::uint64_t seed)
-    : model_(model), numerical_(numerical), random_(seed), free_ensemble_(model_.free) {
+    : model_(model), layout_(model_.free.linear_size, model_.free.dimension), numerical_(numerical),
+      random_(seed), free_ensemble_(model_.free) {
   model_.validate();
   numerical_.validate();
   state_ = sample_ideal_continuous_configuration(free_ensemble_, random_, numerical_);
@@ -540,8 +493,8 @@ InteractingSampler::InteractingSampler(InteractingModel model, NumericalOptions 
 
 InteractingSampler::~InteractingSampler() = default;
 InteractingSampler::InteractingSampler(const InteractingSampler &other)
-    : model_(other.model_), numerical_(other.numerical_), random_(other.random_),
-      free_ensemble_(other.free_ensemble_), state_(other.state_),
+    : model_(other.model_), layout_(other.layout_), numerical_(other.numerical_),
+      random_(other.random_), free_ensemble_(other.free_ensemble_), state_(other.state_),
       pair_overlap_(other.pair_overlap_), action_(other.action_), statistics_(other.statistics_) {
   rebuild_occupancy_index();
 }
@@ -811,11 +764,12 @@ bool InteractingSampler::k_stitch_update(const std::size_t k,
   std::vector<ParticleId> strands;
   if (requested_strands.empty()) {
     const std::vector<Site> positions = state_.positions_at(tau0, model_.free);
-    const PartnerBuckets buckets = build_partner_buckets(positions);
+    const std::vector<SiteId> site_ids = encode_positions(positions, layout_);
+    const PartnerBuckets buckets = build_partner_buckets(site_ids);
     const auto anchor = static_cast<ParticleId>(
         random_.uniform_index(static_cast<std::uint64_t>(model_.free.particle_count)));
-    strands = select_stitch_strands(anchor, k, positions, buckets, model_.free, locality_radius,
-                                    global_partner_probability, random_);
+    strands = select_stitch_strands(anchor, k, site_ids, buckets, layout_, model_.free,
+                                    locality_radius, global_partner_probability, random_);
   } else {
     if (requested_strands.size() != k) {
       throw std::invalid_argument("explicit stitch strands must contain exactly k labels");
@@ -854,8 +808,9 @@ bool InteractingSampler::stitch_update(const std::optional<ParticleId> particle,
     selected_partner = *partner;
   } else {
     const std::vector<Site> positions = state_.positions_at(tau0, model_.free);
-    const PartnerBuckets buckets = build_partner_buckets(positions);
-    selected_partner = select_stitch_partner(selected, positions, buckets, model_.free,
+    const std::vector<SiteId> site_ids = encode_positions(positions, layout_);
+    const PartnerBuckets buckets = build_partner_buckets(site_ids);
+    selected_partner = select_stitch_partner(selected, site_ids, buckets, layout_, model_.free,
                                              locality_radius, global_partner_probability, random_);
   }
   if (static_cast<std::size_t>(selected_partner) >= model_.free.particle_count ||
@@ -900,7 +855,8 @@ void InteractingSampler::stitch_sweep(const std::optional<std::size_t> updates,
   }
 
   const std::vector<Site> positions = state_.positions_at(tau0, model_.free);
-  const PartnerBuckets buckets = build_partner_buckets(positions);
+  const std::vector<SiteId> site_ids = encode_positions(positions, layout_);
+  const PartnerBuckets buckets = build_partner_buckets(site_ids);
   const std::size_t update_count = updates.value_or(model_.free.particle_count);
   for (std::size_t update = 0; update < update_count; ++update) {
     const std::size_t mixture_index =
@@ -909,7 +865,7 @@ void InteractingSampler::stitch_sweep(const std::optional<std::size_t> updates,
     const auto anchor = static_cast<ParticleId>(
         random_.uniform_index(static_cast<std::uint64_t>(model_.free.particle_count)));
     const std::vector<ParticleId> strands =
-        select_stitch_strands(anchor, strand_count, positions, buckets, model_.free,
+        select_stitch_strands(anchor, strand_count, site_ids, buckets, layout_, model_.free,
                               locality_radius, global_partner_probability, random_);
     static_cast<void>(try_stitch_strands(strands, tau0, tau1));
   }

@@ -1,8 +1,5 @@
 #include "occupancy_index.hpp"
 
-#include "checked_math.hpp"
-#include "qmc/free_numerics.hpp"
-
 #include <algorithm>
 #include <cmath>
 #include <exception>
@@ -108,10 +105,6 @@ double OccupancyIndex::SiteTimeline::pair_integral(const double beta) {
 
 bool OccupancyIndex::SiteTimeline::empty() const noexcept { return initial == 0 && deltas.empty(); }
 
-bool OccupancyIndex::SiteLess::operator()(const Site &left, const Site &right) const noexcept {
-  return std::ranges::lexicographical_compare(left, right);
-}
-
 OccupancyIndex::ReplacementTransaction::ReplacementTransaction(
     OccupancyIndex &owner, const double proposed_overlap, TimelineMap staged_timelines) noexcept
     : owner_(&owner), proposed_overlap_(proposed_overlap),
@@ -158,32 +151,21 @@ void OccupancyIndex::ReplacementTransaction::commit() noexcept {
 }
 
 OccupancyIndex::OccupancyIndex(const Model &model)
-    : linear_size_(model.linear_size), dimension_(model.dimension), beta_(model.beta) {
+    : layout_(model.linear_size, model.dimension), beta_(model.beta) {
   model.validate();
   if (model.beta <= 0.0) {
     throw std::invalid_argument("occupancy index requires positive beta");
   }
 }
 
-Site OccupancyIndex::site_key(const Site &position) const {
-  if (position.size() != dimension_) {
-    throw std::invalid_argument("occupancy position dimension mismatch");
-  }
-  Site key = position;
-  for (Coord &coordinate : key) {
-    coordinate = torus_mod(coordinate, linear_size_);
-  }
-  return key;
-}
-
-OccupancyIndex::SiteTimeline &OccupancyIndex::timeline(TimelineMap &timelines, const Site &key) {
+OccupancyIndex::SiteTimeline &OccupancyIndex::timeline(TimelineMap &timelines, const SiteId key) {
   return timelines[key];
 }
 
 void OccupancyIndex::stage_path_timelines(const ContinuousPath &path, TimelineMap &staged) const {
-  path.validate(dimension_);
-  Site position = site_key(path.start);
-  const auto stage_site = [this, &staged](const Site &key) {
+  path.validate(layout_.dimension());
+  SiteId position = layout_.encode_covering(path.start);
+  const auto stage_site = [this, &staged](const SiteId key) {
     if (staged.contains(key)) {
       return;
     }
@@ -197,10 +179,7 @@ void OccupancyIndex::stage_path_timelines(const ContinuousPath &path, TimelineMa
 
   stage_site(position);
   for (const JumpEvent &event : path.events) {
-    position[event.axis] =
-        torus_mod(checked_add(position[event.axis], static_cast<Coord>(event.direction),
-                              "occupancy path coordinate exceeds int64 range"),
-                  linear_size_);
+    position = layout_.shifted(position, event.axis, static_cast<Coord>(event.direction));
     stage_site(position);
   }
 }
@@ -210,15 +189,12 @@ void OccupancyIndex::adjust_path(TimelineMap &timelines, const ContinuousPath &p
   if (sign != -1 && sign != 1) {
     throw std::invalid_argument("occupancy path adjustment sign must be -1 or +1");
   }
-  path.validate(dimension_);
-  Site position = site_key(path.start);
+  path.validate(layout_.dimension());
+  SiteId position = layout_.encode_covering(path.start);
   timeline(timelines, position).adjust_initial(sign);
   for (const JumpEvent &event : path.events) {
-    const Site old_key = position;
-    position[event.axis] =
-        torus_mod(checked_add(position[event.axis], static_cast<Coord>(event.direction),
-                              "occupancy path coordinate exceeds int64 range"),
-                  linear_size_);
+    const SiteId old_key = position;
+    position = layout_.shifted(position, event.axis, static_cast<Coord>(event.direction));
     if (old_key == position) {
       continue;
     }
@@ -229,16 +205,13 @@ void OccupancyIndex::adjust_path(TimelineMap &timelines, const ContinuousPath &p
 
 double OccupancyIndex::integrate_path_occupancy(TimelineMap &timelines,
                                                 const ContinuousPath &path) const {
-  path.validate(dimension_);
-  Site position = site_key(path.start);
+  path.validate(layout_.dimension());
+  SiteId position = layout_.encode_covering(path.start);
   double previous = 0.0;
   double total = 0.0;
   for (const JumpEvent &event : path.events) {
     total += timeline(timelines, position).integral(previous, event.time);
-    position[event.axis] =
-        torus_mod(checked_add(position[event.axis], static_cast<Coord>(event.direction),
-                              "occupancy path coordinate exceeds int64 range"),
-                  linear_size_);
+    position = layout_.shifted(position, event.axis, static_cast<Coord>(event.direction));
     previous = event.time;
   }
   total += timeline(timelines, position).integral(previous, path.duration);

@@ -2,6 +2,7 @@
 
 #include "checked_math.hpp"
 #include "interaction_detail.hpp"
+#include "qmc/torus_layout.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -21,26 +22,6 @@ struct TimedEvent {
   std::int8_t direction;
 };
 
-std::size_t site_index(const Site &site, const Model &model) {
-  if (site.size() != model.dimension) {
-    throw std::logic_error("site dimension does not match the model");
-  }
-  const auto linear_size = static_cast<std::size_t>(model.linear_size);
-  std::size_t multiplier = 1;
-  std::size_t index = 0;
-  for (std::size_t axis = 0; axis < model.dimension; ++axis) {
-    const auto coordinate = static_cast<std::size_t>(torus_mod(site[axis], model.linear_size));
-    const auto contribution =
-        detail::checked_product(coordinate, multiplier, "flat torus site index exceeds size_t");
-    index = detail::checked_add_size(index, contribution, "flat torus site index exceeds size_t");
-    if (axis + 1 < model.dimension) {
-      multiplier = detail::checked_product(multiplier, linear_size,
-                                           "flat torus site multiplier exceeds size_t");
-    }
-  }
-  return index;
-}
-
 double normalize_event_time(const double time, const double beta) {
   if (time >= 0.0 && time <= beta) {
     return time;
@@ -59,10 +40,10 @@ void ensure_finite_result(const double value, const char *description) {
   }
 }
 
-using OccupancyMap = std::unordered_map<std::size_t, std::uint64_t>;
+using OccupancyMap = std::unordered_map<SiteId, std::uint64_t, SiteIdHash>;
 
 struct OverlapWorkspace {
-  std::vector<Site> positions;
+  std::vector<SiteId> positions;
   OccupancyMap occupancies;
   std::uint64_t pair_count = 0;
   std::size_t total_events = 0;
@@ -75,7 +56,7 @@ void add_pairs(std::uint64_t &pair_count, const std::uint64_t additional) {
   pair_count += additional;
 }
 
-OverlapWorkspace initialize_workspace(const Model &model,
+OverlapWorkspace initialize_workspace(const Model &model, const TorusLayout &layout,
                                       const std::span<const ContinuousPath *const> worldlines) {
   OverlapWorkspace workspace;
   workspace.positions.reserve(worldlines.size());
@@ -85,16 +66,12 @@ OverlapWorkspace initialize_workspace(const Model &model,
       throw std::logic_error("pair-overlap path view contains null");
     }
     path->validate(model.dimension);
-    Site position = path->start;
-    for (Coord &coordinate : position) {
-      coordinate = torus_mod(coordinate, model.linear_size);
-    }
-    const std::size_t key = site_index(position, model);
+    const SiteId key = layout.encode_covering(path->start);
     auto [entry, inserted] = workspace.occupancies.try_emplace(key, 0);
     static_cast<void>(inserted);
     add_pairs(workspace.pair_count, entry->second);
     ++entry->second;
-    workspace.positions.push_back(std::move(position));
+    workspace.positions.push_back(key);
     workspace.total_events = detail::checked_add_size(workspace.total_events, path->events.size(),
                                                       "pair-overlap event count exceeds size_t");
   }
@@ -123,9 +100,9 @@ std::vector<TimedEvent> collect_events(const Model &model,
   return events;
 }
 
-void apply_event(const TimedEvent &event, const Model &model, OverlapWorkspace &workspace) {
-  Site &position = workspace.positions[event.particle];
-  const std::size_t old_key = site_index(position, model);
+void apply_event(const TimedEvent &event, const TorusLayout &layout, OverlapWorkspace &workspace) {
+  SiteId &position = workspace.positions[event.particle];
+  const SiteId old_key = position;
   auto old_entry = workspace.occupancies.find(old_key);
   if (old_entry == workspace.occupancies.end() || old_entry->second == 0) {
     throw std::logic_error("pair-overlap occupancy state is inconsistent");
@@ -136,11 +113,8 @@ void apply_event(const TimedEvent &event, const Model &model, OverlapWorkspace &
     workspace.occupancies.erase(old_entry);
   }
 
-  position[event.axis] =
-      torus_mod(detail::checked_add(position[event.axis], static_cast<Coord>(event.direction),
-                                    "physical event coordinate exceeds int64 range"),
-                model.linear_size);
-  const std::size_t new_key = site_index(position, model);
+  position = layout.shifted(position, event.axis, static_cast<Coord>(event.direction));
+  const SiteId new_key = position;
   auto [new_entry, inserted] = workspace.occupancies.try_emplace(new_key, 0);
   static_cast<void>(inserted);
   add_pairs(workspace.pair_count, new_entry->second);
@@ -160,11 +134,11 @@ double pair_overlap_time_for_paths(const Model &model,
   if (worldlines.size() != model.particle_count) {
     throw std::logic_error("pair-overlap path count does not match particle_count");
   }
-  static_cast<void>(model.volume());
+  const TorusLayout layout(model.linear_size, model.dimension);
   if (worldlines.size() < 2) {
     return 0.0;
   }
-  OverlapWorkspace workspace = initialize_workspace(model, worldlines);
+  OverlapWorkspace workspace = initialize_workspace(model, layout, worldlines);
   const std::vector<TimedEvent> events = collect_events(model, worldlines, workspace.total_events);
 
   double overlap = 0.0;
@@ -180,7 +154,7 @@ double pair_overlap_time_for_paths(const Model &model,
       ++group_end;
     }
     for (std::size_t index = event_index; index < group_end; ++index) {
-      apply_event(events[index], model, workspace);
+      apply_event(events[index], layout, workspace);
     }
     previous_time = event_time;
     event_index = group_end;

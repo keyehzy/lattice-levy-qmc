@@ -3,6 +3,7 @@
 
 #include "qmc/model.hpp"
 #include "qmc/path.hpp"
+#include "qmc/torus_layout.hpp"
 
 #include <cstdint>
 #include <map>
@@ -40,11 +41,7 @@ private:
     [[nodiscard]] bool empty() const noexcept;
   };
 
-  struct SiteLess {
-    [[nodiscard]] bool operator()(const Site &left, const Site &right) const noexcept;
-  };
-
-  using TimelineMap = std::map<Site, SiteTimeline, SiteLess>;
+  using TimelineMap = std::map<SiteId, SiteTimeline>;
 
 public:
   class ReplacementTransaction {
@@ -83,8 +80,7 @@ public:
   [[nodiscard]] bool represents(std::span<const ContinuousPath> paths) const;
 
 private:
-  [[nodiscard]] Site site_key(const Site &position) const;
-  [[nodiscard]] static SiteTimeline &timeline(TimelineMap &timelines, const Site &key);
+  [[nodiscard]] static SiteTimeline &timeline(TimelineMap &timelines, SiteId key);
   void stage_path_timelines(const ContinuousPath &path, TimelineMap &staged) const;
   void adjust_path(TimelineMap &timelines, const ContinuousPath &path, std::int64_t sign) const;
   [[nodiscard]] double integrate_path_occupancy(TimelineMap &timelines,
@@ -92,8 +88,7 @@ private:
   [[nodiscard]] static bool same_occupancies(const TimelineMap &left,
                                              const TimelineMap &right) noexcept;
 
-  Coord linear_size_;
-  std::size_t dimension_;
+  TorusLayout layout_;
   double beta_;
   TimelineMap timelines_;
 };

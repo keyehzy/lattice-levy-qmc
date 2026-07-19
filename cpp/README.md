@@ -104,6 +104,11 @@ unwrapped coordinates and therefore the winding information. `64` is the
 number of retained time links per interval `beta`; it is an observation
 resolution, not a Trotter discretization.
 
+`qmc::TorusLayout` is the shared checked geometry for flattened lattice data.
+It fixes axis zero as the least-significant base-`L` digit and produces compact
+`qmc::SiteId` values for physical sites, while covering-space coordinates remain
+separate so winding is never discarded.
+
 For the interacting chain, include the separate umbrella header:
 
 ```cpp

@@ -2,6 +2,7 @@
 
 #include "checked_math.hpp"
 #include "qmc/free_numerics.hpp"
+#include "qmc/torus_layout.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -15,70 +16,22 @@
 namespace qmc {
 namespace {
 
-std::vector<std::size_t> decode_flat_index(std::size_t flat, const Model &model) {
-  const auto linear_size = static_cast<std::size_t>(model.linear_size);
-  std::vector<std::size_t> components(model.dimension);
-  for (std::size_t axis = 0; axis < model.dimension; ++axis) {
-    components[axis] = flat % linear_size;
-    flat /= linear_size;
-  }
-  return components;
-}
-
-std::size_t encode_components(std::span<const std::size_t> components, const Model &model) {
-  if (components.size() != model.dimension) {
-    throw std::invalid_argument("component vector has the wrong dimension");
-  }
-  const auto linear_size = static_cast<std::size_t>(model.linear_size);
-  std::size_t flat = 0;
-  std::size_t stride = 1;
-  for (const std::size_t component : components) {
-    if (component >= linear_size) {
-      throw std::invalid_argument("torus component is outside [0, L)");
-    }
-    flat += component * stride;
-    stride *= linear_size;
-  }
-  return flat;
-}
-
-std::size_t encode_site(const DenseWorldlines &worldlines, const ParticleId particle,
-                        const std::size_t time, const Model &model) {
-  const auto linear_size = static_cast<std::size_t>(model.linear_size);
-  std::size_t flat = 0;
-  std::size_t stride = 1;
-  for (std::size_t axis = 0; axis < model.dimension; ++axis) {
-    const Coord coordinate = worldlines.at(particle, time, axis);
-    if (coordinate < 0 || coordinate >= model.linear_size) {
-      throw std::logic_error("world-line coordinate lies outside the torus");
-    }
-    flat += static_cast<std::size_t>(coordinate) * stride;
-    stride *= linear_size;
-  }
-  return flat;
-}
-
-std::size_t displacement_index(const std::size_t origin_flat, const std::size_t target_flat,
-                               const Model &model) {
-  const auto origin = decode_flat_index(origin_flat, model);
-  const auto target = decode_flat_index(target_flat, model);
-  const auto linear_size = static_cast<std::size_t>(model.linear_size);
-  std::vector<std::size_t> displacement(model.dimension);
-  for (std::size_t axis = 0; axis < model.dimension; ++axis) {
-    displacement[axis] = (target[axis] + linear_size - origin[axis]) % linear_size;
-  }
-  return encode_components(displacement, model);
-}
-
-std::vector<std::vector<std::size_t>>
-retained_positions(const IdealBosonConfiguration &configuration) {
+std::vector<std::vector<SiteId>> retained_positions(const IdealBosonConfiguration &configuration,
+                                                    const TorusLayout &layout) {
   const auto time_points = configuration.time_links_per_beta;
-  std::vector<std::vector<std::size_t>> positions(
-      time_points, std::vector<std::size_t>(configuration.model.particle_count));
+  std::vector<std::vector<SiteId>> positions(time_points);
+  Site position(layout.dimension());
   for (std::size_t time = 0; time < time_points; ++time) {
+    positions[time].reserve(configuration.model.particle_count);
     for (std::size_t particle = 0; particle < configuration.model.particle_count; ++particle) {
-      positions[time][particle] = encode_site(
-          configuration.worldlines, static_cast<ParticleId>(particle), time, configuration.model);
+      for (std::size_t axis = 0; axis < layout.dimension(); ++axis) {
+        position[axis] = configuration.worldlines.at(static_cast<ParticleId>(particle), time, axis);
+      }
+      try {
+        positions[time].push_back(layout.encode(position));
+      } catch (const std::invalid_argument &) {
+        throw std::logic_error("world-line coordinate lies outside the torus");
+      }
     }
   }
   return positions;
@@ -206,25 +159,26 @@ double momentum_coherence_length(const MomentumDistribution &momentum, const Mod
   return std::sqrt(std::max(0.0, ratio)) / (2.0 * std::sin(lattice_momentum));
 }
 
-void accumulate_pair_counts(std::span<const std::size_t> positions, const Model &model,
+void accumulate_pair_counts(const std::span<const SiteId> positions, const TorusLayout &layout,
                             std::vector<double> &pair_counts) {
-  for (const std::size_t origin : positions) {
-    for (const std::size_t target : positions) {
-      ++pair_counts[displacement_index(origin, target, model)];
+  for (const SiteId origin : positions) {
+    for (const SiteId target : positions) {
+      ++pair_counts[layout.flat_displacement(origin, target).value()];
     }
   }
 }
 
-void accumulate_structure_factor(std::span<const std::size_t> positions, const Model &model,
-                                 std::vector<double> &structure_factor) {
+void accumulate_structure_factor(const std::span<const SiteId> positions, const TorusLayout &layout,
+                                 const Model &model, std::vector<double> &structure_factor) {
   if (model.particle_count == 0) {
     return;
   }
+  std::vector<std::size_t> site_components(layout.dimension());
   for (std::size_t momentum = 0; momentum < structure_factor.size(); ++momentum) {
-    const auto momentum_components = decode_flat_index(momentum, model);
+    const auto momentum_components = layout.decode(SiteId(momentum));
     std::complex<double> density_mode{0.0, 0.0};
-    for (const std::size_t site : positions) {
-      const auto site_components = decode_flat_index(site, model);
+    for (const SiteId site : positions) {
+      layout.decode_into(site, site_components);
       const double phase = phase_for_indices(momentum_components, site_components, model);
       density_mode += std::polar(1.0, -phase);
     }
@@ -306,13 +260,14 @@ CanonicalThermodynamics canonical_thermodynamics(const Model &model) {
 
 MomentumDistribution momentum_distribution(const CanonicalEnsemble &ensemble) {
   const Model &model = ensemble.model();
-  const auto volume = model.volume();
+  const TorusLayout layout(model.linear_size, model.dimension);
+  const auto volume = layout.volume();
   MomentumDistribution result;
   result.modes.reserve(volume);
 
   for (std::size_t flat = 0; flat < volume; ++flat) {
     MomentumMode mode;
-    mode.indices = decode_flat_index(flat, model);
+    mode.indices = layout.decode(SiteId(flat));
     mode.wavevector.resize(model.dimension);
     for (std::size_t axis = 0; axis < model.dimension; ++axis) {
       mode.wavevector[axis] = 2.0 * std::numbers::pi * static_cast<double>(mode.indices[axis]) /
@@ -347,7 +302,8 @@ std::vector<OneBodyDensityPoint> one_body_density_matrix(const CanonicalEnsemble
   const Model &model = ensemble.model();
   const auto log_z = ensemble.log_cycle_weights();
   const auto log_Z = ensemble.log_partitions();
-  const auto volume = model.volume();
+  const TorusLayout layout(model.linear_size, model.dimension);
+  const auto volume = layout.volume();
   const auto linear_size = static_cast<std::size_t>(model.linear_size);
 
   std::vector<std::vector<double>> kernel_ratios(model.particle_count + 1,
@@ -384,7 +340,7 @@ std::vector<OneBodyDensityPoint> one_body_density_matrix(const CanonicalEnsemble
   std::vector<OneBodyDensityPoint> result;
   result.reserve(volume);
   for (std::size_t flat = 0; flat < volume; ++flat) {
-    const auto components = decode_flat_index(flat, model);
+    const auto components = layout.decode(SiteId(flat));
     OneBodyDensityPoint point{.displacement = Site(model.dimension), .value = 0.0};
     for (std::size_t axis = 0; axis < model.dimension; ++axis) {
       point.displacement[axis] = static_cast<Coord>(components[axis]);
@@ -598,9 +554,10 @@ double twist_free_energy_curvature(const Model &model, const std::size_t axis) {
 EqualTimeObservables equal_time_observables(const IdealBosonConfiguration &configuration) {
   configuration.validate();
   const Model &model = configuration.model;
-  const auto volume = model.volume();
+  const TorusLayout layout(model.linear_size, model.dimension);
+  const auto volume = layout.volume();
   const auto time_points = configuration.time_links_per_beta;
-  const auto positions = retained_positions(configuration);
+  const auto positions = retained_positions(configuration, layout);
 
   EqualTimeObservables result{
       .site_density = std::vector<double>(volume),
@@ -612,8 +569,8 @@ EqualTimeObservables equal_time_observables(const IdealBosonConfiguration &confi
   std::vector<std::vector<std::size_t>> occupancies(time_points, std::vector<std::size_t>(volume));
 
   for (std::size_t time = 0; time < time_points; ++time) {
-    for (const std::size_t site : positions[time]) {
-      ++occupancies[time][site];
+    for (const SiteId site : positions[time]) {
+      ++occupancies[time][site.value()];
     }
     for (std::size_t site = 0; site < volume; ++site) {
       const auto occupation = occupancies[time][site];
@@ -623,8 +580,8 @@ EqualTimeObservables equal_time_observables(const IdealBosonConfiguration &confi
       result.mean_occupation_squared += occupation_value * occupation_value;
       result.mean_factorial_occupation += occupation_value * std::max(0.0, occupation_value - 1.0);
     }
-    accumulate_pair_counts(positions[time], model, pair_counts);
-    accumulate_structure_factor(positions[time], model, result.static_structure_factor);
+    accumulate_pair_counts(positions[time], layout, pair_counts);
+    accumulate_structure_factor(positions[time], layout, model, result.static_structure_factor);
   }
 
   const auto slice_count = static_cast<double>(time_points);
@@ -656,11 +613,12 @@ ImaginaryTimeDensityCorrelations
 retained_density_correlations(const IdealBosonConfiguration &configuration) {
   configuration.validate();
   const Model &model = configuration.model;
-  const auto volume = model.volume();
+  const TorusLayout layout(model.linear_size, model.dimension);
+  const auto volume = layout.volume();
   const auto time_points = configuration.time_links_per_beta;
   const auto grid_size =
       detail::checked_product(time_points, volume, "density-correlation grid exceeds size_t");
-  const auto positions = retained_positions(configuration);
+  const auto positions = retained_positions(configuration, layout);
   ImaginaryTimeDensityCorrelations result{
       .time_points = time_points,
       .spatial_points = volume,
@@ -670,9 +628,10 @@ retained_density_correlations(const IdealBosonConfiguration &configuration) {
   for (std::size_t lag = 0; lag < time_points; ++lag) {
     for (std::size_t origin_time = 0; origin_time < time_points; ++origin_time) {
       const std::size_t target_time = (origin_time + lag) % time_points;
-      for (const std::size_t origin : positions[origin_time]) {
-        for (const std::size_t target : positions[target_time]) {
-          ++result.connected_density[(lag * volume) + displacement_index(origin, target, model)];
+      for (const SiteId origin : positions[origin_time]) {
+        for (const SiteId target : positions[target_time]) {
+          const auto displacement = layout.flat_displacement(origin, target);
+          ++result.connected_density[(lag * volume) + displacement.value()];
         }
       }
     }
@@ -693,7 +652,8 @@ retained_grid_matsubara_transform(const Model &model,
   if (model.beta <= 0.0) {
     throw std::invalid_argument("Matsubara transform requires beta > 0");
   }
-  const auto volume = model.volume();
+  const TorusLayout layout(model.linear_size, model.dimension);
+  const auto volume = layout.volume();
   if (correlations.time_points == 0 || correlations.spatial_points != volume) {
     throw std::invalid_argument("density-correlation grid does not match the model");
   }
@@ -705,12 +665,13 @@ retained_grid_matsubara_transform(const Model &model,
     throw std::invalid_argument("density-correlation grid does not match the model");
   }
   std::vector<std::complex<double>> spatial_transform(grid_size);
+  std::vector<std::size_t> displacement_components(layout.dimension());
   for (std::size_t time = 0; time < time_points; ++time) {
     for (std::size_t momentum = 0; momentum < volume; ++momentum) {
-      const auto momentum_components = decode_flat_index(momentum, model);
+      const auto momentum_components = layout.decode(SiteId(momentum));
       std::complex<double> value{0.0, 0.0};
       for (std::size_t displacement = 0; displacement < volume; ++displacement) {
-        const auto displacement_components = decode_flat_index(displacement, model);
+        layout.decode_into(SiteId(displacement), displacement_components);
         const double phase = phase_for_indices(momentum_components, displacement_components, model);
         value += correlations.connected_density[(time * volume) + displacement] *
                  std::polar(1.0, -phase);
@@ -745,7 +706,8 @@ RetainedGeometryObservables
 retained_geometry_observables(const IdealBosonConfiguration &configuration) {
   configuration.validate();
   const Model &model = configuration.model;
-  const auto volume = model.volume();
+  const TorusLayout layout(model.linear_size, model.dimension);
+  const auto volume = layout.volume();
   const auto time_points = configuration.time_links_per_beta;
   const auto grid_size =
       detail::checked_product(time_points, volume, "retained-geometry grid exceeds size_t");
@@ -761,9 +723,10 @@ retained_geometry_observables(const IdealBosonConfiguration &configuration) {
   }
 
   const auto particle_count = static_cast<double>(model.particle_count);
+  Site origin_site(layout.dimension());
+  Site target_site(layout.dimension());
   for (std::size_t time = 0; time < time_points; ++time) {
     for (std::size_t particle = 0; particle < model.particle_count; ++particle) {
-      std::vector<std::size_t> torus_displacement(model.dimension);
       double squared_displacement = 0.0;
       for (std::size_t axis = 0; axis < model.dimension; ++axis) {
         const auto label = static_cast<ParticleId>(particle);
@@ -771,15 +734,14 @@ retained_geometry_observables(const IdealBosonConfiguration &configuration) {
             static_cast<double>(configuration.worldlines_covering.at(label, time, axis)) -
             static_cast<double>(configuration.worldlines_covering.at(label, 0, axis));
         squared_displacement += value * value;
-        const Coord torus_delta = configuration.worldlines.at(label, time, axis) -
-                                  configuration.worldlines.at(label, 0, axis);
-        torus_displacement[axis] =
-            static_cast<std::size_t>(torus_mod(torus_delta, model.linear_size));
+        origin_site[axis] = configuration.worldlines.at(label, 0, axis);
+        target_site[axis] = configuration.worldlines.at(label, time, axis);
       }
       result.mean_square_displacement[time] += squared_displacement / particle_count;
-      const auto flat = encode_components(torus_displacement, model);
-      result.displacement_probability[(time * volume) + flat] += 1.0 / particle_count;
-      if (flat == 0) {
+      const SiteId flat =
+          layout.flat_displacement(layout.encode(origin_site), layout.encode(target_site));
+      result.displacement_probability[(time * volume) + flat.value()] += 1.0 / particle_count;
+      if (flat.value() == 0) {
         result.return_probability[time] += 1.0 / particle_count;
       }
     }

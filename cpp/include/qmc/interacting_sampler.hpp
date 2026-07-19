@@ -6,6 +6,7 @@
 #include "qmc/interacting_model.hpp"
 #include "qmc/model.hpp"
 #include "qmc/random.hpp"
+#include "qmc/torus_layout.hpp"
 
 #include <array>
 #include <cstddef>
@@ -171,6 +172,7 @@ private:
   void rebuild_occupancy_index();
 
   InteractingModel model_;
+  TorusLayout layout_;
   NumericalOptions numerical_;
   Random random_;
   CanonicalEnsemble free_ensemble_;

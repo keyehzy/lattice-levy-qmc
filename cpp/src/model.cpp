@@ -1,5 +1,7 @@
 #include "qmc/model.hpp"
 
+#include "qmc/torus_layout.hpp"
+
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -38,15 +40,7 @@ void Model::validate() const {
 
 std::size_t Model::volume() const {
   validate();
-  const auto size = static_cast<std::size_t>(linear_size);
-  std::size_t result = 1;
-  for (std::size_t axis = 0; axis < dimension; ++axis) {
-    if (result > std::numeric_limits<std::size_t>::max() / size) {
-      throw std::overflow_error("lattice volume exceeds size_t");
-    }
-    result *= size;
-  }
-  return result;
+  return TorusLayout::checked_volume(linear_size, dimension);
 }
 
 } // namespace qmc
