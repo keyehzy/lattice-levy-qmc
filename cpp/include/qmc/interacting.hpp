@@ -6,5 +6,6 @@
 #include "qmc/interacting_sampler.hpp"
 #include "qmc/interaction.hpp"
 #include "qmc/path.hpp"
+#include "qmc/version.hpp"
 
 #endif

@@ -10,6 +10,13 @@ The interacting representation stores every nearest-neighbor hopping event and
 has no imaginary-time grid or Trotter approximation. The ideal `M` parameter is
 only the number of bridge observations retained for measurement.
 
+The C++ project follows [Semantic Versioning](https://semver.org/). While the
+public API is below `1.0.0`, a minor release may contain breaking API changes;
+patch releases contain backward-compatible fixes. `project(VERSION ...)` in
+`CMakeLists.txt` is the source of truth, and the generated `<qmc/version.hpp>`
+header exposes `qmc::kVersion` and its numeric components at compile time. See
+the [changelog](CHANGELOG.md) for release history and pending changes.
+
 The build requires CMake 3.24 or newer, a C++20 compiler, Ninja, and GSL 2.7
 or newer. Examples use an installed cxxopts 3.3 or newer when available and
 otherwise download a pinned upstream revision. Tests similarly use an installed

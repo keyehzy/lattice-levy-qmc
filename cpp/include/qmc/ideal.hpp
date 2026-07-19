@@ -7,5 +7,6 @@
 #include "qmc/model.hpp"
 #include "qmc/observables.hpp"
 #include "qmc/random.hpp"
+#include "qmc/version.hpp"
 
 #endif

@@ -2,9 +2,15 @@ cmake_minimum_required(VERSION 3.24)
 
 project(
   qmc
-  VERSION 0.1.0
+  VERSION 0.5.0
   DESCRIPTION "Canonical continuous-time lattice Levy QMC"
   LANGUAGES CXX
+)
+
+configure_file(
+  include/qmc/version.hpp.in
+  generated/include/qmc/version.hpp
+  @ONLY
 )
 
 include(CTest)
@@ -34,6 +40,7 @@ target_include_directories(
   qmc_ideal
   PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated/include>"
     "$<INSTALL_INTERFACE:include>"
 )
 target_link_libraries(qmc_ideal PRIVATE GSL::gsl)
@@ -58,6 +65,7 @@ target_include_directories(
   qmc_interacting
   PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated/include>"
     "$<INSTALL_INTERFACE:include>"
 )
 target_link_libraries(qmc_interacting PUBLIC qmc::ideal)

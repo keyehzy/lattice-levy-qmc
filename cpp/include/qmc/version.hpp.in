@@ -1,0 +1,20 @@
+#ifndef QMC_VERSION_HPP
+#define QMC_VERSION_HPP
+
+#include <string_view>
+
+#define QMC_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define QMC_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define QMC_VERSION_PATCH @PROJECT_VERSION_PATCH@
+#define QMC_VERSION_STRING "@PROJECT_VERSION@"
+
+namespace qmc {
+
+inline constexpr int kVersionMajor = QMC_VERSION_MAJOR;
+inline constexpr int kVersionMinor = QMC_VERSION_MINOR;
+inline constexpr int kVersionPatch = QMC_VERSION_PATCH;
+inline constexpr std::string_view kVersion = QMC_VERSION_STRING;
+
+} // namespace qmc
+
+#endif
