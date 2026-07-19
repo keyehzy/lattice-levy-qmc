@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -36,9 +37,18 @@ struct MoveStatistics {
   std::uint64_t attempts = 0;
   std::uint64_t accepts = 0;
   std::uint64_t topology_changes = 0;
+  std::uint64_t successor_changes = 0;
 
   [[nodiscard]] std::optional<double> acceptance() const noexcept;
   [[nodiscard]] std::optional<double> topology_change_rate() const noexcept;
+  [[nodiscard]] std::optional<double> successor_changes_per_attempt() const noexcept;
+};
+
+struct StitchMixture {
+  // Each count must be unique and in [2, 8]. Counts larger than N are ignored.
+  std::vector<std::size_t> strand_counts{2};
+  // Empty selects equal weights. Otherwise this must match strand_counts.
+  std::vector<double> strand_weights;
 };
 
 struct SweepOptions {
@@ -51,6 +61,7 @@ struct SweepOptions {
   double stitch_fraction = 0.25;
   std::size_t stitch_locality_radius = 1;
   double stitch_global_partner_probability = 0.05;
+  StitchMixture stitch_mixture;
   std::size_t time_shift_updates = 0;
 };
 
@@ -89,8 +100,14 @@ public:
                  double fraction = 0.25);
   [[nodiscard]] bool whole_worldline_update(std::optional<ParticleId> particle = std::nullopt);
   [[nodiscard]] bool cycle_update(std::optional<std::size_t> cycle_index = std::nullopt);
-  // Redraws two paths inside a slab from their exact ideal torus conditional.
-  // An exchanged endpoint matching transposes their permutation successors.
+  // Redraws k paths inside a slab from the exact permanent-normalized ideal
+  // torus conditional. Empty strands selects a reversible spatially local set.
+  [[nodiscard]] bool
+  k_stitch_update(std::size_t k, std::span<const ParticleId> strands = {},
+                  std::optional<std::pair<double, double>> interval = std::nullopt,
+                  double fraction = 0.25, std::size_t locality_radius = 1,
+                  double global_partner_probability = 0.05);
+  // Backward-compatible two-strand wrapper.
   [[nodiscard]] bool stitch_update(std::optional<ParticleId> particle = std::nullopt,
                                    std::optional<ParticleId> partner = std::nullopt,
                                    std::optional<std::pair<double, double>> interval = std::nullopt,
@@ -100,14 +117,16 @@ public:
   // position bucket construction. nullopt means one attempt per particle.
   void stitch_sweep(std::optional<std::size_t> updates = std::nullopt, double fraction = 0.25,
                     std::optional<double> tau0 = std::nullopt, std::size_t locality_radius = 1,
-                    double global_partner_probability = 0.05);
+                    double global_partner_probability = 0.05,
+                    const StitchMixture &mixture = StitchMixture{});
   // Rejection-free cyclic rotation of every closed permutation loop.
   [[nodiscard]] bool time_shift_update(std::optional<double> shift = std::nullopt);
   // Strictly reversible A B^m A macro-kernel: uniform time rotation, fixed-seam
   // stitch sweep, and a second independent uniform time rotation.
   void random_seam_stitch_sweep(std::optional<std::size_t> updates = std::nullopt,
                                 double fraction = 0.35, std::size_t locality_radius = 1,
-                                double global_partner_probability = 0.05);
+                                double global_partner_probability = 0.05,
+                                const StitchMixture &mixture = StitchMixture{});
   [[nodiscard]] bool global_update();
   void sweep(const SweepOptions &options = SweepOptions{});
 
@@ -130,14 +149,14 @@ private:
   struct StitchProposal {
     std::vector<LabeledPath> replacements;
     std::vector<ParticleId> permutation;
-    bool exchanged = false;
+    std::size_t successor_changes = 0;
   };
 
   bool try_path_replacements(std::vector<LabeledPath> replacements, MoveKind move);
-  [[nodiscard]] StitchProposal sample_stitch_pair_proposal(ParticleId particle, ParticleId partner,
-                                                           double tau0, double tau1);
-  [[nodiscard]] bool try_stitch_pair(ParticleId particle, ParticleId partner, double tau0,
-                                     double tau1);
+  [[nodiscard]] StitchProposal sample_stitch_proposal(std::span<const ParticleId> strands,
+                                                      double tau0, double tau1);
+  [[nodiscard]] bool try_stitch_strands(std::span<const ParticleId> strands, double tau0,
+                                        double tau1);
   [[nodiscard]] bool metropolis_accept(double delta_action);
   void rebuild_occupancy_index();
 

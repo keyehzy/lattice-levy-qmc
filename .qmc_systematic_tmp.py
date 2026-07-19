@@ -19,6 +19,8 @@ EXE = ROOT / "cpp/build/release/examples/qmc_interacting_demo"
 OUT = Path("/tmp/qmc_systematic_20260719")
 OUT.mkdir(parents=True, exist_ok=True)
 SEEDS = (10101, 20202, 30303, 40404)
+DEFAULT_STITCH_STRAND_COUNTS = (2, 3, 4)
+DEFAULT_STITCH_STRAND_WEIGHTS = (0.8, 0.15, 0.05)
 
 
 def compositions(total: int, parts: int):
@@ -126,6 +128,15 @@ def parse_stitch_topology_rate(stdout: str):
     return float(match.group(1)) if match and match.group(1) != "n/a" else None
 
 
+def parse_stitch_successor_rate(stdout: str):
+    match = re.search(
+        r"^stitch successor changes/attempt = ([0-9.eE+-]+|n/a)$",
+        stdout,
+        re.MULTILINE,
+    )
+    return float(match.group(1)) if match and match.group(1) != "n/a" else None
+
+
 def default_stitch_fraction(case: dict):
     """Use the feature-branch ground-state calibration at unit filling."""
     beta = float(case["beta"])
@@ -156,6 +167,20 @@ def run_chain(case: dict, seed: int, samples: int, burn: int):
         "--stitch-locality-radius", str(case.get("stitch_locality_radius", 1)),
         "--stitch-global-partner-probability",
         str(case.get("stitch_global_partner_probability", 0.05)),
+        "--stitch-strand-counts",
+        ",".join(
+            str(value)
+            for value in case.get(
+                "stitch_strand_counts", DEFAULT_STITCH_STRAND_COUNTS
+            )
+        ),
+        "--stitch-strand-weights",
+        ",".join(
+            str(value)
+            for value in case.get(
+                "stitch_strand_weights", DEFAULT_STITCH_STRAND_WEIGHTS
+            )
+        ),
         "-o", str(path),
     ]
     start = time.perf_counter()
@@ -182,6 +207,7 @@ def run_chain(case: dict, seed: int, samples: int, burn: int):
             for k in ("segment", "cycle", "stitch", "time_shift", "global")
         },
         "stitch_topology_rate": parse_stitch_topology_rate(result.stdout),
+        "stitch_successor_rate": parse_stitch_successor_rate(result.stdout),
         "columns": columns,
     }
 
@@ -211,6 +237,11 @@ def summarize_case(case: dict, samples: int, burn: int):
         "stitch_topology_rate": (
             float(np.mean([x["stitch_topology_rate"] for x in runs]))
             if all(x["stitch_topology_rate"] is not None for x in runs)
+            else None
+        ),
+        "stitch_successor_rate": (
+            float(np.mean([x["stitch_successor_rate"] for x in runs]))
+            if all(x["stitch_successor_rate"] is not None for x in runs)
             else None
         ),
         "exact": exact,
@@ -245,11 +276,13 @@ def summarize_case(case: dict, samples: int, burn: int):
     e = result["metrics"]["total_energy"]
     topology = result["stitch_topology_rate"]
     topology_text = "n/a" if topology is None else f"{topology:.4g}"
+    successors = result["stitch_successor_rate"]
+    successor_text = "n/a" if successors is None else f"{successors:.4g}"
     print(
         f"OK {case['name']} E={e['mean']:.6g} se={e['se']:.3g} "
         f"tau={e['tau_max']:.2f} Rhat={e['rhat']:.4f} "
         f"acc={result['acceptance']} "
-        f"topo={topology_text}", flush=True
+        f"topo={topology_text} succ={successor_text}", flush=True
     )
     return result
 

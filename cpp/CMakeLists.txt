@@ -49,6 +49,7 @@ add_library(
   src/interaction.cpp
   src/occupancy_index.cpp
   src/path.cpp
+  src/stitch_matching.cpp
 )
 add_library(qmc::interacting ALIAS qmc_interacting)
 

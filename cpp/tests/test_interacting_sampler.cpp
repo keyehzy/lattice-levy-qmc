@@ -1,10 +1,16 @@
+#include "../src/stitch_matching.hpp"
 #include "qmc/interacting_sampler.hpp"
 #include "qmc/interaction.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <gtest/gtest.h>
+#include <limits>
 #include <optional>
+#include <stdexcept>
+#include <vector>
 
 namespace qmc {
 namespace {
@@ -44,6 +50,78 @@ bool equal_state(const ContinuousConfiguration &left, const ContinuousConfigurat
   return true;
 }
 
+struct BruteMatchingLaw {
+  std::array<std::array<std::size_t, 3>, 6> matchings{};
+  std::array<double, 6> weights{};
+  double permanent = 0.0;
+};
+
+BruteMatchingLaw brute_matching_law(const std::array<double, 9> &weights) {
+  BruteMatchingLaw law;
+  std::array<std::size_t, 3> permutation{0, 1, 2};
+  std::size_t index = 0;
+  do {
+    law.matchings[index] = permutation;
+    law.weights[index] =
+        weights[permutation[0]] * weights[3 + permutation[1]] * weights[6 + permutation[2]];
+    law.permanent += law.weights[index];
+    ++index;
+  } while (std::ranges::next_permutation(permutation).found);
+  return law;
+}
+
+std::size_t matching_rank(const std::vector<std::size_t> &matching, const BruteMatchingLaw &law) {
+  for (std::size_t index = 0; index < law.matchings.size(); ++index) {
+    if (std::ranges::equal(matching, law.matchings[index])) {
+      return index;
+    }
+  }
+  throw std::logic_error("sampled matching is not a permutation");
+}
+
+TEST(InteractingSamplerTest, PermanentRecursionMatchesBruteForceAndLimits) {
+  const std::array<double, 9> weights{1.0, 2.0, 0.4, 0.7, 1.5, 3.0, 2.2, 0.8, 1.1};
+  std::array<double, 9> log_weights{};
+  std::ranges::transform(weights, log_weights.begin(),
+                         [](const double value) { return std::log(value); });
+  const std::vector<double> table = detail::log_permanent_table(log_weights, 3);
+  const BruteMatchingLaw law = brute_matching_law(weights);
+  EXPECT_NEAR(std::exp(table[0]), law.permanent, 2e-14);
+
+  const std::array<double, 64> all_ones{};
+  EXPECT_NEAR(std::exp(detail::log_permanent_table(all_ones, 8)[0]), 40'320.0, 1e-9);
+  std::array<double, 64> unique{};
+  unique.fill(-std::numeric_limits<double>::infinity());
+  for (std::size_t index = 0; index < 8; ++index) {
+    unique[(index * 8) + index] = 0.0;
+  }
+  const std::vector<double> unique_table = detail::log_permanent_table(unique, 8);
+  Random random(72);
+  EXPECT_EQ(detail::sample_permanent_matching(unique, 8, unique_table, random),
+            (std::vector<std::size_t>{0, 1, 2, 3, 4, 5, 6, 7}));
+}
+
+TEST(InteractingSamplerTest, PermanentMatchingSamplerMatchesBruteForceLaw) {
+  const std::array<double, 9> weights{1.0, 2.0, 0.4, 0.7, 1.5, 3.0, 2.2, 0.8, 1.1};
+  std::array<double, 9> log_weights{};
+  std::ranges::transform(weights, log_weights.begin(),
+                         [](const double value) { return std::log(value); });
+  const std::vector<double> table = detail::log_permanent_table(log_weights, 3);
+  const BruteMatchingLaw law = brute_matching_law(weights);
+
+  Random random(72);
+  std::array<std::size_t, 6> counts{};
+  for (std::size_t draw = 0; draw < 30'000; ++draw) {
+    const std::vector<std::size_t> matching =
+        detail::sample_permanent_matching(log_weights, 3, table, random);
+    ++counts[matching_rank(matching, law)];
+  }
+  for (std::size_t index = 0; index < law.weights.size(); ++index) {
+    EXPECT_NEAR(static_cast<double>(counts[index]) / 30'000.0, law.weights[index] / law.permanent,
+                0.012);
+  }
+}
+
 TEST(InteractingSamplerTest, ZeroInteractionMovesAreRejectionFree) {
   InteractingSampler sampler(sampler_model(0.0), 12);
   for (int update = 0; update < 20; ++update) {
@@ -68,6 +146,7 @@ TEST(InteractingSamplerTest, FiniteInteractionPreservesStateAndCacheInvariants) 
       .global_updates = 1,
       .stitch_updates = 3,
       .stitch_fraction = 0.25,
+      .stitch_mixture = {},
       .time_shift_updates = 1,
   };
   for (int sweep = 0; sweep < 20; ++sweep) {
@@ -110,6 +189,49 @@ TEST(InteractingSamplerTest, StitchUpdatesChangeTopologyAndKeepActionCacheExact)
   EXPECT_GT(*topology_rate, 0.0);
 }
 
+TEST(InteractingSamplerTest, CollectiveStitchMixtureKeepsActionCacheExact) {
+  const InteractingModel model{
+      .free = {.particle_count = 8, .beta = 0.9, .linear_size = 7, .dimension = 1, .hopping = 1.2},
+      .interaction = 2.3,
+  };
+  InteractingSampler sampler(model, 1231);
+  const StitchMixture mixture{
+      .strand_counts = {2, 3, 4},
+      .strand_weights = {1.0, 1.0, 1.0},
+  };
+  for (int step = 0; step < 120; ++step) {
+    sampler.stitch_sweep(1, 0.55, std::nullopt, 2, 0.1, mixture);
+    if (step % 9 == 0) {
+      EXPECT_NO_THROW(sampler.state().validate(model.free));
+      const double recomputed = pair_overlap_time(sampler.state(), model.free);
+      EXPECT_NEAR(sampler.pair_overlap(), recomputed, 2e-11);
+      EXPECT_NEAR(sampler.action(), model.interaction * recomputed, 2e-11);
+    }
+  }
+  const MoveStatistics &statistics = sampler.statistics(MoveKind::StitchMove);
+  EXPECT_GT(statistics.topology_changes, 0U);
+  EXPECT_GT(statistics.successor_changes, 2U * statistics.topology_changes);
+}
+
+TEST(InteractingSamplerTest, ExplicitCollectiveStitchValidatesStrands) {
+  InteractingSampler sampler(sampler_model(0.0), 818);
+  const std::array<ParticleId, 4> strands{0, 1, 2, 3};
+  EXPECT_TRUE(sampler.k_stitch_update(4, strands, std::pair<double, double>{0.1, 0.7}));
+  EXPECT_NO_THROW(sampler.state().validate(sampler.model().free));
+  EXPECT_THROW(static_cast<void>(sampler.k_stitch_update(1)), std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(sampler.k_stitch_update(7)), std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(sampler.k_stitch_update(3, strands)), std::invalid_argument);
+  const std::array<ParticleId, 3> duplicate{0, 1, 1};
+  EXPECT_THROW(static_cast<void>(sampler.k_stitch_update(3, duplicate)), std::invalid_argument);
+  EXPECT_THROW(sampler.stitch_sweep(1, 0.5, std::nullopt, 1, 0.05,
+                                    StitchMixture{.strand_counts = {2, 2}, .strand_weights = {}}),
+               std::invalid_argument);
+  EXPECT_THROW(
+      sampler.stitch_sweep(1, 0.5, std::nullopt, 1, 0.05,
+                           StitchMixture{.strand_counts = {2, 3}, .strand_weights = {1.0}}),
+      std::invalid_argument);
+}
+
 TEST(InteractingSamplerTest, RejectedMovesLeaveAcceptedStateUntouched) {
   InteractingModel model{
       .free = {.particle_count = 5, .beta = 2.0, .linear_size = 2, .dimension = 1, .hopping = 1.0},
@@ -139,7 +261,8 @@ TEST(InteractingSamplerTest, RunAppliesBurnInThinningAndReturnsTypedMeasurements
       .sweep = {.segment_updates = 2,
                 .segment_fraction = 0.3,
                 .cycle_updates = 1,
-                .global_updates = 1},
+                .global_updates = 1,
+                .stitch_mixture = {}},
   };
   const auto samples = sampler.run(5, options);
   ASSERT_EQ(samples.size(), 5U);
@@ -190,8 +313,11 @@ TEST(InteractingSamplerTest, SupportsAttractiveInteractionAndZeroHopping) {
   };
   InteractingSampler sampler(model, 123);
   for (int update = 0; update < 10; ++update) {
-    sampler.sweep(SweepOptions{
-        .segment_updates = 3, .segment_fraction = 0.5, .cycle_updates = 1, .global_updates = 1});
+    sampler.sweep(SweepOptions{.segment_updates = 3,
+                               .segment_fraction = 0.5,
+                               .cycle_updates = 1,
+                               .global_updates = 1,
+                               .stitch_mixture = {}});
   }
   EXPECT_EQ(sampler.state().event_count(), 0U);
   EXPECT_NO_THROW(sampler.state().validate(model.free));

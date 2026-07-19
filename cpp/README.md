@@ -110,6 +110,7 @@ qmc::SweepOptions sweep{
     .segment_fraction = 0.35,
     .cycle_updates = 1,
     .global_updates = 1,
+    .stitch_mixture = {},
 };
 for (std::size_t index = 0; index < 500; ++index) {
   sampler.sweep(sweep);
@@ -119,14 +120,15 @@ const auto samples = sampler.run(
 ```
 
 Segment moves redraw fixed-endpoint intervals and cycle moves redraw one
-existing cycle including its winding. Random-seam stitch moves redraw two
-closed strands and split or merge permutation cycles without opening a path;
+existing cycle including its winding. Random-seam stitch moves redraw `k<=8`
+closed strands using a permanent-sampled endpoint matching and rearrange
+permutation successors without opening a path;
 the recommended `random_seam_stitch_sweep()` wraps fixed-seam attempts in two
 uniform time-origin rotations to give the reversible `A B^m A` kernel. Global
 ideal proposals remain available as a small-system cross-check. Interaction-
 corrected moves use only the action difference in their Metropolis ratio.
 `state()` exposes the accepted configuration read-only, while `statistics()`
-reports attempts, acceptances, and stitch topology changes.
+reports attempts, acceptances, stitch topology changes, and changed successors.
 
 See [`docs/MEASUREMENTS.md`](../docs/MEASUREMENTS.md) for estimator definitions,
 normalizations, exactness, and retained-grid conventions.
@@ -165,11 +167,13 @@ double-occupancy, winding, and move-acceptance summaries:
   --particles 6 --beta 1.5 --linear-size 8 --dimension 1 \
   --hopping 1.0 --interaction 2.0 --burn-in 500 --samples 3000 \
   --stitch-updates 6 --stitch-fraction 0.75 \
+  --stitch-strand-counts 2,3,4 --stitch-strand-weights 0.8,0.15,0.05 \
   --output interacting_trace.dat
 ```
 
 Random-seam stitching defaults to `max(1, N)` attempts per sweep and runs in a
-hybrid schedule with `N` segment updates and one cycle update; global ideal-gas
-proposals default to zero. Use `--help` for scheduling, locality, thinning,
-seed, and output options. The derivation is in
+hybrid schedule with `N` segment updates and one cycle update; the default
+strand mixture remains pair-only and global ideal-gas proposals default to
+zero. Use `--help` for scheduling, locality, collective strand mixtures,
+thinning, seed, and output options. The derivation is in
 [`docs/RANDOM_SEAM_STITCH.md`](../docs/RANDOM_SEAM_STITCH.md).

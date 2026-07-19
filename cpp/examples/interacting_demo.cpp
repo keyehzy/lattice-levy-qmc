@@ -12,6 +12,8 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -26,6 +28,7 @@ struct CommandLine {
   double stitch_fraction;
   std::size_t stitch_locality_radius;
   double stitch_global_partner_probability;
+  qmc::StitchMixture stitch_mixture;
   std::filesystem::path output;
 };
 
@@ -62,6 +65,10 @@ std::optional<CommandLine> parse_command_line(const int argc, char **argv) {
        {"stitch-global-partner-probability",
         "Probability of selecting a uniformly global stitch partner",
         cxxopts::value<double>()->default_value("0.05")},
+       {"stitch-strand-counts", "Comma-separated collective stitch sizes in [2, 8]",
+        cxxopts::value<std::vector<std::size_t>>()->default_value("2")},
+       {"stitch-strand-weights", "Optional comma-separated weights for collective stitch sizes",
+        cxxopts::value<std::vector<double>>()},
        {"o,output", "Output trace table",
         cxxopts::value<std::string>()->default_value("interacting_trace.dat")},
        {"h,help", "Print help"}});
@@ -90,6 +97,10 @@ std::optional<CommandLine> parse_command_line(const int argc, char **argv) {
   } else if (particle_count != 0) {
     stitch_updates = std::max<std::size_t>(1, particle_count);
   }
+  std::vector<double> stitch_strand_weights;
+  if (result.contains("stitch-strand-weights")) {
+    stitch_strand_weights = result["stitch-strand-weights"].as<std::vector<double>>();
+  }
 
   return CommandLine{
       .model =
@@ -108,11 +119,15 @@ std::optional<CommandLine> parse_command_line(const int argc, char **argv) {
       .sweep = {.segment_updates = segment_updates,
                 .segment_fraction = result["segment-fraction"].as<double>(),
                 .cycle_updates = result["cycle-updates"].as<std::size_t>(),
-                .global_updates = result["global-updates"].as<std::size_t>()},
+                .global_updates = result["global-updates"].as<std::size_t>(),
+                .stitch_mixture = {}},
       .stitch_updates = stitch_updates,
       .stitch_fraction = result["stitch-fraction"].as<double>(),
       .stitch_locality_radius = result["stitch-locality-radius"].as<std::size_t>(),
       .stitch_global_partner_probability = result["stitch-global-partner-probability"].as<double>(),
+      .stitch_mixture = {.strand_counts =
+                             result["stitch-strand-counts"].as<std::vector<std::size_t>>(),
+                         .strand_weights = std::move(stitch_strand_weights)},
       .output = result["output"].as<std::string>(),
   };
 }
@@ -151,7 +166,8 @@ int main(const int argc, char **argv) {
       if (command_line->stitch_updates != 0) {
         sampler.random_seam_stitch_sweep(
             command_line->stitch_updates, command_line->stitch_fraction,
-            command_line->stitch_locality_radius, command_line->stitch_global_partner_probability);
+            command_line->stitch_locality_radius, command_line->stitch_global_partner_probability,
+            command_line->stitch_mixture);
       }
       sampler.sweep(command_line->sweep);
     };
@@ -200,6 +216,13 @@ int main(const int argc, char **argv) {
     const auto &stitch = sampler.statistics(qmc::MoveKind::StitchMove);
     std::cout << "stitch topology changes/attempt = ";
     if (const auto rate = stitch.topology_change_rate(); rate.has_value()) {
+      std::cout << *rate;
+    } else {
+      std::cout << "n/a";
+    }
+    std::cout << '\n';
+    std::cout << "stitch successor changes/attempt = ";
+    if (const auto rate = stitch.successor_changes_per_attempt(); rate.has_value()) {
       std::cout << *rate;
     } else {
       std::cout << "n/a";

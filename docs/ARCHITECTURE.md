@@ -250,13 +250,13 @@ overlap and action. There are five move families:
 | --- | --- | --- | --- |
 | Segment | One fixed-endpoint interval on one labeled path | Path start/end, permutation, winding | No |
 | Cycle | All paths belonging to one selected cycle | That cycle's ordered labels and length | No; base point, events, and winding may change |
-| Stitch | Two exact torus bridges in a closed slab; retain or exchange the two right suffixes | Exterior physical occupancy | Yes; a successor transposition splits or merges cycles |
+| Stitch | `k` exact torus bridges in a closed slab with a permanent-sampled suffix matching | Exterior physical occupancy | Yes; rearranges selected successors |
 | Time shift | Uniform cyclic rotation of every closed loop in imaginary time | All physical observables and topology | No |
 | Global | A complete independent ideal configuration | Only model parameters | Yes |
 
 Segment and cycle proposals use exact free conditionals. Stitching additionally
-heat-bath samples the two endpoint matchings with products of exact torus
-kernels, then samples their exact continuous-time bridges. The free factors
+samples a permanent-normalized endpoint matching with products of exact torus
+kernels, then samples the exact continuous-time bridges. The free factors
 therefore cancel and the Metropolis decision again contains only the action
 difference. Time shifts are measure-preserving and rejection-free. The global
 move replaces the whole configuration only on acceptance. Interaction-corrected
@@ -268,10 +268,11 @@ otherwise accept if log(U[0,1)) < -delta_action
 ```
 
 and explicitly reject exponents beyond the useful double-precision range.
-At `U=0`, every nonempty proposed move is accepted. Stitch successor
-transpositions generate all permutation sectors while remaining entirely in
-the space of closed configurations. A small uniform-partner component prevents
-the locality heuristic from disconnecting the chain.
+At `U=0`, every nonempty proposed move is accepted. Pair stitches alone
+generate all permutation sectors; optional `k<=8` stitches rearrange several
+successors at once while remaining entirely in the space of closed
+configurations. A small uniform-partner component prevents the locality
+heuristic from disconnecting the chain.
 
 `random_seam_stitch_sweep(m)` applies a palindromic kernel `A B**m A`, where
 `A` is the reversible uniform time-origin rotation and `B` is the fixed-seam
@@ -338,7 +339,7 @@ retained winding support.
 | Continuous bridge | Jump-count inversion plus `O(E log E)` sort | `O(E*d)` in the current jump matrix |
 | Pair-overlap action | `O(E log E + N)` | `O(E + N)` |
 | Fixed-size local action update | Expected local event/timeline work at fixed density | Sparse per-site timelines |
-| Random-seam stitch macro-step | `O(N)` for fixed attempts per particle | `O(E + N)` |
+| Random-seam stitch macro-step | `O(N)` bucket build plus `O(k**2 + k*2**k)` matching work per attempt, `k<=8` | `O(E + N + 2**k)` |
 | Global finite-`U` proposal | Ideal sample plus one full action evaluation | Temporary full configuration |
 
 The torus trace uses `L` momentum terms and then multiplies its logarithm by

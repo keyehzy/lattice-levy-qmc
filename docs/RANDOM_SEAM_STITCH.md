@@ -2,27 +2,43 @@
 
 The global ideal-gas proposal is exact, but at finite interaction it redraws
 the entire configuration. Its acceptance therefore falls rapidly with system
-size. The stitch kernel changes only two strands in a finite imaginary-time
-slab while retaining exact free-particle conditionals.
+size. The stitch kernel changes a small set of `k` strands in a finite
+imaginary-time slab while retaining exact free-particle conditionals. The
+two-strand kernel remains the default.
 
 ## Fixed-seam proposal
 
-Choose two distinct labeled paths `i` and `j` and a slab
-`[tau0, tau1]`. Their left endpoints are `a_i, a_j`, and their right
-endpoints are `b_i, b_j`, all reduced on the torus. There are two possible
-matchings across the slab. Their free weights are
+Choose distinct labeled paths `p[0], ..., p[k-1]` and a slab
+`[tau0, tau1]`. Their left endpoints are `a_i`, and their right endpoints are
+`b_j`, all reduced on the torus. Define
 
 ```text
-w_identity = K(a_i, b_i; T) K(a_j, b_j; T)
-w_exchange = K(a_i, b_j; T) K(a_j, b_i; T),
+W[i,j] = K(a_i, b_j; T),
 T = tau1 - tau0.
 ```
 
-The code samples the matching with probability proportional to these weights,
-then independently samples the two exact torus bridges for that matching. An
-exchange swaps the two right suffixes and transposes the successors of `i` and
-`j`; this splits one permutation cycle or merges two cycles. Every proposed
-configuration remains closed.
+The code samples an endpoint permutation `sigma` with probability
+
+```text
+P(sigma | exterior) = product_i W[i,sigma(i)] / perm(W),
+```
+
+then independently samples the `k` exact torus bridges for that matching. It
+joins prefix `i` to suffix `sigma(i)` and assigns
+`new_successor[p[i]] = old_successor[p[sigma(i)]]`. Every proposed
+configuration remains closed. For `k=2`, this is the original retain/exchange
+heat bath that splits or merges cycles through a successor transposition.
+
+The permanent and matching are evaluated in log space with the subset
+recursion
+
+```text
+F(mask) = sum_{j not in mask} W[r,j] F(mask union {j}),
+r = popcount(mask),
+F(full_mask) = 1.
+```
+
+The implementation caps `k` at 8, making this `O(k 2^k)` recursion small.
 
 Together, matching and bridge sampling are a draw from the exact ideal-gas
 conditional distribution in the slab. In the Metropolis-Hastings ratio, its
@@ -32,10 +48,13 @@ free density cancels the free part of the target. The remaining acceptance is
 min(1, exp(-(S_U(new) - S_U(old)))).
 ```
 
-Partner probabilities may depend on the paths' left seam positions because a
-stitch leaves those positions unchanged. Consequently the same ordered-pair
-selection probability appears in the forward and reverse moves. A nonzero
-uniform-partner probability keeps the pair-selection graph connected.
+Strand-selection probabilities may depend on the paths' left seam positions
+because a stitch leaves those positions unchanged. Consequently the same
+ordered selection probability appears in the forward and reverse moves. A
+nonzero uniform-partner probability keeps the selection graph connected. A
+fixed state-independent `StitchMixture`, such as counts `(2,3,4)` with weights
+`(0.8,0.15,0.05)`, is therefore also reversible; counts larger than the fixed
+canonical particle number are removed before normalizing the weights.
 
 ## Random seam and reversibility
 

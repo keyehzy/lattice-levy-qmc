@@ -203,8 +203,8 @@ python python/demo_interacting.py --N 6 --L 8 --beta 1.5 --t 1.0 --U 2.0
   time `tau` is included in `position_at(tau)`.
 - Segment moves preserve fixed covering-space endpoints. Cycle moves preserve
   cycle labels but can change their geometry and winding. The C++ random-seam
-  stitch move splits and merges permutation cycles; global proposals remain
-  available in both implementations.
+  stitch move can collectively rearrange up to eight permutation successors;
+  global proposals remain available in both implementations.
 - The implementation is canonical. A chemical-potential contribution is
   constant at fixed `N` and is not part of Metropolis decisions.
 - The same `numpy.random.Generator` drives every random decision, making a
