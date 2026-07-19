@@ -1,5 +1,6 @@
 #include "qmc/interacting.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cxxopts.hpp>
@@ -21,6 +22,10 @@ struct CommandLine {
   std::size_t burn_in;
   std::size_t thin;
   qmc::SweepOptions sweep;
+  std::size_t stitch_updates;
+  double stitch_fraction;
+  std::size_t stitch_locality_radius;
+  double stitch_global_partner_probability;
   std::filesystem::path output;
 };
 
@@ -47,7 +52,16 @@ std::optional<CommandLine> parse_command_line(const int argc, char **argv) {
        {"cycle-updates", "Cycle updates per sweep",
         cxxopts::value<std::size_t>()->default_value("1")},
        {"global-updates", "Global ideal proposals per sweep",
+        cxxopts::value<std::size_t>()->default_value("0")},
+       {"stitch-updates", "Random-seam stitch attempts per sweep (default max(1, N))",
+        cxxopts::value<std::size_t>()},
+       {"stitch-fraction", "Fraction of beta redrawn by random-seam stitches",
+        cxxopts::value<double>()->default_value("0.75")},
+       {"stitch-locality-radius", "Torus Chebyshev radius for local stitch partners",
         cxxopts::value<std::size_t>()->default_value("1")},
+       {"stitch-global-partner-probability",
+        "Probability of selecting a uniformly global stitch partner",
+        cxxopts::value<double>()->default_value("0.05")},
        {"o,output", "Output trace table",
         cxxopts::value<std::string>()->default_value("interacting_trace.dat")},
        {"h,help", "Print help"}});
@@ -69,11 +83,18 @@ std::optional<CommandLine> parse_command_line(const int argc, char **argv) {
   if (result.contains("segment-updates")) {
     segment_updates = result["segment-updates"].as<std::size_t>();
   }
+  const auto particle_count = result["particles"].as<std::size_t>();
+  std::size_t stitch_updates = 0;
+  if (result.contains("stitch-updates")) {
+    stitch_updates = result["stitch-updates"].as<std::size_t>();
+  } else if (particle_count != 0) {
+    stitch_updates = std::max<std::size_t>(1, particle_count);
+  }
 
   return CommandLine{
       .model =
           {
-              .free = {.particle_count = result["particles"].as<std::size_t>(),
+              .free = {.particle_count = particle_count,
                        .beta = result["beta"].as<double>(),
                        .linear_size = result["linear-size"].as<qmc::Coord>(),
                        .dimension = result["dimension"].as<std::size_t>(),
@@ -88,6 +109,10 @@ std::optional<CommandLine> parse_command_line(const int argc, char **argv) {
                 .segment_fraction = result["segment-fraction"].as<double>(),
                 .cycle_updates = result["cycle-updates"].as<std::size_t>(),
                 .global_updates = result["global-updates"].as<std::size_t>()},
+      .stitch_updates = stitch_updates,
+      .stitch_fraction = result["stitch-fraction"].as<double>(),
+      .stitch_locality_radius = result["stitch-locality-radius"].as<std::size_t>(),
+      .stitch_global_partner_probability = result["stitch-global-partner-probability"].as<double>(),
       .output = result["output"].as<std::string>(),
   };
 }
@@ -122,8 +147,16 @@ int main(const int argc, char **argv) {
     }
     command_line->model.validate();
     qmc::InteractingSampler sampler(command_line->model, command_line->seed);
-    for (std::size_t sweep = 0; sweep < command_line->burn_in; ++sweep) {
+    const auto advance = [&sampler, &command_line] {
+      if (command_line->stitch_updates != 0) {
+        sampler.random_seam_stitch_sweep(
+            command_line->stitch_updates, command_line->stitch_fraction,
+            command_line->stitch_locality_radius, command_line->stitch_global_partner_probability);
+      }
       sampler.sweep(command_line->sweep);
+    };
+    for (std::size_t sweep = 0; sweep < command_line->burn_in; ++sweep) {
+      advance();
     }
 
     const auto absolute_output = std::filesystem::absolute(command_line->output);
@@ -143,7 +176,7 @@ int main(const int argc, char **argv) {
     double winding_sum = 0.0;
     for (std::size_t sample = 0; sample < command_line->samples; ++sample) {
       for (std::size_t thin = 0; thin < command_line->thin; ++thin) {
-        sampler.sweep(command_line->sweep);
+        advance();
       }
       const auto value = sampler.observables();
       const double winding = winding_squared(value.winding);
@@ -163,6 +196,16 @@ int main(const int argc, char **argv) {
     std::cout << "<W^2> = " << winding_sum / samples << '\n';
     print_acceptance(sampler, qmc::MoveKind::SegmentMove);
     print_acceptance(sampler, qmc::MoveKind::CycleMove);
+    print_acceptance(sampler, qmc::MoveKind::StitchMove);
+    const auto &stitch = sampler.statistics(qmc::MoveKind::StitchMove);
+    std::cout << "stitch topology changes/attempt = ";
+    if (const auto rate = stitch.topology_change_rate(); rate.has_value()) {
+      std::cout << *rate;
+    } else {
+      std::cout << "n/a";
+    }
+    std::cout << '\n';
+    print_acceptance(sampler, qmc::MoveKind::TimeShiftMove);
     print_acceptance(sampler, qmc::MoveKind::GlobalMove);
   } catch (const cxxopts::exceptions::exception &error) {
     std::cerr << "error: " << error.what() << '\n';

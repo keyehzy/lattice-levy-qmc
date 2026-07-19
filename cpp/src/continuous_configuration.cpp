@@ -161,6 +161,121 @@ std::vector<ContinuousPath> sample_paths_for_cycle(const Cycle &labels, const Mo
 
 } // namespace detail
 
+std::vector<Cycle> cycles_from_permutation(const std::span<const ParticleId> permutation) {
+  std::vector<bool> appeared(permutation.size(), false);
+  for (const ParticleId successor : permutation) {
+    const auto index = static_cast<std::size_t>(successor);
+    if (index >= permutation.size() || appeared[index]) {
+      throw std::invalid_argument("permutation is invalid");
+    }
+    appeared[index] = true;
+  }
+
+  std::vector<bool> seen(permutation.size(), false);
+  std::vector<Cycle> cycles;
+  for (std::size_t root = 0; root < permutation.size(); ++root) {
+    if (seen[root]) {
+      continue;
+    }
+    Cycle cycle;
+    std::size_t current = root;
+    while (!seen[current]) {
+      seen[current] = true;
+      cycle.push_back(static_cast<ParticleId>(current));
+      current = static_cast<std::size_t>(permutation[current]);
+    }
+    if (current != root) {
+      throw std::invalid_argument("permutation traversal did not close at its root");
+    }
+    cycles.push_back(std::move(cycle));
+  }
+  return cycles;
+}
+
+ContinuousConfiguration rotate_configuration_time_origin(const ContinuousConfiguration &state,
+                                                         const Model &model, const double shift) {
+  state.validate(model);
+  if (!std::isfinite(shift) || shift < 0.0 || shift >= model.beta) {
+    throw std::invalid_argument("time-origin shift must lie in [0, beta)");
+  }
+  if (shift == 0.0 || model.particle_count == 0) {
+    return state;
+  }
+
+  std::vector<ContinuousPath> paths;
+  paths.reserve(state.worldlines.size());
+  for (std::size_t particle = 0; particle < state.worldlines.size(); ++particle) {
+    const ContinuousPath &path = state.worldlines[particle];
+    const ContinuousPath &successor = state.worldlines[state.permutation[particle]];
+    const auto path_cut = std::ranges::lower_bound(path.events, shift, {}, &JumpEvent::time);
+    const auto successor_cut =
+        std::ranges::lower_bound(successor.events, shift, {}, &JumpEvent::time);
+
+    // Use the left limit for the new start. A jump exactly at shift is retained
+    // below at time zero, preserving right-continuous positions.
+    Site start = path.start;
+    for (auto event = path.events.begin(); event != path_cut; ++event) {
+      start[event->axis] =
+          detail::checked_add(start[event->axis], static_cast<Coord>(event->direction),
+                              "rotated path start exceeds int64 range");
+    }
+
+    std::vector<JumpEvent> events;
+    const auto suffix_count = static_cast<std::size_t>(path.events.end() - path_cut);
+    const auto prefix_count = static_cast<std::size_t>(successor_cut - successor.events.begin());
+    events.reserve(
+        detail::checked_add_size(suffix_count, prefix_count, "rotated event count exceeds size_t"));
+    for (auto event = path_cut; event != path.events.end(); ++event) {
+      events.push_back(JumpEvent{
+          .time = event->time - shift,
+          .axis = event->axis,
+          .direction = event->direction,
+      });
+    }
+    for (auto event = successor.events.begin(); event != successor_cut; ++event) {
+      events.push_back(JumpEvent{
+          .time = (model.beta - shift) + event->time,
+          .axis = event->axis,
+          .direction = event->direction,
+      });
+    }
+
+    Site end = successor.start;
+    for (auto event = successor.events.begin(); event != successor_cut; ++event) {
+      end[event->axis] = detail::checked_add(end[event->axis], static_cast<Coord>(event->direction),
+                                             "rotated path endpoint exceeds int64 range");
+    }
+    for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+      const Coord translation =
+          detail::checked_subtract(path.end[axis], successor.start[axis],
+                                   "time-rotation path translation exceeds int64 range");
+      if (translation % model.linear_size != 0) {
+        throw std::logic_error("invalid path connectivity during time rotation");
+      }
+      end[axis] =
+          detail::checked_add(end[axis], translation, "rotated path endpoint exceeds int64 range");
+    }
+
+    ContinuousPath rotated_path{
+        .duration = model.beta,
+        .start = std::move(start),
+        .end = std::move(end),
+        .events = std::move(events),
+    };
+    rotated_path.validate(model.dimension);
+    paths.push_back(std::move(rotated_path));
+  }
+
+  ContinuousConfiguration rotated{
+      .cycles = state.cycles,
+      .permutation = state.permutation,
+      .worldlines = std::move(paths),
+      .log_Z0_N = state.log_Z0_N,
+  };
+  rotated.validate(model);
+  return rotated;
+}
+
 void ContinuousConfiguration::validate(const Model &model) const {
   validate_continuous_model(model);
   if (!std::isfinite(log_Z0_N)) {

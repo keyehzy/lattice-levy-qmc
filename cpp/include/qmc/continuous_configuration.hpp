@@ -7,6 +7,7 @@
 #include "qmc/random.hpp"
 
 #include <cstddef>
+#include <span>
 #include <vector>
 
 namespace qmc {
@@ -24,6 +25,15 @@ struct ContinuousConfiguration {
   [[nodiscard]] std::vector<Site> positions_at(double tau, const Model &model) const;
   [[nodiscard]] Site total_winding(const Model &model) const;
 };
+
+// Deterministic cycle decomposition, rooted in increasing label order.
+[[nodiscard]] std::vector<Cycle> cycles_from_permutation(std::span<const ParticleId> permutation);
+
+// Rotates all closed permutation loops by shift in imaginary time. Events at
+// the new seam are retained at time zero, preserving right-continuity.
+[[nodiscard]] ContinuousConfiguration
+rotate_configuration_time_origin(const ContinuousConfiguration &state, const Model &model,
+                                 double shift);
 
 // Samples the continuous event representation of the exact canonical ideal measure.
 [[nodiscard]] ContinuousConfiguration

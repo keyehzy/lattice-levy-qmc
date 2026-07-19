@@ -79,7 +79,7 @@ if(BUILD_TESTING)
     COMMAND
       qmc_interacting_demo --particles=2 --beta=0.8 --linear-size=3 --dimension=1
       --hopping=1 --interaction=1.2 --samples=4 --burn-in=2 --segment-updates=2
-      --cycle-updates=1 --global-updates=1
+      --cycle-updates=1 --global-updates=1 --stitch-updates=0
       --output=${CMAKE_CURRENT_BINARY_DIR}/interacting-demo-smoke.dat
   )
   set_tests_properties(qmc_interacting_demo_smoke PROPERTIES LABELS unit)

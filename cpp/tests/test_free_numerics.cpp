@@ -47,6 +47,10 @@ TEST(FreeNumericsTest, ScaledBesselSatisfiesConvolution) {
   EXPECT_NEAR(convolution, direct, 5e-14);
 }
 
+TEST(FreeNumericsTest, ScaledBesselReturnsUnderflowInsteadOfAbortingProcess) {
+  EXPECT_DOUBLE_EQ(qmc::scaled_modified_bessel_i(10'000, 4.0), 0.0);
+}
+
 TEST(FreeNumericsTest, ExactMidpointPmfMatchesPythonReference) {
   std::vector<qmc::Coord> coordinates;
   for (qmc::Coord coordinate = -8; coordinate <= 10; ++coordinate) {

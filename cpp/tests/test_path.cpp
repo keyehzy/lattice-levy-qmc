@@ -65,6 +65,17 @@ TEST(ContinuousPathTest, SamplesStrictlyInternalEventsAndRequestedEndpoint) {
   }
 }
 
+TEST(ContinuousPathTest, TorusBridgeSamplesCoveringEndpointAtRequestedPhysicalSite) {
+  Random random(71);
+  for (int sample = 0; sample < 100; ++sample) {
+    const auto path = sample_continuous_bridge_torus({7, -3}, {1, 4}, 0.7, 6, 1.1, random);
+    path.validate(2);
+    EXPECT_EQ(Site({torus_mod(path.start[0], 6), torus_mod(path.start[1], 6)}), Site({1, 3}));
+    EXPECT_EQ(Site({torus_mod(path.end[0], 6), torus_mod(path.end[1], 6)}), Site({1, 4}));
+    EXPECT_EQ(path.position_at(path.duration), path.end);
+  }
+}
+
 TEST(ContinuousPathTest, SplitsCutEventsIntoTheLeftPiece) {
   const ContinuousPath path{
       .duration = 1.0,

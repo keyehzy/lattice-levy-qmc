@@ -49,6 +49,8 @@ TEST(InteractingSamplerTest, ZeroInteractionMovesAreRejectionFree) {
   for (int update = 0; update < 20; ++update) {
     EXPECT_TRUE(sampler.segment_update(std::nullopt, std::nullopt, 0.4));
     EXPECT_TRUE(sampler.cycle_update());
+    EXPECT_TRUE(sampler.stitch_update(std::nullopt, std::nullopt, std::nullopt, 0.3));
+    EXPECT_TRUE(sampler.time_shift_update());
     EXPECT_TRUE(sampler.global_update());
   }
   for (const MoveStatistics &statistics : sampler.statistics()) {
@@ -64,6 +66,9 @@ TEST(InteractingSamplerTest, FiniteInteractionPreservesStateAndCacheInvariants) 
       .segment_fraction = 0.35,
       .cycle_updates = 2,
       .global_updates = 1,
+      .stitch_updates = 3,
+      .stitch_fraction = 0.25,
+      .time_shift_updates = 1,
   };
   for (int sweep = 0; sweep < 20; ++sweep) {
     sampler.sweep(options);
@@ -81,6 +86,28 @@ TEST(InteractingSamplerTest, FiniteInteractionPreservesStateAndCacheInvariants) 
   EXPECT_EQ(value.winding, sampler.state().total_winding(sampler.model().free));
   EXPECT_EQ(value.cycle_lengths, sampler.state().cycle_lengths());
   EXPECT_NEAR(value.total_energy, value.kinetic_energy + value.interaction_energy, 1e-14);
+}
+
+TEST(InteractingSamplerTest, StitchUpdatesChangeTopologyAndKeepActionCacheExact) {
+  const InteractingModel model{
+      .free = {.particle_count = 8, .beta = 0.9, .linear_size = 9, .dimension = 1, .hopping = 1.0},
+      .interaction = 1.4,
+  };
+  InteractingSampler sampler(model, 121);
+  for (int step = 0; step < 200; ++step) {
+    static_cast<void>(
+        sampler.stitch_update(std::nullopt, std::nullopt, std::nullopt, 0.25, 2, 0.1));
+    if (step % 10 == 0) {
+      EXPECT_NO_THROW(sampler.state().validate(model.free));
+      const double recomputed = pair_overlap_time(sampler.state(), model.free);
+      EXPECT_NEAR(sampler.pair_overlap(), recomputed, 2e-11);
+      EXPECT_NEAR(sampler.action(), model.interaction * recomputed, 2e-11);
+    }
+  }
+  EXPECT_GT(sampler.statistics(MoveKind::StitchMove).topology_changes, 0U);
+  const auto topology_rate = sampler.statistics(MoveKind::StitchMove).topology_change_rate();
+  ASSERT_TRUE(topology_rate.has_value());
+  EXPECT_GT(*topology_rate, 0.0);
 }
 
 TEST(InteractingSamplerTest, RejectedMovesLeaveAcceptedStateUntouched) {
@@ -146,6 +173,12 @@ TEST(InteractingSamplerTest, ValidatesExplicitMoveArguments) {
   EXPECT_THROW(static_cast<void>(sampler.segment_update(0, std::pair<double, double>{0.8, 0.2})),
                std::invalid_argument);
   EXPECT_THROW(static_cast<void>(sampler.cycle_update(99)), std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(sampler.stitch_update(0, 0)), std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(sampler.stitch_update(0, 1, std::nullopt, 0.0)),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(sampler.stitch_update(0, 1, std::pair<double, double>{0.8, 0.2})),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(sampler.time_shift_update(1.1)), std::invalid_argument);
   EXPECT_THROW(static_cast<void>(sampler.statistics(static_cast<MoveKind>(99))),
                std::invalid_argument);
 }

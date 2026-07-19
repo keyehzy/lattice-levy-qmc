@@ -13,7 +13,8 @@ two related samplers:
 The code is deliberately small and explicit. [Architecture and
 algorithms](docs/ARCHITECTURE.md) explains how it works; [C++ porting
 guide](docs/CPP_PORT.md) records the data structures, interfaces, invariants,
-and numerical details that a rewrite should preserve.
+and numerical details that a rewrite should preserve. The C++ topology update
+is derived in [random-seam heat-bath Lévy stitching](docs/RANDOM_SEAM_STITCH.md).
 
 ## Model
 
@@ -57,6 +58,7 @@ statistical error bars.
 | `python/test_lattice_levy.py` | Free-kernel, recursion, winding, bridge, and configuration tests |
 | `python/test_interacting_lattice_levy.py` | Continuous-path, action, update, and state-invariant tests |
 | `cpp/` | C++20 ideal and interacting libraries, examples, CMake build, and GoogleTests |
+| `docs/RANDOM_SEAM_STITCH.md` | Closed permutation reconnection, detailed balance, and local action updates |
 | `interacting_ed_validation.txt` | Checked-in reference output from the exact-diagonalization comparison |
 
 ## Install and verify
@@ -200,8 +202,9 @@ python python/demo_interacting.py --N 6 --L 8 --beta 1.5 --t 1.0 --U 2.0
 - `ContinuousPath` is piecewise constant and right-continuous: an event at
   time `tau` is included in `position_at(tau)`.
 - Segment moves preserve fixed covering-space endpoints. Cycle moves preserve
-  cycle labels but can change their geometry and winding. Only global moves
-  replace the permutation-cycle structure.
+  cycle labels but can change their geometry and winding. The C++ random-seam
+  stitch move splits and merges permutation cycles; global proposals remain
+  available in both implementations.
 - The implementation is canonical. A chemical-potential contribution is
   constant at fixed `N` and is not part of Metropolis decisions.
 - The same `numpy.random.Generator` drives every random decision, making a
@@ -211,10 +214,10 @@ python python/demo_interacting.py --N 6 --L 8 --beta 1.5 --t 1.0 --U 2.0
 
 This is a research/reference implementation, not a tuned production engine.
 It assumes one hopping amplitude and one length for every dimension. The
-interaction overlap is recomputed for the whole configuration after each
-proposal, which keeps the detailed-balance logic transparent but costs
-\(O(E\log E)\) for \(E\) jump events. Global ideal-gas proposals guarantee
-access to different permutation sectors, but their acceptance can become poor
-for larger systems or stronger interactions. Checkpointing, parallel chains,
-automatic error analysis, and production diagnostics are outside the current
-scope.
+Python reference recomputes the full interaction overlap after each proposal;
+the C++ stitch implementation maintains an exact sparse occupancy ledger and
+keeps the full sweep as a validator. Global ideal-gas proposals can become poor
+for larger systems or stronger interactions, so the C++ driver defaults to a
+hybrid of random-seam topology changes and local geometry refreshes.
+Checkpointing, parallel chains, automatic error analysis, and production
+diagnostics are outside the current scope.

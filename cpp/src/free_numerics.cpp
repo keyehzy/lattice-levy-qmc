@@ -5,6 +5,7 @@
 #include <gsl/gsl_errno.h>
 #include <gsl/gsl_sf_bessel.h>
 #include <limits>
+#include <mutex>
 #include <numbers>
 #include <stdexcept>
 #include <string>
@@ -88,6 +89,11 @@ double scaled_modified_bessel_i(const std::uint64_t order, const double argument
   if (order > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
     throw std::overflow_error("Bessel order exceeds the GSL integer range");
   }
+
+  // The _e API reports underflow through its return code, but GSL's process-
+  // global default handler aborts before callers can inspect that code.
+  static std::once_flag gsl_error_handler_flag;
+  std::call_once(gsl_error_handler_flag, [] { gsl_set_error_handler_off(); });
 
   gsl_sf_result result{};
   const int status = gsl_sf_bessel_In_scaled_e(static_cast<int>(order), argument, &result);

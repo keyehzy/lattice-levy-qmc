@@ -40,6 +40,20 @@ struct ContinuousPath {
 sample_continuous_bridge(const Site &a, const Site &b, double duration, double hopping,
                          Random &random, const NumericalOptions &options = NumericalOptions{});
 
+// Exact continuous-time free bridge from covering representative a to the
+// physical torus site b modulo linear_size. The covering endpoint, including
+// its winding sector, is sampled as part of the bridge.
+[[nodiscard]] ContinuousPath
+sample_continuous_bridge_torus(const Site &a, const Site &b, double duration, Coord linear_size,
+                               double hopping, Random &random,
+                               const NumericalOptions &options = NumericalOptions{});
+
+// Log of exp(-2*hopping*duration*dimension) times the factorized torus kernel.
+// The common exponential scale cancels in endpoint-matching probabilities.
+[[nodiscard]] double log_torus_kernel_scaled(const Site &a, const Site &b, double duration,
+                                             Coord linear_size, double hopping,
+                                             const NumericalOptions &options = NumericalOptions{});
+
 // Splits at strictly increasing internal times. An event at a cut belongs to
 // the piece on its left; the next piece starts at the post-event position.
 [[nodiscard]] std::vector<ContinuousPath> split_continuous_path(const ContinuousPath &path,

@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numeric>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -48,6 +50,157 @@ struct AxisCounts {
   std::uint64_t plus;
   std::uint64_t minus;
 };
+
+struct DisplacedWindingWeights {
+  std::vector<Coord> windings;
+  std::vector<double> weights;
+};
+
+Coord centered_torus_displacement(const Coord delta, const Coord linear_size) {
+  Coord result = torus_mod(delta, linear_size);
+  if (result > linear_size / 2) {
+    result -= linear_size;
+  }
+  return result;
+}
+
+Coord displaced_winding_coordinate(const Coord delta, const Coord linear_size,
+                                   const Coord winding) {
+  const Coord winding_displacement = detail::checked_scale(
+      linear_size, winding, "torus bridge winding displacement exceeds int64 range");
+  return detail::checked_add(delta, winding_displacement,
+                             "torus bridge displacement exceeds int64 range");
+}
+
+double displaced_winding_weight(const Coord delta, const Coord linear_size, const Coord winding,
+                                const double argument) {
+  const Coord covering_displacement = displaced_winding_coordinate(delta, linear_size, winding);
+  const auto [unused_sign, order] = detail::displacement(0, covering_displacement);
+  static_cast<void>(unused_sign);
+  return scaled_modified_bessel_i(order, argument);
+}
+
+std::size_t initial_displaced_winding_support(const double argument, const Coord linear_size) {
+  const double estimate =
+      std::ceil(8.0 * std::sqrt(std::max(argument, 1.0)) / static_cast<double>(linear_size)) + 4.0;
+  if (!std::isfinite(estimate) || estimate < 0.0 ||
+      estimate > static_cast<double>(std::numeric_limits<Coord>::max())) {
+    throw std::overflow_error("torus bridge winding support overflowed");
+  }
+  return std::max<std::size_t>(4, static_cast<std::size_t>(estimate));
+}
+
+DisplacedWindingWeights evaluate_displaced_winding_support(const Coord delta,
+                                                           const Coord linear_size,
+                                                           const double argument,
+                                                           const std::size_t support) {
+  if (support > (std::numeric_limits<std::size_t>::max() - 1) / 2) {
+    throw std::overflow_error("displaced winding support size overflowed");
+  }
+  DisplacedWindingWeights result;
+  result.windings.reserve((2 * support) + 1);
+  result.weights.reserve((2 * support) + 1);
+  const auto signed_support = static_cast<Coord>(support);
+  for (std::size_t offset = 0; offset <= 2 * support; ++offset) {
+    const Coord winding = offset <= support ? static_cast<Coord>(offset) - signed_support
+                                            : static_cast<Coord>(offset - support);
+    result.windings.push_back(winding);
+    result.weights.push_back(displaced_winding_weight(delta, linear_size, winding, argument));
+  }
+  return result;
+}
+
+std::optional<double> displaced_winding_tail_bound(const Coord delta, const Coord linear_size,
+                                                   const double argument,
+                                                   const std::size_t support) {
+  if (support > static_cast<std::size_t>(std::numeric_limits<Coord>::max()) - 2) {
+    throw std::overflow_error("displaced winding tail index overflowed");
+  }
+  double tail_bound = 0.0;
+  for (const Coord sign : {Coord{-1}, Coord{1}}) {
+    const Coord first_winding = sign * static_cast<Coord>(support + 1);
+    const Coord second_winding = sign * static_cast<Coord>(support + 2);
+    const double first = displaced_winding_weight(delta, linear_size, first_winding, argument);
+    if (first == 0.0) {
+      continue;
+    }
+    const double second = displaced_winding_weight(delta, linear_size, second_winding, argument);
+    const double ratio = second / first;
+    if (!std::isfinite(ratio) || ratio >= 1.0) {
+      return std::nullopt;
+    }
+    tail_bound += first / (1.0 - ratio);
+  }
+  return tail_bound;
+}
+
+std::size_t grow_displaced_winding_support(const std::size_t support) {
+  if (support > std::numeric_limits<std::size_t>::max() - 8) {
+    throw std::overflow_error("displaced winding support overflowed");
+  }
+  const std::size_t additive = support + 8;
+  const double scaled = (1.5 * static_cast<double>(support)) + 1.0;
+  if (!std::isfinite(scaled) ||
+      scaled > static_cast<double>(std::numeric_limits<std::size_t>::max())) {
+    throw std::overflow_error("displaced winding support overflowed");
+  }
+  return std::max(additive, static_cast<std::size_t>(scaled));
+}
+
+DisplacedWindingWeights displaced_winding_weights_1d(Coord delta, const Coord linear_size,
+                                                     const double duration, const double hopping,
+                                                     const NumericalOptions &options) {
+  if (linear_size < 1) {
+    throw std::invalid_argument("linear_size must be positive");
+  }
+  validate_duration(duration);
+  validate_hopping(hopping);
+  options.validate();
+  delta = centered_torus_displacement(delta, linear_size);
+
+  const double argument = 2.0 * hopping * duration;
+  if (!std::isfinite(argument)) {
+    throw std::overflow_error("torus bridge Bessel argument overflowed");
+  }
+  if (argument == 0.0) {
+    if (delta != 0) {
+      return {};
+    }
+    return DisplacedWindingWeights{.windings = {0}, .weights = {1.0}};
+  }
+
+  std::size_t support = initial_displaced_winding_support(argument, linear_size);
+  const double log_tolerance = std::log(options.tail_tolerance);
+
+  while (true) {
+    if (support > options.max_winding ||
+        support > static_cast<std::size_t>(std::numeric_limits<Coord>::max())) {
+      throw std::runtime_error("displaced winding support exceeded max_winding");
+    }
+    DisplacedWindingWeights result =
+        evaluate_displaced_winding_support(delta, linear_size, argument, support);
+    const double included = std::accumulate(result.weights.begin(), result.weights.end(), 0.0);
+    if (!std::isfinite(included) || included <= 0.0) {
+      throw std::runtime_error("failed to evaluate displaced winding weights");
+    }
+
+    const std::optional<double> tail_bound =
+        displaced_winding_tail_bound(delta, linear_size, argument, support);
+    if (tail_bound.has_value() &&
+        (*tail_bound == 0.0 || std::log(*tail_bound) - std::log(included) <= log_tolerance)) {
+      return result;
+    }
+    support = grow_displaced_winding_support(support);
+  }
+}
+
+Coord reduced_endpoint_delta(const Coord left, const Coord right, const Coord linear_size) {
+  const Coord reduced_left = torus_mod(left, linear_size);
+  const Coord reduced_right = torus_mod(right, linear_size);
+  const Coord delta = reduced_right >= reduced_left ? reduced_right - reduced_left
+                                                    : -(reduced_left - reduced_right);
+  return centered_torus_displacement(delta, linear_size);
+}
 
 } // namespace
 
@@ -210,6 +363,54 @@ ContinuousPath sample_continuous_bridge(const Site &a, const Site &b, const doub
   };
   path.validate(a.size());
   return path;
+}
+
+ContinuousPath sample_continuous_bridge_torus(const Site &a, const Site &b, const double duration,
+                                              const Coord linear_size, const double hopping,
+                                              Random &random, const NumericalOptions &options) {
+  if (a.size() != b.size()) {
+    throw std::invalid_argument("torus bridge endpoints must have equal dimensions");
+  }
+  if (linear_size < 1) {
+    throw std::invalid_argument("linear_size must be positive");
+  }
+
+  Site covering_end(a.size());
+  for (std::size_t axis = 0; axis < a.size(); ++axis) {
+    const Coord delta = reduced_endpoint_delta(a[axis], b[axis], linear_size);
+    const DisplacedWindingWeights winding_weights =
+        displaced_winding_weights_1d(delta, linear_size, duration, hopping, options);
+    if (winding_weights.weights.empty()) {
+      throw std::invalid_argument("the requested torus bridge has zero free weight");
+    }
+    const std::size_t selected = random.discrete_index(winding_weights.weights);
+    const Coord displacement =
+        displaced_winding_coordinate(delta, linear_size, winding_weights.windings[selected]);
+    covering_end[axis] = detail::checked_add(a[axis], displacement,
+                                             "torus bridge covering endpoint exceeds int64 range");
+  }
+  return sample_continuous_bridge(a, covering_end, duration, hopping, random, options);
+}
+
+double log_torus_kernel_scaled(const Site &a, const Site &b, const double duration,
+                               const Coord linear_size, const double hopping,
+                               const NumericalOptions &options) {
+  if (a.size() != b.size()) {
+    throw std::invalid_argument("torus kernel endpoints must have equal dimensions");
+  }
+  double result = 0.0;
+  for (std::size_t axis = 0; axis < a.size(); ++axis) {
+    const Coord delta = reduced_endpoint_delta(a[axis], b[axis], linear_size);
+    const DisplacedWindingWeights winding_weights =
+        displaced_winding_weights_1d(delta, linear_size, duration, hopping, options);
+    const double weight =
+        std::accumulate(winding_weights.weights.begin(), winding_weights.weights.end(), 0.0);
+    if (weight <= 0.0) {
+      return -std::numeric_limits<double>::infinity();
+    }
+    result += std::log(weight);
+  }
+  return result;
 }
 
 std::vector<ContinuousPath> split_continuous_path(const ContinuousPath &path,

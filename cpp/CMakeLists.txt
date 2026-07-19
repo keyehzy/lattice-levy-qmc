@@ -47,6 +47,7 @@ add_library(
   src/interacting_model.cpp
   src/interacting_sampler.cpp
   src/interaction.cpp
+  src/occupancy_index.cpp
   src/path.cpp
 )
 add_library(qmc::interacting ALIAS qmc_interacting)

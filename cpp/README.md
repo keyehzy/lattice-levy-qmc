@@ -118,11 +118,15 @@ const auto samples = sampler.run(
     2'000, qmc::RunOptions{.burn_in = 0, .thin = 2, .sweep = sweep});
 ```
 
-Segment moves redraw fixed-endpoint intervals, cycle moves redraw one existing
-cycle including its winding, and global ideal proposals change permutation
-topology. All use the interaction-only Metropolis ratio. `state()` exposes the
-accepted configuration read-only, while `statistics()` reports attempts and
-acceptances for each move family.
+Segment moves redraw fixed-endpoint intervals and cycle moves redraw one
+existing cycle including its winding. Random-seam stitch moves redraw two
+closed strands and split or merge permutation cycles without opening a path;
+the recommended `random_seam_stitch_sweep()` wraps fixed-seam attempts in two
+uniform time-origin rotations to give the reversible `A B^m A` kernel. Global
+ideal proposals remain available as a small-system cross-check. Interaction-
+corrected moves use only the action difference in their Metropolis ratio.
+`state()` exposes the accepted configuration read-only, while `statistics()`
+reports attempts, acceptances, and stitch topology changes.
 
 See [`docs/MEASUREMENTS.md`](../docs/MEASUREMENTS.md) for estimator definitions,
 normalizations, exactness, and retained-grid conventions.
@@ -160,7 +164,12 @@ double-occupancy, winding, and move-acceptance summaries:
 ./build/dev/examples/qmc_interacting_demo \
   --particles 6 --beta 1.5 --linear-size 8 --dimension 1 \
   --hopping 1.0 --interaction 2.0 --burn-in 500 --samples 3000 \
-  --global-updates 1 --output interacting_trace.dat
+  --stitch-updates 6 --stitch-fraction 0.75 \
+  --output interacting_trace.dat
 ```
 
-Use `--help` for segment/cycle scheduling, thinning, seed, and output options.
+Random-seam stitching defaults to `max(1, N)` attempts per sweep and runs in a
+hybrid schedule with `N` segment updates and one cycle update; global ideal-gas
+proposals default to zero. Use `--help` for scheduling, locality, thinning,
+seed, and output options. The derivation is in
+[`docs/RANDOM_SEAM_STITCH.md`](../docs/RANDOM_SEAM_STITCH.md).

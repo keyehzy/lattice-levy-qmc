@@ -1,4 +1,5 @@
 #include "qmc/continuous_configuration.hpp"
+#include "qmc/interaction.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -80,6 +81,56 @@ TEST(ContinuousConfigurationTest, RejectsZeroBetaContinuousSampling) {
   Random random(9);
   EXPECT_THROW(static_cast<void>(sample_ideal_continuous_configuration(model, random)),
                std::invalid_argument);
+}
+
+TEST(ContinuousConfigurationTest, TimeOriginRotationPreservesPhysicalInvariants) {
+  const Model model{
+      .particle_count = 7,
+      .beta = 1.3,
+      .linear_size = 6,
+      .dimension = 2,
+      .hopping = 0.8,
+  };
+  Random random(122);
+  const auto state = sample_ideal_continuous_configuration(model, random);
+  const double overlap = pair_overlap_time(state, model);
+  const auto winding = state.total_winding(model);
+  const auto rotated = rotate_configuration_time_origin(state, model, 0.43);
+  EXPECT_NO_THROW(rotated.validate(model));
+  EXPECT_EQ(rotated.event_count(), state.event_count());
+  EXPECT_EQ(rotated.total_winding(model), winding);
+  EXPECT_NEAR(pair_overlap_time(rotated, model), overlap, 2e-11);
+}
+
+TEST(ContinuousConfigurationTest, TimeOriginRotationRetainsJumpAtNewSeam) {
+  const Model model{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 1.0,
+  };
+  const ContinuousPath path{
+      .duration = 1.0,
+      .start = {0},
+      .end = {0},
+      .events = {{.time = 0.25, .axis = 0, .direction = 1},
+                 {.time = 0.75, .axis = 0, .direction = -1}},
+  };
+  const ContinuousConfiguration state{
+      .cycles = {{0}},
+      .permutation = {0},
+      .worldlines = {path},
+      .log_Z0_N = 0.0,
+  };
+  state.validate(model);
+  const auto rotated = rotate_configuration_time_origin(state, model, 0.25);
+  rotated.validate(model);
+  ASSERT_EQ(rotated.worldlines[0].events.size(), 2U);
+  EXPECT_DOUBLE_EQ(rotated.worldlines[0].events[0].time, 0.0);
+  EXPECT_EQ(rotated.worldlines[0].events[0].direction, 1);
+  EXPECT_EQ(rotated.worldlines[0].position_at(0.0), Site({1}));
+  EXPECT_EQ(rotated.total_winding(model), state.total_winding(model));
 }
 
 } // namespace

@@ -117,6 +117,27 @@ def parse_stdout(stdout: str, key: str):
     return float(match.group(1)) if match and match.group(1) != "n/a" else None
 
 
+def parse_stitch_topology_rate(stdout: str):
+    match = re.search(
+        r"^stitch topology changes/attempt = ([0-9.eE+-]+|n/a)$",
+        stdout,
+        re.MULTILINE,
+    )
+    return float(match.group(1)) if match and match.group(1) != "n/a" else None
+
+
+def default_stitch_fraction(case: dict):
+    """Use the feature-branch ground-state calibration at unit filling."""
+    beta = float(case["beta"])
+    hopping = float(case.get("t", 1.0))
+    interaction = float(case["U"])
+    volume = int(case["L"]) ** int(case.get("d", 1))
+    if hopping <= 0.0 or int(case["N"]) != volume:
+        return 0.75
+    duration = 1.0 / hopping if interaction / hopping <= 5.0 else 5.0 / interaction
+    return min(1.0, duration / beta)
+
+
 def run_chain(case: dict, seed: int, samples: int, burn: int):
     path = OUT / f"{case['name']}_seed{seed}.dat"
     cmd = [
@@ -125,13 +146,18 @@ def run_chain(case: dict, seed: int, samples: int, burn: int):
         "-t", str(case.get("t", 1.0)), "-u", str(case["U"]),
         "--samples", str(samples), "--burn-in", str(burn),
         "--thin", str(case.get("thin", 1)), "--seed", str(seed),
+        "--segment-updates", str(case.get("segment_updates", case["N"])),
         "--segment-fraction", str(case.get("segment_fraction", 0.35)),
         "--cycle-updates", str(case.get("cycle_updates", 1)),
-        "--global-updates", str(case.get("global_updates", 1)),
+        "--global-updates", str(case.get("global_updates", 0)),
+        "--stitch-updates", str(case.get("stitch_updates", max(1, case["N"]))),
+        "--stitch-fraction",
+        str(case.get("stitch_fraction", default_stitch_fraction(case))),
+        "--stitch-locality-radius", str(case.get("stitch_locality_radius", 1)),
+        "--stitch-global-partner-probability",
+        str(case.get("stitch_global_partner_probability", 0.05)),
         "-o", str(path),
     ]
-    if "segment_updates" in case:
-        cmd.extend(["--segment-updates", str(case["segment_updates"])])
     start = time.perf_counter()
     result = subprocess.run(cmd, text=True, capture_output=True)
     elapsed = time.perf_counter() - start
@@ -151,7 +177,11 @@ def run_chain(case: dict, seed: int, samples: int, burn: int):
     }
     return {
         "seed": seed, "returncode": 0, "elapsed": elapsed,
-        "acceptance": {k: parse_stdout(result.stdout, k) for k in ("segment", "cycle", "global")},
+        "acceptance": {
+            k: parse_stdout(result.stdout, k)
+            for k in ("segment", "cycle", "stitch", "time_shift", "global")
+        },
+        "stitch_topology_rate": parse_stitch_topology_rate(result.stdout),
         "columns": columns,
     }
 
@@ -176,8 +206,13 @@ def summarize_case(case: dict, samples: int, burn: int):
                 if any(x["acceptance"][move] is not None for x in runs)
                 else None
             )
-            for move in ("segment", "cycle", "global")
+            for move in ("segment", "cycle", "stitch", "time_shift", "global")
         },
+        "stitch_topology_rate": (
+            float(np.mean([x["stitch_topology_rate"] for x in runs]))
+            if all(x["stitch_topology_rate"] is not None for x in runs)
+            else None
+        ),
         "exact": exact,
         "metrics": {},
     }
@@ -208,10 +243,13 @@ def summarize_case(case: dict, samples: int, burn: int):
             metric["z"] = metric["delta"] / combined_se if combined_se > 0 else float("inf")
         result["metrics"][column] = metric
     e = result["metrics"]["total_energy"]
+    topology = result["stitch_topology_rate"]
+    topology_text = "n/a" if topology is None else f"{topology:.4g}"
     print(
         f"OK {case['name']} E={e['mean']:.6g} se={e['se']:.3g} "
         f"tau={e['tau_max']:.2f} Rhat={e['rhat']:.4f} "
-        f"acc={result['acceptance']}", flush=True
+        f"acc={result['acceptance']} "
+        f"topo={topology_text}", flush=True
     )
     return result
 
@@ -245,14 +283,20 @@ def large_cases():
 def tuning_cases():
     cases = []
     base = dict(N=4, L=4, beta=2.0, U=16.0, ed=True)
-    for fraction in (0.1, 0.2, 0.35, 0.6, 1.0):
-        cases.append(base | dict(name=f"tune_fraction_{fraction:g}", segment_fraction=fraction))
+    for fraction in (0.1, 0.2, 0.35, 0.6, 0.75, 1.0):
+        cases.append(base | dict(name=f"tune_stitch_fraction_{fraction:g}", stitch_fraction=fraction))
     cases += [
-        base | dict(name="tune_global_only", segment_updates=0, cycle_updates=0, global_updates=1),
-        base | dict(name="tune_local_only", global_updates=0),
-        base | dict(name="tune_no_cycle", cycle_updates=0),
-        base | dict(name="tune_more_global", global_updates=4),
-        base | dict(name="tune_more_segments", segment_updates=16),
+        base | dict(
+            name="tune_global_only",
+            segment_updates=0,
+            cycle_updates=0,
+            stitch_updates=0,
+            global_updates=1,
+        ),
+        base | dict(name="tune_stitch_only", segment_updates=0, cycle_updates=0),
+        base | dict(name="tune_stitch_plus_global", global_updates=1),
+        base | dict(name="tune_more_stitches", stitch_updates=8),
+        base | dict(name="tune_stitch_plus_segments", segment_updates=8),
     ]
     return cases
 
@@ -273,10 +317,10 @@ def long_cases():
     base = dict(N=4, L=4, beta=2.0, U=16.0, ed=True)
     return [
         base | dict(name="long_default_u16"),
-        base | dict(name="long_global4_u16", global_updates=4),
-        base | dict(name="long_global16_u16", global_updates=16),
-        base | dict(name="long_seg16_global4_u16", segment_updates=16, global_updates=4),
-        (base | dict(U=32.0, name="long_global16_u32", global_updates=16)),
+        base | dict(name="long_stitch4_u16", stitch_updates=4),
+        base | dict(name="long_stitch16_u16", stitch_updates=16),
+        base | dict(name="long_stitch4_global1_u16", stitch_updates=4, global_updates=1),
+        (base | dict(U=32.0, name="long_stitch16_u32", stitch_updates=16)),
     ]
 
 
