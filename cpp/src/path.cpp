@@ -1,6 +1,7 @@
 #include "qmc/path.hpp"
 
 #include "checked_math.hpp"
+#include "path_cursor.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -424,36 +425,17 @@ std::vector<ContinuousPath> split_continuous_path(const ContinuousPath &path,
     previous = cut;
   }
 
-  std::vector<double> boundaries;
-  boundaries.reserve(cut_times.size() + 2);
-  boundaries.push_back(0.0);
-  boundaries.insert(boundaries.end(), cut_times.begin(), cut_times.end());
-  boundaries.push_back(path.duration);
-
   std::vector<ContinuousPath> pieces;
-  pieces.reserve(boundaries.size() - 1);
-  for (std::size_t piece_index = 0; piece_index + 1 < boundaries.size(); ++piece_index) {
-    const double left = boundaries[piece_index];
-    const double right = boundaries[piece_index + 1];
-    std::vector<JumpEvent> local_events;
-    for (const JumpEvent &event : path.events) {
-      if (event.time > left && event.time <= right) {
-        local_events.push_back(JumpEvent{
-            .time = event.time - left,
-            .axis = event.axis,
-            .direction = event.direction,
-        });
-      }
-    }
-    ContinuousPath piece{
-        .duration = right - left,
-        .start = path.position_at(left),
-        .end = path.position_at(right),
-        .events = std::move(local_events),
-    };
-    piece.validate(path.start.size());
-    pieces.push_back(std::move(piece));
+  pieces.reserve(cut_times.size() + 1);
+  detail::PathCursor cursor(path);
+  detail::PathCut left = cursor.cut(0.0);
+  for (const double right_time : cut_times) {
+    detail::PathCut right = cursor.cut(right_time);
+    pieces.push_back(detail::materialize_path_slice(cursor.slice(left, right)));
+    left = std::move(right);
   }
+  const detail::PathCut right = cursor.cut(path.duration);
+  pieces.push_back(detail::materialize_path_slice(cursor.slice(left, right)));
   return pieces;
 }
 
@@ -466,36 +448,13 @@ ContinuousPath resample_path_interval(const ContinuousPath &path, const double t
     throw std::invalid_argument("require 0 <= tau0 < tau1 <= path duration");
   }
 
-  const ContinuousPath proposal = sample_continuous_bridge(
-      path.position_at(tau0), path.position_at(tau1), tau1 - tau0, hopping, random, options);
-  std::vector<JumpEvent> events;
-  events.reserve(path.events.size() + proposal.events.size());
-  for (const JumpEvent &event : path.events) {
-    if (event.time <= tau0) {
-      events.push_back(event);
-    }
-  }
-  for (const JumpEvent &event : proposal.events) {
-    events.push_back(JumpEvent{
-        .time = tau0 + event.time,
-        .axis = event.axis,
-        .direction = event.direction,
-    });
-  }
-  for (const JumpEvent &event : path.events) {
-    if (event.time > tau1) {
-      events.push_back(event);
-    }
-  }
-
-  ContinuousPath result{
-      .duration = path.duration,
-      .start = path.start,
-      .end = path.end,
-      .events = std::move(events),
-  };
-  result.validate(path.start.size());
-  return result;
+  detail::PathCursor cursor(path);
+  const detail::PathCut left = cursor.cut(tau0);
+  const detail::PathCut right = cursor.cut(tau1);
+  const detail::PathSlice slice = cursor.slice(left, right);
+  const ContinuousPath proposal =
+      sample_continuous_bridge(slice.start, slice.end, tau1 - tau0, hopping, random, options);
+  return detail::replace_path_slice(slice, proposal);
 }
 
 } // namespace qmc

@@ -1,12 +1,94 @@
 #include "qmc/path.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <gtest/gtest.h>
+#include <span>
+#include <utility>
 #include <vector>
 
 namespace qmc {
 namespace {
+
+void expect_same_path(const ContinuousPath &actual, const ContinuousPath &expected) {
+  EXPECT_DOUBLE_EQ(actual.duration, expected.duration);
+  EXPECT_EQ(actual.start, expected.start);
+  EXPECT_EQ(actual.end, expected.end);
+  ASSERT_EQ(actual.events.size(), expected.events.size());
+  for (std::size_t index = 0; index < actual.events.size(); ++index) {
+    SCOPED_TRACE(index);
+    EXPECT_DOUBLE_EQ(actual.events[index].time, expected.events[index].time);
+    EXPECT_EQ(actual.events[index].axis, expected.events[index].axis);
+    EXPECT_EQ(actual.events[index].direction, expected.events[index].direction);
+  }
+}
+
+std::vector<ContinuousPath>
+reference_split_continuous_path(const ContinuousPath &path,
+                                const std::span<const double> cut_times) {
+  std::vector<double> boundaries;
+  boundaries.reserve(cut_times.size() + 2);
+  boundaries.push_back(0.0);
+  boundaries.insert(boundaries.end(), cut_times.begin(), cut_times.end());
+  boundaries.push_back(path.duration);
+
+  std::vector<ContinuousPath> pieces;
+  pieces.reserve(boundaries.size() - 1);
+  for (std::size_t piece_index = 0; piece_index + 1 < boundaries.size(); ++piece_index) {
+    const double left = boundaries[piece_index];
+    const double right = boundaries[piece_index + 1];
+    std::vector<JumpEvent> local_events;
+    for (const JumpEvent &event : path.events) {
+      if (event.time > left && event.time <= right) {
+        local_events.push_back(JumpEvent{
+            .time = event.time - left,
+            .axis = event.axis,
+            .direction = event.direction,
+        });
+      }
+    }
+    pieces.push_back(ContinuousPath{
+        .duration = right - left,
+        .start = path.position_at(left),
+        .end = path.position_at(right),
+        .events = std::move(local_events),
+    });
+  }
+  return pieces;
+}
+
+ContinuousPath reference_resample_path_interval(const ContinuousPath &path, const double tau0,
+                                                const double tau1, const double hopping,
+                                                Random &random) {
+  const ContinuousPath proposal = sample_continuous_bridge(
+      path.position_at(tau0), path.position_at(tau1), tau1 - tau0, hopping, random);
+  std::vector<JumpEvent> events;
+  events.reserve(path.events.size() + proposal.events.size());
+  for (const JumpEvent &event : path.events) {
+    if (event.time <= tau0) {
+      events.push_back(event);
+    }
+  }
+  for (const JumpEvent &event : proposal.events) {
+    events.push_back(JumpEvent{
+        .time = tau0 + event.time,
+        .axis = event.axis,
+        .direction = event.direction,
+    });
+  }
+  for (const JumpEvent &event : path.events) {
+    if (event.time > tau1) {
+      events.push_back(event);
+    }
+  }
+  return ContinuousPath{
+      .duration = path.duration,
+      .start = path.start,
+      .end = path.end,
+      .events = std::move(events),
+  };
+}
 
 TEST(ContinuousPathTest, UsesRightContinuousEventSemantics) {
   const ContinuousPath path{
@@ -96,6 +178,77 @@ TEST(ContinuousPathTest, SplitsCutEventsIntoTheLeftPiece) {
   EXPECT_EQ(pieces[0].event_count() + pieces[1].event_count(), path.event_count());
 }
 
+TEST(ContinuousPathTest, SplitPreservesLegacyBoundarySemanticsWithCoincidentEvents) {
+  const ContinuousPath path{
+      .duration = 1.0,
+      .start = {0},
+      .end = {0},
+      .events = {{.time = 0.0, .axis = 0, .direction = 1},
+                 {.time = 0.0, .axis = 0, .direction = 1},
+                 {.time = 0.5, .axis = 0, .direction = -1},
+                 {.time = 0.5, .axis = 0, .direction = 1},
+                 {.time = 1.0, .axis = 0, .direction = -1},
+                 {.time = 1.0, .axis = 0, .direction = -1}},
+  };
+  path.validate(1);
+
+  const std::vector<double> cuts{0.5};
+  const auto pieces = split_continuous_path(path, cuts);
+  ASSERT_EQ(pieces.size(), 2U);
+  EXPECT_EQ(pieces[0].start, Site({2}));
+  EXPECT_EQ(pieces[0].end, Site({2}));
+  ASSERT_EQ(pieces[0].events.size(), 2U);
+  EXPECT_DOUBLE_EQ(pieces[0].events[0].time, 0.5);
+  EXPECT_DOUBLE_EQ(pieces[0].events[1].time, 0.5);
+  EXPECT_EQ(pieces[1].start, Site({2}));
+  EXPECT_EQ(pieces[1].end, Site({0}));
+  ASSERT_EQ(pieces[1].events.size(), 2U);
+  EXPECT_DOUBLE_EQ(pieces[1].events[0].time, 0.5);
+  EXPECT_DOUBLE_EQ(pieces[1].events[1].time, 0.5);
+}
+
+TEST(ContinuousPathTest, SplitHandlesZeroDurationAfterApplyingTimeZeroEvents) {
+  const ContinuousPath path{
+      .duration = 0.0,
+      .start = {3},
+      .end = {4},
+      .events = {{.time = 0.0, .axis = 0, .direction = 1}},
+  };
+  path.validate(1);
+
+  const auto pieces = split_continuous_path(path, {});
+  ASSERT_EQ(pieces.size(), 1U);
+  EXPECT_DOUBLE_EQ(pieces[0].duration, 0.0);
+  EXPECT_EQ(pieces[0].start, Site({4}));
+  EXPECT_EQ(pieces[0].end, Site({4}));
+  EXPECT_TRUE(pieces[0].events.empty());
+}
+
+TEST(ContinuousPathTest, CursorSplitMatchesPreviousTraversalExactly) {
+  const ContinuousPath path{
+      .duration = 1.0,
+      .start = {0, 0},
+      .end = {0, 1},
+      .events = {{.time = 0.0, .axis = 0, .direction = 1},
+                 {.time = 0.1, .axis = 1, .direction = -1},
+                 {.time = 0.2, .axis = 0, .direction = 1},
+                 {.time = 0.2, .axis = 1, .direction = 1},
+                 {.time = 0.5, .axis = 0, .direction = -1},
+                 {.time = 0.75, .axis = 1, .direction = 1},
+                 {.time = 1.0, .axis = 0, .direction = -1}},
+  };
+  path.validate(2);
+  const std::vector<double> cuts{0.2, 0.6, 0.75};
+
+  const auto actual = split_continuous_path(path, cuts);
+  const auto expected = reference_split_continuous_path(path, cuts);
+  ASSERT_EQ(actual.size(), expected.size());
+  for (std::size_t index = 0; index < actual.size(); ++index) {
+    SCOPED_TRACE(index);
+    expect_same_path(actual[index], expected[index]);
+  }
+}
+
 TEST(ContinuousPathTest, IntervalResamplingPreservesOuterPathAndEndpoints) {
   Random random(10);
   const auto path = sample_continuous_bridge({0, 0}, {2, -1}, 2.0, 0.9, random);
@@ -127,6 +280,46 @@ TEST(ContinuousPathTest, IntervalResamplingPreservesOuterPathAndEndpoints) {
     EXPECT_EQ(new_outer[index].axis, old_outer[index].axis);
     EXPECT_EQ(new_outer[index].direction, old_outer[index].direction);
   }
+}
+
+TEST(ContinuousPathTest, IntervalResamplingRetainsLeftCutAndReplacesRightCutEvents) {
+  const ContinuousPath path{
+      .duration = 1.0,
+      .start = {0},
+      .end = {0},
+      .events = {{.time = 0.0, .axis = 0, .direction = 1},
+                 {.time = 0.25, .axis = 0, .direction = 1},
+                 {.time = 0.25, .axis = 0, .direction = -1},
+                 {.time = 0.5, .axis = 0, .direction = 1},
+                 {.time = 0.5, .axis = 0, .direction = -1},
+                 {.time = 0.75, .axis = 0, .direction = 1},
+                 {.time = 0.75, .axis = 0, .direction = -1},
+                 {.time = 0.9, .axis = 0, .direction = -1}},
+  };
+  path.validate(1);
+  Random random(19);
+
+  const ContinuousPath proposal = resample_path_interval(path, 0.25, 0.75, 0.0, random);
+  ASSERT_EQ(proposal.events.size(), 4U);
+  EXPECT_DOUBLE_EQ(proposal.events[0].time, 0.0);
+  EXPECT_DOUBLE_EQ(proposal.events[1].time, 0.25);
+  EXPECT_DOUBLE_EQ(proposal.events[2].time, 0.25);
+  EXPECT_DOUBLE_EQ(proposal.events[3].time, 0.9);
+  EXPECT_EQ(proposal.position_at(0.25), path.position_at(0.25));
+  EXPECT_EQ(proposal.position_at(0.75), path.position_at(0.75));
+}
+
+TEST(ContinuousPathTest, CursorResamplingMatchesPreviousTraversalAndRandomStreamExactly) {
+  Random source_random(812);
+  const ContinuousPath path = sample_continuous_bridge({0, -1}, {3, 2}, 1.4, 0.9, source_random);
+  Random actual_random(913);
+  Random expected_random(913);
+
+  const ContinuousPath actual = resample_path_interval(path, 0.3, 1.1, 0.9, actual_random);
+  const ContinuousPath expected =
+      reference_resample_path_interval(path, 0.3, 1.1, 0.9, expected_random);
+  expect_same_path(actual, expected);
+  EXPECT_DOUBLE_EQ(actual_random.uniform_open(), expected_random.uniform_open());
 }
 
 TEST(ContinuousPathTest, HandlesZeroWeightAndRejectsBadIntervals) {

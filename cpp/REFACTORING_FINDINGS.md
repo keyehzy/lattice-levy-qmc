@@ -70,7 +70,7 @@ type collects one invariant that is currently spread across several files.
 | P0/P1 | Checked flat extents and `TorusLayout`/`SiteId` (done 2026-07-19); add grid provenance | Memory safety, shared geometry, and fewer allocations | Medium |
 | P0 | Bind model and canonical table (done 2026-07-19); add reusable free numerics | Correctness and large repeated-work reduction | Medium |
 | P0 | Make paths/configurations valid-by-construction | Ownership clarity and removal of nested validation | Large |
-| P1 | Introduce single-pass path cursors/slices | Simpler boundary semantics and faster path surgery | Medium |
+| P1 | Path cursor/slice split and resample migration (done 2026-07-19); migrate stitch and rotation | Simpler boundary semantics and faster path surgery | Medium |
 | P1 | Add a retained-measurement context and accumulators | Less repeated work and a smaller demo | Medium |
 | P1 | Collect reusable free-particle numerics | Numerical clarity and less repeated setup | Medium |
 | P1 | Unify discrete log-weight and bounded-tail sampling | One truncation policy and fewer allocations | Medium |
@@ -359,7 +359,17 @@ allocation or indexing, and rejection of a same-volume/different-layout field.
 
 ### 5. P1: traverse continuous paths once with `PathCursor` and `PathSlice`
 
-Evidence:
+Status (2026-07-19): the first migration slice is complete. A private monotone
+`PathCursor` now records the left and right position plus event range at each
+cut, and `PathSlice` represents the right-continuous interval `(tau0, tau1]`.
+Splitting traverses the source events once across all pieces, and interval
+resampling shares the slice replacement builder instead of performing repeated
+position queries and event scans. Coincident events at zero, internal cuts, and
+the path duration, zero-duration splitting, exact equivalence with the previous
+traversal, and seeded RNG-stream equivalence have regression coverage. Stitch
+splicing and time-origin rotation remain to be migrated in a follow-up slice.
+
+Pre-refactor evidence:
 
 - `position_at()` validates and scans from the beginning for every query
   (`src/path.cpp:238-249`).
@@ -925,8 +935,8 @@ visible at the assertion sites.
    retaining model-only convenience wrappers.
 3. `TorusLayout`/`SiteId` and checked-flat-shape portions completed 2026-07-19;
    shared validation-helper cleanup and lattice-field/grid provenance remain.
-4. Add `PathCursor`/`PathSlice`; migrate split and resample first, then stitch and
-   rotation, with equivalence tests.
+4. `PathCursor`/`PathSlice` plus split/resample migration completed 2026-07-19;
+   migrate stitch and rotation next, with equivalence tests.
 5. Encapsulate `ContinuousPath`, `Permutation`, and configurations. Move full
    validation to construction/import/debug audits.
 6. Add retained measurement context and accumulators, then optimize direct
