@@ -9,8 +9,10 @@
 #include <cstddef>
 #include <functional>
 #include <gtest/gtest.h>
+#include <limits>
 #include <numbers>
 #include <numeric>
+#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -256,6 +258,24 @@ TEST(ConfigurationObservablesTest, ExactSampleInvariantsHoldOnRetainedGrid) {
     EXPECT_GE(cycle_geometry[cycle].maximum_radius_squared,
               cycle_geometry[cycle].radius_of_gyration_squared);
   }
+}
+
+TEST(ConfigurationObservablesTest, RejectsWrappedMatsubaraGridExtent) {
+  const qmc::Model model{
+      .particle_count = 0,
+      .beta = 1.0,
+      .linear_size = 2,
+      .dimension = 1,
+      .hopping = 0.0,
+  };
+  const qmc::ImaginaryTimeDensityCorrelations correlations{
+      .time_points = (std::numeric_limits<std::size_t>::max() / model.volume()) + 1,
+      .spatial_points = model.volume(),
+      .connected_density = {},
+  };
+
+  EXPECT_THROW(static_cast<void>(qmc::retained_grid_matsubara_transform(model, correlations)),
+               std::overflow_error);
 }
 
 TEST(CanonicalObservablesTest, HandlesEmptySystemAndRejectsUndefinedTemperatureQuantities) {

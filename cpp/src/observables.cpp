@@ -1,5 +1,6 @@
 #include "qmc/observables.hpp"
 
+#include "checked_math.hpp"
 #include "qmc/free_numerics.hpp"
 
 #include <algorithm>
@@ -644,11 +645,13 @@ retained_density_correlations(const IdealBosonConfiguration &configuration) {
   const Model &model = configuration.model;
   const auto volume = model.volume();
   const auto time_points = configuration.time_links_per_beta;
+  const auto grid_size =
+      detail::checked_product(time_points, volume, "density-correlation grid exceeds size_t");
   const auto positions = retained_positions(configuration);
   ImaginaryTimeDensityCorrelations result{
       .time_points = time_points,
       .spatial_points = volume,
-      .connected_density = std::vector<double>(time_points * volume),
+      .connected_density = std::vector<double>(grid_size),
   };
 
   for (std::size_t lag = 0; lag < time_points; ++lag) {
@@ -678,13 +681,17 @@ retained_grid_matsubara_transform(const Model &model,
     throw std::invalid_argument("Matsubara transform requires beta > 0");
   }
   const auto volume = model.volume();
-  if (correlations.time_points == 0 || correlations.spatial_points != volume ||
-      correlations.connected_density.size() != correlations.time_points * volume) {
+  if (correlations.time_points == 0 || correlations.spatial_points != volume) {
     throw std::invalid_argument("density-correlation grid does not match the model");
   }
 
   const auto time_points = correlations.time_points;
-  std::vector<std::complex<double>> spatial_transform(time_points * volume);
+  const auto grid_size =
+      detail::checked_product(time_points, volume, "density-correlation grid exceeds size_t");
+  if (correlations.connected_density.size() != grid_size) {
+    throw std::invalid_argument("density-correlation grid does not match the model");
+  }
+  std::vector<std::complex<double>> spatial_transform(grid_size);
   for (std::size_t time = 0; time < time_points; ++time) {
     for (std::size_t momentum = 0; momentum < volume; ++momentum) {
       const auto momentum_components = decode_flat_index(momentum, model);
@@ -702,7 +709,7 @@ retained_grid_matsubara_transform(const Model &model,
   MatsubaraDensityCorrelations result{
       .frequencies = std::vector<double>(time_points),
       .momentum_points = volume,
-      .values = std::vector<std::complex<double>>(time_points * volume),
+      .values = std::vector<std::complex<double>>(grid_size),
   };
   const double time_step = model.beta / static_cast<double>(time_points);
   for (std::size_t frequency = 0; frequency < time_points; ++frequency) {
@@ -727,12 +734,14 @@ retained_geometry_observables(const IdealBosonConfiguration &configuration) {
   const Model &model = configuration.model;
   const auto volume = model.volume();
   const auto time_points = configuration.time_links_per_beta;
+  const auto grid_size =
+      detail::checked_product(time_points, volume, "retained-geometry grid exceeds size_t");
   RetainedGeometryObservables result{
       .time_points = time_points,
       .displacement_points = volume,
       .mean_square_displacement = std::vector<double>(time_points),
       .return_probability = std::vector<double>(time_points),
-      .displacement_probability = std::vector<double>(time_points * volume),
+      .displacement_probability = std::vector<double>(grid_size),
   };
   if (model.particle_count == 0) {
     return result;

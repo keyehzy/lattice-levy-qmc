@@ -65,7 +65,7 @@ type collects one invariant that is currently spread across several files.
 | Priority | Finding | Primary payoff | Estimated size |
 | --- | --- | --- | --- |
 | P0 | Make occupancy replacement transactional | Correctness and simpler move code | Medium |
-| P0/P1 | Check flat extents; introduce `TorusLayout`/`SiteId` | Memory safety, shared geometry, and fewer allocations | Medium |
+| P0/P1 | Checked flat extents (done 2026-07-19); introduce `TorusLayout`/`SiteId` | Memory safety, shared geometry, and fewer allocations | Medium |
 | P0 | Bind model, canonical table, and reusable free numerics | Correctness and large repeated-work reduction | Medium |
 | P0 | Make paths/configurations valid-by-construction | Ownership clarity and removal of nested validation | Large |
 | P1 | Introduce single-pass path cursors/slices | Simpler boundary semantics and faster path surgery | Medium |
@@ -259,6 +259,12 @@ The goal is not to remove validation. It is to validate at trust boundaries and
 make invalid intermediate states unrepresentable inside the library.
 
 ### 4. P0/P1: check flat extents, then centralize geometry in `TorusLayout`
+
+Status (2026-07-19): the checked-flat-extent slice is complete. Density,
+Matsubara, and retained-geometry buffers now derive their sizes with checked
+products, and a wrapped Matsubara-grid regression proves rejection before
+allocation or indexing. The `TorusLayout`/`SiteId` and grid-provenance work
+remains open.
 
 Evidence:
 
