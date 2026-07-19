@@ -32,10 +32,12 @@ numerical setup that are currently needed to defend mutable public structs.
 
 ## Executive recommendation
 
-The two immediate correctness guards are complete: public flat-buffer extents
-use checked derived sizes, and local occupancy replacements stage affected
-timelines before an allocation-free commit. Broader reorganization can now
-proceed without either known memory-safety or cache-desynchronization boundary.
+The three immediate correctness guards are complete: public flat-buffer extents
+use checked derived sizes, local occupancy replacements stage affected timelines
+before an allocation-free commit, and canonical recursions are owned by the
+validated model that created them. Broader reorganization can now proceed
+without those known memory-safety, cache-desynchronization, or provenance
+boundaries.
 
 The best target architecture is three small, concrete ownership units:
 
@@ -66,7 +68,7 @@ type collects one invariant that is currently spread across several files.
 | --- | --- | --- | --- |
 | P0 | Make occupancy replacement transactional (done 2026-07-19) | Correctness and simpler move code | Medium |
 | P0/P1 | Checked flat extents (done 2026-07-19); introduce `TorusLayout`/`SiteId` | Memory safety, shared geometry, and fewer allocations | Medium |
-| P0 | Bind model, canonical table, and reusable free numerics | Correctness and large repeated-work reduction | Medium |
+| P0 | Bind model and canonical table (done 2026-07-19); add reusable free numerics | Correctness and large repeated-work reduction | Medium |
 | P0 | Make paths/configurations valid-by-construction | Ownership clarity and removal of nested validation | Large |
 | P1 | Introduce single-pass path cursors/slices | Simpler boundary semantics and faster path surgery | Medium |
 | P1 | Add a retained-measurement context and accumulators | Less repeated work and a smaller demo | Medium |
@@ -163,7 +165,21 @@ Verification:
 
 ### 2. P0: bind a canonical table to the model that created it and reuse it
 
-Evidence:
+Status (2026-07-19): complete. `CanonicalEnsemble` now owns one validated
+`Model` and its private, fully checked canonical recursion. Sampling and exact
+observables consume the ensemble rather than independently supplied model/table
+pairs; model-only convenience overloads construct a temporary ensemble. The
+ideal demo and interacting sampler retain one ensemble for repeated sampling.
+Read-only recursion views and explicit bounded prefix queries preserve the valid
+smaller-particle-number use case without losing physical provenance. Seeded
+retained-grid and continuous-time tests prove reusable and one-off sampling are
+identical. In four warm release-build trials, 200 samples at `N=256`, `L=4`,
+`d=1`, and `M=1` took 0.0545-0.0554 s through a retained ensemble versus
+0.0755-0.0763 s through the one-off wrapper. This focused result confirms the
+expected setup-reuse win; it is not an end-to-end production benchmark.
+Spectrum and trigonometric workspace caching remains under finding 7.
+
+Pre-refactor evidence:
 
 - `FreeBosonTable` contains only two public vectors (`include/qmc/free_boson.hpp:15-20`).
   Consumers can check capacity and finiteness but cannot prove that `beta`, `L`,
@@ -870,7 +886,7 @@ than broad fixtures:
 - reusable `expect_valid_permutation`, `expect_same_path`, and
   `expect_cache_matches_full_action` helpers;
 - parameterized boundary-semantics cases for events at `0`, cuts, and `beta`;
-- table/model mismatch tests for `CanonicalEnsemble`;
+- ownership, read-only recursion, and bounded prefix tests for `CanonicalEnsemble`;
 - wrapped-product and maximum-representable shape tests for every public flat
   result, plus same-volume/different-layout and different-grid provenance tests;
 - exception/fault-injection tests for replacement transactions;
@@ -898,8 +914,9 @@ visible at the assertion sites.
 1. Completed 2026-07-19: checked public flat extents, local rejection and
    injected-failure regressions, `ReplacementTransaction`, and unified
    normal/stitch proposal finalization using the existing representation.
-2. Add a reusable `CanonicalEnsemble`; bind table provenance and route the ideal
-   demo and both samplers through it, retaining free-function wrappers.
+2. Completed 2026-07-19: added reusable `CanonicalEnsemble`, bound canonical
+   provenance, and routed the ideal demo and both samplers through it while
+   retaining model-only convenience wrappers.
 3. Add `TorusLayout`, shared checked math, and `SiteId`; migrate encoding,
    checked flat shapes, and occupancy keys without changing public state.
 4. Add `PathCursor`/`PathSlice`; migrate split and resample first, then stitch and

@@ -22,21 +22,8 @@ bool nearly_equal_time(const double left, const double right) {
 }
 
 void validate_continuous_model(const Model &model) {
-  model.validate();
   if (model.beta <= 0.0) {
     throw std::invalid_argument("continuous configurations require positive beta");
-  }
-}
-
-void validate_table_shape(const Model &model, const FreeBosonTable &table) {
-  if (model.particle_count == std::numeric_limits<std::size_t>::max() ||
-      table.log_z.size() < model.particle_count + 1 ||
-      table.log_Z.size() < model.particle_count + 1) {
-    throw std::invalid_argument("canonical table is too short for the model");
-  }
-  if (table.log_Z.empty() || table.log_Z[0] != 0.0 ||
-      !std::isfinite(table.log_Z[model.particle_count])) {
-    throw std::invalid_argument("canonical table is invalid");
   }
 }
 
@@ -342,21 +329,14 @@ Site ContinuousConfiguration::total_winding(const Model &model) const {
   return displacement;
 }
 
-ContinuousConfiguration sample_ideal_continuous_configuration(const Model &model, Random &random,
-                                                              const NumericalOptions &options) {
-  const FreeBosonTable table = canonical_table(model);
-  return sample_ideal_continuous_configuration(model, table, random, options);
-}
-
-ContinuousConfiguration sample_ideal_continuous_configuration(const Model &model,
-                                                              const FreeBosonTable &table,
+ContinuousConfiguration sample_ideal_continuous_configuration(const CanonicalEnsemble &ensemble,
                                                               Random &random,
                                                               const NumericalOptions &options) {
+  const Model &model = ensemble.model();
   validate_continuous_model(model);
   options.validate();
-  validate_table_shape(model, table);
 
-  const std::vector<Cycle> cycles = sample_cycle_labels(model.particle_count, table, random);
+  const std::vector<Cycle> cycles = ensemble.sample_cycles(random);
   std::vector<ParticleId> permutation(model.particle_count);
   std::vector<std::optional<ContinuousPath>> staged_paths(model.particle_count);
 
@@ -382,10 +362,15 @@ ContinuousConfiguration sample_ideal_continuous_configuration(const Model &model
       .cycles = cycles,
       .permutation = std::move(permutation),
       .worldlines = std::move(worldlines),
-      .log_Z0_N = table.log_Z[model.particle_count],
+      .log_Z0_N = ensemble.log_partition(model.particle_count),
   };
   configuration.validate(model);
   return configuration;
+}
+
+ContinuousConfiguration sample_ideal_continuous_configuration(const Model &model, Random &random,
+                                                              const NumericalOptions &options) {
+  return sample_ideal_continuous_configuration(CanonicalEnsemble(model), random, options);
 }
 
 } // namespace qmc

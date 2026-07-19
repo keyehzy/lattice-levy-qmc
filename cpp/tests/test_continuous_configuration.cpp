@@ -9,6 +9,35 @@
 namespace qmc {
 namespace {
 
+bool paths_are_equal(const ContinuousPath &left, const ContinuousPath &right) {
+  if (left.duration != right.duration || left.start != right.start || left.end != right.end ||
+      left.events.size() != right.events.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < left.events.size(); ++index) {
+    if (left.events[index].time != right.events[index].time ||
+        left.events[index].axis != right.events[index].axis ||
+        left.events[index].direction != right.events[index].direction) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool configurations_are_equal(const ContinuousConfiguration &left,
+                              const ContinuousConfiguration &right) {
+  if (left.cycles != right.cycles || left.permutation != right.permutation ||
+      left.worldlines.size() != right.worldlines.size() || left.log_Z0_N != right.log_Z0_N) {
+    return false;
+  }
+  for (std::size_t index = 0; index < left.worldlines.size(); ++index) {
+    if (!paths_are_equal(left.worldlines[index], right.worldlines[index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
 TEST(ContinuousConfigurationTest, SamplesConsistentCanonicalState) {
   const Model model{
       .particle_count = 8,
@@ -50,6 +79,24 @@ TEST(ContinuousConfigurationTest, SupportsEmptyCanonicalState) {
   EXPECT_TRUE(state.worldlines.empty());
   EXPECT_EQ(state.event_count(), 0U);
   EXPECT_EQ(state.total_winding(model), Site({0, 0}));
+}
+
+TEST(ContinuousConfigurationTest, ReusableEnsembleMatchesOneOffWrapperForTheSameSeed) {
+  const Model model{
+      .particle_count = 6,
+      .beta = 0.9,
+      .linear_size = 5,
+      .dimension = 2,
+      .hopping = 0.7,
+  };
+  const CanonicalEnsemble ensemble(model);
+  Random one_off_random(1907);
+  Random retained_random(1907);
+
+  const auto one_off = sample_ideal_continuous_configuration(model, one_off_random);
+  const auto retained = sample_ideal_continuous_configuration(ensemble, retained_random);
+
+  EXPECT_TRUE(configurations_are_equal(one_off, retained));
 }
 
 TEST(ContinuousConfigurationTest, ValidationDetectsTopologyAndEndpointCorruption) {

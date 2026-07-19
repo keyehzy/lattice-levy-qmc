@@ -119,7 +119,7 @@ TEST(IdealConfigurationTest, ValidationDetectsPermutationCorruption) {
   EXPECT_THROW(configuration.validate(), std::logic_error);
 }
 
-TEST(IdealConfigurationTest, RepeatsExactlyForTheSameCppSeed) {
+TEST(IdealConfigurationTest, ReusableEnsembleMatchesOneOffWrapperForTheSameSeed) {
   const qmc::Model model{
       .particle_count = 6,
       .beta = 0.9,
@@ -127,10 +127,11 @@ TEST(IdealConfigurationTest, RepeatsExactlyForTheSameCppSeed) {
       .dimension = 2,
       .hopping = 1.1,
   };
+  const qmc::CanonicalEnsemble ensemble(model);
   qmc::Random first_random(8128);
   qmc::Random second_random(8128);
   const auto first = qmc::sample_ideal_boson_configuration(model, 11, first_random);
-  const auto second = qmc::sample_ideal_boson_configuration(model, 11, second_random);
+  const auto second = qmc::sample_ideal_boson_configuration(ensemble, 11, second_random);
 
   EXPECT_TRUE(samples_are_equal(first, second));
 }

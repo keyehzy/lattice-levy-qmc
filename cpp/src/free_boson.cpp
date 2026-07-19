@@ -5,6 +5,7 @@
 #include <limits>
 #include <numbers>
 #include <stdexcept>
+#include <utility>
 
 namespace qmc {
 namespace {
@@ -120,45 +121,57 @@ double log_one_particle_trace(const double duration, const Model &model) {
   return log_one_particle_trace(duration, model.linear_size, model.dimension, model.hopping);
 }
 
-FreeBosonTable canonical_table(const Model &model) {
-  model.validate();
-  if (model.particle_count == std::numeric_limits<std::size_t>::max()) {
+CanonicalEnsemble::CanonicalEnsemble(Model model) : model_(model) {
+  model_.validate();
+  if (model_.particle_count == std::numeric_limits<std::size_t>::max()) {
     throw std::overflow_error("canonical table size exceeds size_t");
   }
 
-  const auto count = model.particle_count;
+  const auto count = model_.particle_count;
   const double negative_infinity = -std::numeric_limits<double>::infinity();
-  FreeBosonTable table{
-      .log_z = std::vector<double>(count + 1, negative_infinity),
-      .log_Z = std::vector<double>(count + 1, negative_infinity),
-  };
-  table.log_Z[0] = 0.0;
+  log_z_.assign(count + 1, negative_infinity);
+  log_Z_.assign(count + 1, negative_infinity);
+  log_Z_[0] = 0.0;
 
   for (std::size_t length = 1; length <= count; ++length) {
-    const double duration = static_cast<double>(length) * model.beta;
+    const double duration = static_cast<double>(length) * model_.beta;
     if (!std::isfinite(duration)) {
       throw std::overflow_error("cycle duration overflowed");
     }
-    table.log_z[length] = log_one_particle_trace(duration, model);
+    log_z_[length] =
+        log_one_particle_trace(duration, model_.linear_size, model_.dimension, model_.hopping);
+    if (!std::isfinite(log_z_[length])) {
+      throw std::overflow_error("canonical one-particle trace is non-finite");
+    }
   }
 
   for (std::size_t particles = 1; particles <= count; ++particles) {
     std::vector<double> terms(particles);
     for (std::size_t length = 1; length <= particles; ++length) {
-      terms[length - 1] = table.log_z[length] + table.log_Z[particles - length];
+      terms[length - 1] = log_z_[length] + log_Z_[particles - length];
     }
-    table.log_Z[particles] = log_sum_exp(terms) - std::log(static_cast<double>(particles));
+    log_Z_[particles] = log_sum_exp(terms) - std::log(static_cast<double>(particles));
+    if (!std::isfinite(log_Z_[particles])) {
+      throw std::overflow_error("canonical partition recursion is non-finite");
+    }
   }
-  return table;
 }
 
-std::vector<Cycle> sample_cycle_labels(const std::size_t particle_count,
-                                       const FreeBosonTable &table, Random &random) {
-  if (particle_count > std::numeric_limits<ParticleId>::max()) {
-    throw std::invalid_argument("particle_count exceeds the ParticleId range");
+double CanonicalEnsemble::log_partition(const std::size_t particle_count) const {
+  if (particle_count > model_.particle_count) {
+    throw std::out_of_range("canonical particle count exceeds the ensemble capacity");
   }
-  if (table.log_z.size() < particle_count + 1 || table.log_Z.size() < particle_count + 1) {
-    throw std::invalid_argument("canonical table is too short");
+  return log_Z_[particle_count];
+}
+
+std::vector<Cycle> CanonicalEnsemble::sample_cycles(Random &random) const {
+  return sample_cycles(model_.particle_count, random);
+}
+
+std::vector<Cycle> CanonicalEnsemble::sample_cycles(const std::size_t particle_count,
+                                                    Random &random) const {
+  if (particle_count > model_.particle_count) {
+    throw std::out_of_range("cycle-sampling particle count exceeds the ensemble capacity");
   }
   if (particle_count == 0) {
     return {};
@@ -174,9 +187,9 @@ std::vector<Cycle> sample_cycle_labels(const std::size_t particle_count,
     const auto remaining_count = remaining.size();
     std::vector<double> log_probabilities(remaining_count);
     for (std::size_t length = 1; length <= remaining_count; ++length) {
-      log_probabilities[length - 1] = table.log_z[length] + table.log_Z[remaining_count - length] -
+      log_probabilities[length - 1] = log_z_[length] + log_Z_[remaining_count - length] -
                                       std::log(static_cast<double>(remaining_count)) -
-                                      table.log_Z[remaining_count];
+                                      log_Z_[remaining_count];
     }
     const double normalization = log_sum_exp(log_probabilities);
     std::vector<double> probabilities(remaining_count);

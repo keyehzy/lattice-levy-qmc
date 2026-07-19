@@ -529,11 +529,10 @@ std::optional<double> MoveStatistics::successor_changes_per_attempt() const noex
 
 InteractingSampler::InteractingSampler(InteractingModel model, NumericalOptions numerical,
                                        const std::uint64_t seed)
-    : model_(model), numerical_(numerical), random_(seed) {
+    : model_(model), numerical_(numerical), random_(seed), free_ensemble_(model_.free) {
   model_.validate();
   numerical_.validate();
-  free_table_ = canonical_table(model_.free);
-  state_ = sample_ideal_continuous_configuration(model_.free, free_table_, random_, numerical_);
+  state_ = sample_ideal_continuous_configuration(free_ensemble_, random_, numerical_);
   pair_overlap_ = pair_overlap_time(state_, model_.free);
   action_ = checked_action(model_.interaction, pair_overlap_);
   rebuild_occupancy_index();
@@ -542,8 +541,8 @@ InteractingSampler::InteractingSampler(InteractingModel model, NumericalOptions 
 InteractingSampler::~InteractingSampler() = default;
 InteractingSampler::InteractingSampler(const InteractingSampler &other)
     : model_(other.model_), numerical_(other.numerical_), random_(other.random_),
-      free_table_(other.free_table_), state_(other.state_), pair_overlap_(other.pair_overlap_),
-      action_(other.action_), statistics_(other.statistics_) {
+      free_ensemble_(other.free_ensemble_), state_(other.state_),
+      pair_overlap_(other.pair_overlap_), action_(other.action_), statistics_(other.statistics_) {
   rebuild_occupancy_index();
 }
 
@@ -944,7 +943,7 @@ void InteractingSampler::random_seam_stitch_sweep(const std::optional<std::size_
 
 bool InteractingSampler::global_update() {
   ContinuousConfiguration proposal =
-      sample_ideal_continuous_configuration(model_.free, free_table_, random_, numerical_);
+      sample_ideal_continuous_configuration(free_ensemble_, random_, numerical_);
   const double new_overlap = pair_overlap_time(proposal, model_.free);
   const double new_action = checked_action(model_.interaction, new_overlap);
   MoveStatistics &move_statistics = statistics_[move_index(MoveKind::GlobalMove)];

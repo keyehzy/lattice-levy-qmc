@@ -9,9 +9,15 @@
 #include <limits>
 #include <numbers>
 #include <numeric>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace {
+
+static_assert(!std::is_aggregate_v<qmc::CanonicalEnsemble>);
+static_assert(std::is_same_v<decltype(std::declval<const qmc::CanonicalEnsemble &>().model()),
+                             const qmc::Model &>);
 
 std::vector<std::size_t> permutation_cycle_lengths(const std::vector<qmc::ParticleId> &values) {
   std::vector<bool> seen(values.size(), false);
@@ -66,7 +72,7 @@ TEST(FreeBosonTest, TorusTraceMatchesPythonAndDirectMomentumSum) {
   EXPECT_NEAR(std::exp(got), direct_1d * direct_1d, 2e-13);
 }
 
-TEST(FreeBosonTest, CanonicalTableMatchesPythonReference) {
+TEST(FreeBosonTest, CanonicalEnsembleMatchesPythonReference) {
   const qmc::Model model{
       .particle_count = 5,
       .beta = 0.8,
@@ -74,7 +80,9 @@ TEST(FreeBosonTest, CanonicalTableMatchesPythonReference) {
       .dimension = 1,
       .hopping = 0.9,
   };
-  const auto table = qmc::canonical_table(model);
+  const qmc::CanonicalEnsemble ensemble(model);
+  const auto log_z = ensemble.log_cycle_weights();
+  const auto log_Z = ensemble.log_partitions();
   const std::array log_z_reference{
       -std::numeric_limits<double>::infinity(),
       1.8652613825726467,
@@ -89,14 +97,31 @@ TEST(FreeBosonTest, CanonicalTableMatchesPythonReference) {
                                    4.903593650305713,
                                    6.354339970092079,
                                    7.797407636365048};
-  ASSERT_EQ(table.log_z.size(), log_z_reference.size());
-  ASSERT_EQ(table.log_Z.size(), log_Z_reference.size());
+  ASSERT_EQ(log_z.size(), log_z_reference.size());
+  ASSERT_EQ(log_Z.size(), log_Z_reference.size());
   for (std::size_t index = 1; index < log_z_reference.size(); ++index) {
-    EXPECT_NEAR(table.log_z[index], log_z_reference[index], 3e-14);
+    EXPECT_NEAR(log_z[index], log_z_reference[index], 3e-14);
   }
   for (std::size_t index = 0; index < log_Z_reference.size(); ++index) {
-    EXPECT_NEAR(table.log_Z[index], log_Z_reference[index], 3e-14);
+    EXPECT_NEAR(log_Z[index], log_Z_reference[index], 3e-14);
   }
+}
+
+TEST(FreeBosonTest, CanonicalEnsembleOwnsItsValidatedModel) {
+  qmc::Model model{
+      .particle_count = 3,
+      .beta = 0.8,
+      .linear_size = 4,
+      .dimension = 1,
+      .hopping = 0.9,
+  };
+  const qmc::CanonicalEnsemble ensemble(model);
+  model.beta = 1.7;
+  model.hopping = 0.2;
+
+  EXPECT_DOUBLE_EQ(ensemble.model().beta, 0.8);
+  EXPECT_DOUBLE_EQ(ensemble.model().hopping, 0.9);
+  EXPECT_TRUE(std::isfinite(ensemble.log_partition(3)));
 }
 
 TEST(FreeBosonTest, CanonicalRecursionMatchesPermutationEnumeration) {
@@ -108,18 +133,19 @@ TEST(FreeBosonTest, CanonicalRecursionMatchesPermutationEnumeration) {
       .dimension = 1,
       .hopping = 0.9,
   };
-  const auto table = qmc::canonical_table(model);
+  const qmc::CanonicalEnsemble ensemble(model);
+  const auto log_z = ensemble.log_cycle_weights();
   std::vector<qmc::ParticleId> permutation{0, 1, 2, 3, 4};
   double total = 0.0;
   do {
     double weight = 1.0;
     for (const auto length : permutation_cycle_lengths(permutation)) {
-      weight *= std::exp(table.log_z[length]);
+      weight *= std::exp(log_z[length]);
     }
     total += weight;
   } while (std::ranges::next_permutation(permutation).found);
   total /= 120.0;
-  EXPECT_NEAR(std::exp(table.log_Z[particle_count]), total, 2e-10);
+  EXPECT_NEAR(std::exp(ensemble.log_partition(particle_count)), total, 2e-10);
 }
 
 TEST(FreeBosonTest, SampledCyclesPartitionLabels) {
@@ -130,11 +156,47 @@ TEST(FreeBosonTest, SampledCyclesPartitionLabels) {
       .dimension = 2,
       .hopping = 1.1,
   };
-  const auto table = qmc::canonical_table(model);
+  const qmc::CanonicalEnsemble ensemble(model);
   qmc::Random random(2026);
-  const auto cycles = qmc::sample_cycle_labels(model.particle_count, table, random);
+  const auto cycles = ensemble.sample_cycles(random);
 
   EXPECT_TRUE(cycles_partition_labels(cycles, model.particle_count));
+}
+
+TEST(FreeBosonTest, CanonicalPrefixReuseIsExplicitAndBounded) {
+  const qmc::Model model{
+      .particle_count = 7,
+      .beta = 0.6,
+      .linear_size = 5,
+      .dimension = 2,
+      .hopping = 0.9,
+  };
+  const qmc::CanonicalEnsemble ensemble(model);
+  qmc::Model prefix_model = model;
+  prefix_model.particle_count = 3;
+  const qmc::CanonicalEnsemble prefix(prefix_model);
+  qmc::Random reused_random(27);
+  qmc::Random direct_random(27);
+  const auto reused_cycles = ensemble.sample_cycles(3, reused_random);
+  const auto direct_cycles = prefix.sample_cycles(direct_random);
+
+  EXPECT_TRUE(cycles_partition_labels(reused_cycles, 3));
+  EXPECT_EQ(reused_cycles, direct_cycles);
+  EXPECT_DOUBLE_EQ(ensemble.log_partition(3), prefix.log_partition(3));
+  EXPECT_THROW(static_cast<void>(ensemble.sample_cycles(8, reused_random)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(ensemble.log_partition(8)), std::out_of_range);
+}
+
+TEST(FreeBosonTest, CanonicalConstructionRejectsNonFiniteRecursionAtItsSource) {
+  const qmc::Model model{
+      .particle_count = 2,
+      .beta = std::numeric_limits<double>::max(),
+      .linear_size = 2,
+      .dimension = 1,
+      .hopping = 0.0,
+  };
+
+  EXPECT_THROW(static_cast<void>(qmc::CanonicalEnsemble(model)), std::overflow_error);
 }
 
 TEST(FreeBosonTest, EmptyCanonicalSystemIsValid) {
@@ -145,12 +207,12 @@ TEST(FreeBosonTest, EmptyCanonicalSystemIsValid) {
       .dimension = 2,
       .hopping = 0.0,
   };
-  const auto table = qmc::canonical_table(model);
-  EXPECT_EQ(table.log_z.size(), 1U);
-  ASSERT_EQ(table.log_Z.size(), 1U);
-  EXPECT_DOUBLE_EQ(table.log_Z[0], 0.0);
+  const qmc::CanonicalEnsemble ensemble(model);
+  EXPECT_EQ(ensemble.log_cycle_weights().size(), 1U);
+  ASSERT_EQ(ensemble.log_partitions().size(), 1U);
+  EXPECT_DOUBLE_EQ(ensemble.log_partition(0), 0.0);
   qmc::Random random(4);
-  EXPECT_TRUE(qmc::sample_cycle_labels(0, table, random).empty());
+  EXPECT_TRUE(ensemble.sample_cycles(random).empty());
 }
 
 TEST(FreeBosonTest, WindingHandlesZeroWeightAndLimits) {

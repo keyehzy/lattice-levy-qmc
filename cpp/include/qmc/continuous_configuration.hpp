@@ -35,16 +35,14 @@ struct ContinuousConfiguration {
 rotate_configuration_time_origin(const ContinuousConfiguration &state, const Model &model,
                                  double shift);
 
-// Samples the continuous event representation of the exact canonical ideal measure.
+// Samples the continuous event representation of a retained canonical ensemble.
 [[nodiscard]] ContinuousConfiguration
-sample_ideal_continuous_configuration(const Model &model, Random &random,
+sample_ideal_continuous_configuration(const CanonicalEnsemble &ensemble, Random &random,
                                       const NumericalOptions &options = NumericalOptions{});
 
-// Reuses a canonical table computed for model. This overload is intended for
-// chains that make repeated global ideal proposals.
+// One-off convenience overload; repeated workflows should retain a CanonicalEnsemble.
 [[nodiscard]] ContinuousConfiguration
-sample_ideal_continuous_configuration(const Model &model, const FreeBosonTable &table,
-                                      Random &random,
+sample_ideal_continuous_configuration(const Model &model, Random &random,
                                       const NumericalOptions &options = NumericalOptions{});
 
 } // namespace qmc

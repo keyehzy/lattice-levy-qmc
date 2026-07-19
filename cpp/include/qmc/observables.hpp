@@ -22,8 +22,8 @@ struct CanonicalThermodynamics {
   std::vector<double> addition_chemical_potential;
 };
 
-[[nodiscard]] CanonicalThermodynamics canonical_thermodynamics(const Model &model,
-                                                               const FreeBosonTable &table);
+[[nodiscard]] CanonicalThermodynamics canonical_thermodynamics(const CanonicalEnsemble &ensemble);
+[[nodiscard]] CanonicalThermodynamics canonical_thermodynamics(const Model &model);
 
 struct MomentumMode {
   // Integer components k_alpha in q_alpha = 2*pi*k_alpha/L.
@@ -45,8 +45,8 @@ struct MomentumDistribution {
 };
 
 // Returns every finite-torus momentum mode. Mode zero is q=(0,...,0).
-[[nodiscard]] MomentumDistribution momentum_distribution(const Model &model,
-                                                         const FreeBosonTable &table);
+[[nodiscard]] MomentumDistribution momentum_distribution(const CanonicalEnsemble &ensemble);
+[[nodiscard]] MomentumDistribution momentum_distribution(const Model &model);
 
 struct OneBodyDensityPoint {
   // Torus displacement components in [0, L).
@@ -55,8 +55,9 @@ struct OneBodyDensityPoint {
 };
 
 // Translation-invariant <a_r^dagger a_{r+delta}>, returned for every delta.
-[[nodiscard]] std::vector<OneBodyDensityPoint> one_body_density_matrix(const Model &model,
-                                                                       const FreeBosonTable &table);
+[[nodiscard]] std::vector<OneBodyDensityPoint>
+one_body_density_matrix(const CanonicalEnsemble &ensemble);
+[[nodiscard]] std::vector<OneBodyDensityPoint> one_body_density_matrix(const Model &model);
 
 struct ExactCycleStatistics {
   // All arrays are indexed by cycle length; index zero is unused and set to zero.
@@ -65,8 +66,12 @@ struct ExactCycleStatistics {
   std::vector<double> particle_probability;
 };
 
-[[nodiscard]] ExactCycleStatistics exact_cycle_statistics(std::size_t particle_count,
-                                                          const FreeBosonTable &table);
+[[nodiscard]] ExactCycleStatistics exact_cycle_statistics(const CanonicalEnsemble &ensemble);
+// A prefix query uses the ensemble's beta, lattice, and hopping and rejects counts
+// greater than ensemble.model().particle_count.
+[[nodiscard]] ExactCycleStatistics exact_cycle_statistics(const CanonicalEnsemble &ensemble,
+                                                          std::size_t particle_count);
+[[nodiscard]] ExactCycleStatistics exact_cycle_statistics(const Model &model);
 [[nodiscard]] std::vector<std::size_t>
 sampled_cycle_histogram(const IdealBosonConfiguration &configuration);
 [[nodiscard]] std::size_t longest_cycle_length(const IdealBosonConfiguration &configuration);
@@ -75,12 +80,15 @@ sampled_cycle_histogram(const IdealBosonConfiguration &configuration);
 [[nodiscard]] Site total_winding(const IdealBosonConfiguration &configuration);
 
 // Exact log Z_N for a boundary twist phi. Each component enters as q_alpha + phi_alpha/L.
+[[nodiscard]] double log_canonical_partition_twisted(const CanonicalEnsemble &ensemble,
+                                                     std::span<const double> twist);
 [[nodiscard]] double log_canonical_partition_twisted(const Model &model,
                                                      std::span<const double> twist);
 
 // Exact zero-twist curvature d^2 F_N/d phi_axis^2. It equals <W_axis^2>/beta.
-[[nodiscard]] double twist_free_energy_curvature(const Model &model, const FreeBosonTable &table,
+[[nodiscard]] double twist_free_energy_curvature(const CanonicalEnsemble &ensemble,
                                                  std::size_t axis);
+[[nodiscard]] double twist_free_energy_curvature(const Model &model, std::size_t axis);
 
 struct EqualTimeObservables {
   // Flat site/momentum ordering uses axis zero as the least-significant base-L digit.

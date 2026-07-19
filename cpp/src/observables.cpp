@@ -15,26 +15,6 @@
 namespace qmc {
 namespace {
 
-void validate_table(const FreeBosonTable &table, const std::size_t particle_count) {
-  if (particle_count == std::numeric_limits<std::size_t>::max() ||
-      table.log_z.size() < particle_count + 1 || table.log_Z.size() < particle_count + 1) {
-    throw std::invalid_argument("canonical table is too short");
-  }
-  if (table.log_Z[0] != 0.0) {
-    throw std::invalid_argument("canonical table must have log_Z[0] == 0");
-  }
-  for (std::size_t particles = 0; particles <= particle_count; ++particles) {
-    if (!std::isfinite(table.log_Z[particles])) {
-      throw std::invalid_argument("canonical table contains a non-finite log_Z value");
-    }
-  }
-  for (std::size_t length = 1; length <= particle_count; ++length) {
-    if (!std::isfinite(table.log_z[length])) {
-      throw std::invalid_argument("canonical table contains a non-finite log_z value");
-    }
-  }
-}
-
 std::vector<std::size_t> decode_flat_index(std::size_t flat, const Model &model) {
   const auto linear_size = static_cast<std::size_t>(model.linear_size);
   std::vector<std::size_t> components(model.dimension);
@@ -174,16 +154,18 @@ double phase_for_indices(std::span<const std::size_t> left, std::span<const std:
   return phase;
 }
 
-std::pair<double, double> occupation_moments(const double energy, const Model &model,
-                                             const FreeBosonTable &table) {
+std::pair<double, double> occupation_moments(const double energy,
+                                             const CanonicalEnsemble &ensemble) {
+  const Model &model = ensemble.model();
+  const auto log_Z = ensemble.log_partitions();
   if (model.particle_count == 0) {
     return {0.0, 0.0};
   }
   std::vector<double> occupation_terms(model.particle_count);
   for (std::size_t length = 1; length <= model.particle_count; ++length) {
     const double duration = static_cast<double>(length) * model.beta;
-    occupation_terms[length - 1] = table.log_Z[model.particle_count - length] -
-                                   table.log_Z[model.particle_count] - (duration * energy);
+    occupation_terms[length - 1] =
+        log_Z[model.particle_count - length] - log_Z[model.particle_count] - (duration * energy);
   }
   const double occupation = std::exp(log_sum_exp(occupation_terms));
 
@@ -193,8 +175,8 @@ std::pair<double, double> occupation_moments(const double energy, const Model &m
     for (std::size_t length = 2; length <= model.particle_count; ++length) {
       const double duration = static_cast<double>(length) * model.beta;
       factorial_terms[length - 2] = std::log(2.0 * static_cast<double>(length - 1)) +
-                                    table.log_Z[model.particle_count - length] -
-                                    table.log_Z[model.particle_count] - (duration * energy);
+                                    log_Z[model.particle_count - length] -
+                                    log_Z[model.particle_count] - (duration * energy);
     }
     factorial_moment = std::exp(log_sum_exp(factorial_terms));
   }
@@ -253,12 +235,13 @@ void accumulate_structure_factor(std::span<const std::size_t> positions, const M
 
 } // namespace
 
-CanonicalThermodynamics canonical_thermodynamics(const Model &model, const FreeBosonTable &table) {
-  model.validate();
+CanonicalThermodynamics canonical_thermodynamics(const CanonicalEnsemble &ensemble) {
+  const Model &model = ensemble.model();
+  const auto log_z = ensemble.log_cycle_weights();
+  const auto log_Z = ensemble.log_partitions();
   if (model.beta <= 0.0) {
     throw std::invalid_argument("canonical thermodynamics requires beta > 0");
   }
-  validate_table(table, model.particle_count);
 
   const auto count = model.particle_count;
   std::vector<LogDerivatives> log_z_derivatives(count + 1);
@@ -272,9 +255,8 @@ CanonicalThermodynamics canonical_thermodynamics(const Model &model, const FreeB
     std::vector<double> probabilities(particles);
     double probability_sum = 0.0;
     for (std::size_t length = 1; length <= particles; ++length) {
-      const double log_probability = table.log_z[length] + table.log_Z[particles - length] -
-                                     std::log(static_cast<double>(particles)) -
-                                     table.log_Z[particles];
+      const double log_probability = log_z[length] + log_Z[particles - length] -
+                                     std::log(static_cast<double>(particles)) - log_Z[particles];
       probabilities[length - 1] = std::exp(log_probability);
       probability_sum += probabilities[length - 1];
     }
@@ -306,10 +288,10 @@ CanonicalThermodynamics canonical_thermodynamics(const Model &model, const FreeB
       .addition_chemical_potential = std::vector<double>(count + 1, nan),
   };
   for (std::size_t particles = 0; particles <= count; ++particles) {
-    result.free_energy[particles] = -table.log_Z[particles] / model.beta;
+    result.free_energy[particles] = -log_Z[particles] / model.beta;
     result.energy[particles] = -log_Z_first[particles];
     result.heat_capacity[particles] = model.beta * model.beta * log_Z_second[particles];
-    result.entropy[particles] = table.log_Z[particles] + (model.beta * result.energy[particles]);
+    result.entropy[particles] = log_Z[particles] + (model.beta * result.energy[particles]);
     if (particles > 0) {
       result.addition_chemical_potential[particles] =
           result.free_energy[particles] - result.free_energy[particles - 1];
@@ -318,9 +300,12 @@ CanonicalThermodynamics canonical_thermodynamics(const Model &model, const FreeB
   return result;
 }
 
-MomentumDistribution momentum_distribution(const Model &model, const FreeBosonTable &table) {
-  model.validate();
-  validate_table(table, model.particle_count);
+CanonicalThermodynamics canonical_thermodynamics(const Model &model) {
+  return canonical_thermodynamics(CanonicalEnsemble(model));
+}
+
+MomentumDistribution momentum_distribution(const CanonicalEnsemble &ensemble) {
+  const Model &model = ensemble.model();
   const auto volume = model.volume();
   MomentumDistribution result;
   result.modes.reserve(volume);
@@ -335,7 +320,7 @@ MomentumDistribution momentum_distribution(const Model &model, const FreeBosonTa
     }
     mode.energy = mode_energy(mode.indices, model);
 
-    const auto [occupation, variance] = occupation_moments(mode.energy, model, table);
+    const auto [occupation, variance] = occupation_moments(mode.energy, ensemble);
     mode.occupation = occupation;
     mode.occupation_variance = variance;
     result.kinetic_energy += mode.energy * mode.occupation;
@@ -354,10 +339,14 @@ MomentumDistribution momentum_distribution(const Model &model, const FreeBosonTa
   return result;
 }
 
-std::vector<OneBodyDensityPoint> one_body_density_matrix(const Model &model,
-                                                         const FreeBosonTable &table) {
-  model.validate();
-  validate_table(table, model.particle_count);
+MomentumDistribution momentum_distribution(const Model &model) {
+  return momentum_distribution(CanonicalEnsemble(model));
+}
+
+std::vector<OneBodyDensityPoint> one_body_density_matrix(const CanonicalEnsemble &ensemble) {
+  const Model &model = ensemble.model();
+  const auto log_z = ensemble.log_cycle_weights();
+  const auto log_Z = ensemble.log_partitions();
   const auto volume = model.volume();
   const auto linear_size = static_cast<std::size_t>(model.linear_size);
 
@@ -388,9 +377,8 @@ std::vector<OneBodyDensityPoint> one_body_density_matrix(const Model &model,
 
   std::vector<double> cycle_weights(model.particle_count + 1);
   for (std::size_t length = 1; length <= model.particle_count; ++length) {
-    cycle_weights[length] =
-        std::exp(table.log_z[length] + table.log_Z[model.particle_count - length] -
-                 table.log_Z[model.particle_count]);
+    cycle_weights[length] = std::exp(log_z[length] + log_Z[model.particle_count - length] -
+                                     log_Z[model.particle_count]);
   }
 
   std::vector<OneBodyDensityPoint> result;
@@ -413,9 +401,21 @@ std::vector<OneBodyDensityPoint> one_body_density_matrix(const Model &model,
   return result;
 }
 
-ExactCycleStatistics exact_cycle_statistics(const std::size_t particle_count,
-                                            const FreeBosonTable &table) {
-  validate_table(table, particle_count);
+std::vector<OneBodyDensityPoint> one_body_density_matrix(const Model &model) {
+  return one_body_density_matrix(CanonicalEnsemble(model));
+}
+
+ExactCycleStatistics exact_cycle_statistics(const CanonicalEnsemble &ensemble) {
+  return exact_cycle_statistics(ensemble, ensemble.model().particle_count);
+}
+
+ExactCycleStatistics exact_cycle_statistics(const CanonicalEnsemble &ensemble,
+                                            const std::size_t particle_count) {
+  if (particle_count > ensemble.model().particle_count) {
+    throw std::out_of_range("cycle-statistics particle count exceeds the ensemble capacity");
+  }
+  const auto log_z = ensemble.log_cycle_weights();
+  const auto log_Z = ensemble.log_partitions();
   ExactCycleStatistics result{
       .expected_cycle_count = std::vector<double>(particle_count + 1),
       .expected_particles = std::vector<double>(particle_count + 1),
@@ -423,8 +423,8 @@ ExactCycleStatistics exact_cycle_statistics(const std::size_t particle_count,
   };
   for (std::size_t length = 1; length <= particle_count; ++length) {
     result.expected_cycle_count[length] =
-        std::exp(table.log_z[length] + table.log_Z[particle_count - length] -
-                 table.log_Z[particle_count] - std::log(static_cast<double>(length)));
+        std::exp(log_z[length] + log_Z[particle_count - length] - log_Z[particle_count] -
+                 std::log(static_cast<double>(length)));
     result.expected_particles[length] =
         static_cast<double>(length) * result.expected_cycle_count[length];
     if (particle_count > 0) {
@@ -433,6 +433,10 @@ ExactCycleStatistics exact_cycle_statistics(const std::size_t particle_count,
     }
   }
   return result;
+}
+
+ExactCycleStatistics exact_cycle_statistics(const Model &model) {
+  return exact_cycle_statistics(CanonicalEnsemble(model));
 }
 
 std::vector<std::size_t> sampled_cycle_histogram(const IdealBosonConfiguration &configuration) {
@@ -472,8 +476,9 @@ Site total_winding(const IdealBosonConfiguration &configuration) {
   return result;
 }
 
-double log_canonical_partition_twisted(const Model &model, std::span<const double> twist) {
-  model.validate();
+double log_canonical_partition_twisted(const CanonicalEnsemble &ensemble,
+                                       std::span<const double> twist) {
+  const Model &model = ensemble.model();
   if (twist.size() != model.dimension) {
     throw std::invalid_argument("twist vector has the wrong dimension");
   }
@@ -517,16 +522,20 @@ double log_canonical_partition_twisted(const Model &model, std::span<const doubl
   return log_Z[count];
 }
 
-double twist_free_energy_curvature(const Model &model, const FreeBosonTable &table,
-                                   const std::size_t axis) {
-  model.validate();
+double log_canonical_partition_twisted(const Model &model, std::span<const double> twist) {
+  return log_canonical_partition_twisted(CanonicalEnsemble(model), twist);
+}
+
+double twist_free_energy_curvature(const CanonicalEnsemble &ensemble, const std::size_t axis) {
+  const Model &model = ensemble.model();
+  const auto log_z = ensemble.log_cycle_weights();
+  const auto log_Z = ensemble.log_partitions();
   if (model.beta <= 0.0) {
     throw std::invalid_argument("twist free-energy curvature requires beta > 0");
   }
   if (axis >= model.dimension) {
     throw std::out_of_range("twist axis is out of range");
   }
-  validate_table(table, model.particle_count);
 
   std::vector<LogDerivatives> log_z_derivatives(model.particle_count + 1);
   const double inverse_size = 1.0 / static_cast<double>(model.linear_size);
@@ -564,8 +573,8 @@ double twist_free_energy_curvature(const Model &model, const FreeBosonTable &tab
     std::vector<double> probabilities(particles);
     for (std::size_t length = 1; length <= particles; ++length) {
       probabilities[length - 1] =
-          std::exp(table.log_z[length] + table.log_Z[particles - length] -
-                   std::log(static_cast<double>(particles)) - table.log_Z[particles]);
+          std::exp(log_z[length] + log_Z[particles - length] -
+                   std::log(static_cast<double>(particles)) - log_Z[particles]);
       probability_sum += probabilities[length - 1];
     }
     for (std::size_t length = 1; length <= particles; ++length) {
@@ -580,6 +589,10 @@ double twist_free_energy_curvature(const Model &model, const FreeBosonTable &tab
   }
   const double curvature = -second[model.particle_count] / model.beta;
   return clamp_nonnegative_roundoff(curvature, std::abs(curvature));
+}
+
+double twist_free_energy_curvature(const Model &model, const std::size_t axis) {
+  return twist_free_energy_curvature(CanonicalEnsemble(model), axis);
 }
 
 EqualTimeObservables equal_time_observables(const IdealBosonConfiguration &configuration) {

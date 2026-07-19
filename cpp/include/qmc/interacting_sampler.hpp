@@ -173,7 +173,7 @@ private:
   InteractingModel model_;
   NumericalOptions numerical_;
   Random random_;
-  FreeBosonTable free_table_;
+  CanonicalEnsemble free_ensemble_;
   ContinuousConfiguration state_;
   double pair_overlap_ = 0.0;
   double action_ = 0.0;

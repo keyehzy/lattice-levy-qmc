@@ -225,11 +225,11 @@ void IdealBosonConfiguration::validate() const {
   validate_endpoint_joining(*this);
 }
 
-IdealBosonConfiguration sample_ideal_boson_configuration(const Model &model,
+IdealBosonConfiguration sample_ideal_boson_configuration(const CanonicalEnsemble &ensemble,
                                                          const std::size_t time_links_per_beta,
                                                          Random &random,
                                                          const NumericalOptions &options) {
-  model.validate();
+  const Model &model = ensemble.model();
   options.validate();
   if (time_links_per_beta < 1) {
     throw std::invalid_argument("time_links_per_beta must be positive");
@@ -238,8 +238,7 @@ IdealBosonConfiguration sample_ideal_boson_configuration(const Model &model,
     throw std::overflow_error("world-line time-point count exceeds size_t");
   }
 
-  const FreeBosonTable table = canonical_table(model);
-  const std::vector<Cycle> cycle_labels = sample_cycle_labels(model.particle_count, table, random);
+  const std::vector<Cycle> cycle_labels = ensemble.sample_cycles(random);
 
   IdealBosonConfiguration configuration{
       .model = model,
@@ -249,7 +248,7 @@ IdealBosonConfiguration sample_ideal_boson_configuration(const Model &model,
       .worldlines = DenseWorldlines(model.particle_count, time_links_per_beta + 1, model.dimension),
       .worldlines_covering =
           DenseWorldlines(model.particle_count, time_links_per_beta + 1, model.dimension),
-      .log_ZN = table.log_Z[model.particle_count],
+      .log_ZN = ensemble.log_partition(model.particle_count),
   };
   configuration.cycles.reserve(cycle_labels.size());
 
@@ -305,6 +304,14 @@ IdealBosonConfiguration sample_ideal_boson_configuration(const Model &model,
 
   configuration.validate();
   return configuration;
+}
+
+IdealBosonConfiguration sample_ideal_boson_configuration(const Model &model,
+                                                         const std::size_t time_links_per_beta,
+                                                         Random &random,
+                                                         const NumericalOptions &options) {
+  return sample_ideal_boson_configuration(CanonicalEnsemble(model), time_links_per_beta, random,
+                                          options);
 }
 
 } // namespace qmc

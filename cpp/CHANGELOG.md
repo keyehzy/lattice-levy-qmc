@@ -9,10 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add an immutable `CanonicalEnsemble` that binds a validated free model to its
+  canonical recursion and supports explicit particle-number prefix reuse.
 - Add generated compile-time version metadata in `<qmc/version.hpp>`, sourced
   from the CMake project version.
 - Document the C++ refactoring audit, including correctness, performance,
   testing, packaging, and API follow-up work.
+
+### Changed
+
+- Route reusable ideal sampling and exact observables through
+  `CanonicalEnsemble`; the ideal demo and interacting sampler now construct the
+  canonical recursion once instead of rebuilding or accepting an independently
+  supplied table.
+
+### Removed
+
+- Remove the mutable public `FreeBosonTable` and APIs that accepted a `Model`
+  and canonical table separately, preventing mismatched physical provenance.
 
 ### Fixed
 

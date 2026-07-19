@@ -81,13 +81,13 @@ TEST(CanonicalObservablesTest, MatchesFockSpaceEnumeration) {
       .dimension = 1,
       .hopping = 0.8,
   };
-  const auto canonical = qmc::canonical_table(model);
-  const auto thermodynamics = qmc::canonical_thermodynamics(model, canonical);
-  const auto momentum = qmc::momentum_distribution(model, canonical);
+  const qmc::CanonicalEnsemble canonical(model);
+  const auto thermodynamics = qmc::canonical_thermodynamics(canonical);
+  const auto momentum = qmc::momentum_distribution(canonical);
   const auto brute = enumerate_fock_states(model);
   const auto particles = model.particle_count;
 
-  EXPECT_NEAR(std::exp(canonical.log_Z[particles]), brute.partition, 2e-13);
+  EXPECT_NEAR(std::exp(canonical.log_partition(particles)), brute.partition, 2e-13);
   EXPECT_NEAR(thermodynamics.free_energy[particles], -std::log(brute.partition) / model.beta,
               2e-13);
   EXPECT_NEAR(thermodynamics.energy[particles], brute.energy, 2e-13);
@@ -119,10 +119,10 @@ TEST(CanonicalObservablesTest, SatisfiesMomentumDensityMatrixAndCycleNormalizati
       .dimension = 2,
       .hopping = 0.9,
   };
-  const auto canonical = qmc::canonical_table(model);
-  const auto momentum = qmc::momentum_distribution(model, canonical);
-  const auto density_matrix = qmc::one_body_density_matrix(model, canonical);
-  const auto cycles = qmc::exact_cycle_statistics(model.particle_count, canonical);
+  const qmc::CanonicalEnsemble canonical(model);
+  const auto momentum = qmc::momentum_distribution(canonical);
+  const auto density_matrix = qmc::one_body_density_matrix(canonical);
+  const auto cycles = qmc::exact_cycle_statistics(canonical);
 
   const double occupation_sum = std::accumulate(
       momentum.modes.begin(), momentum.modes.end(), 0.0,
@@ -156,17 +156,19 @@ TEST(CanonicalObservablesTest, TwistCurvatureMatchesFiniteDifference) {
       .dimension = 2,
       .hopping = 0.7,
   };
-  const auto canonical = qmc::canonical_table(model);
-  const double curvature = qmc::twist_free_energy_curvature(model, canonical, 0);
+  const qmc::CanonicalEnsemble canonical(model);
+  const double curvature = qmc::twist_free_energy_curvature(canonical, 0);
   constexpr double step = 1e-3;
   const std::vector<double> zero(model.dimension);
   std::vector<double> positive(model.dimension);
   std::vector<double> negative(model.dimension);
   positive[0] = step;
   negative[0] = -step;
-  const double free_zero = -qmc::log_canonical_partition_twisted(model, zero) / model.beta;
-  const double free_positive = -qmc::log_canonical_partition_twisted(model, positive) / model.beta;
-  const double free_negative = -qmc::log_canonical_partition_twisted(model, negative) / model.beta;
+  const double free_zero = -qmc::log_canonical_partition_twisted(canonical, zero) / model.beta;
+  const double free_positive =
+      -qmc::log_canonical_partition_twisted(canonical, positive) / model.beta;
+  const double free_negative =
+      -qmc::log_canonical_partition_twisted(canonical, negative) / model.beta;
   const double finite_difference =
       (free_positive + free_negative - (2.0 * free_zero)) / (step * step);
   EXPECT_GT(curvature, 0.0);
@@ -286,12 +288,9 @@ TEST(CanonicalObservablesTest, HandlesEmptySystemAndRejectsUndefinedTemperatureQ
       .dimension = 1,
       .hopping = 1.0,
   };
-  const auto beta_zero_table = qmc::canonical_table(zero_temperature_parameter);
-  EXPECT_THROW(
-      static_cast<void>(qmc::canonical_thermodynamics(zero_temperature_parameter, beta_zero_table)),
-      std::invalid_argument);
-  EXPECT_THROW(static_cast<void>(qmc::twist_free_energy_curvature(zero_temperature_parameter,
-                                                                  beta_zero_table, 0)),
+  const qmc::CanonicalEnsemble beta_zero(zero_temperature_parameter);
+  EXPECT_THROW(static_cast<void>(qmc::canonical_thermodynamics(beta_zero)), std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(qmc::twist_free_energy_curvature(beta_zero, 0)),
                std::invalid_argument);
 
   const qmc::Model empty{
@@ -301,10 +300,10 @@ TEST(CanonicalObservablesTest, HandlesEmptySystemAndRejectsUndefinedTemperatureQ
       .dimension = 1,
       .hopping = 1.0,
   };
-  const auto empty_table = qmc::canonical_table(empty);
-  const auto thermodynamics = qmc::canonical_thermodynamics(empty, empty_table);
-  const auto momentum = qmc::momentum_distribution(empty, empty_table);
-  const auto density_matrix = qmc::one_body_density_matrix(empty, empty_table);
+  const qmc::CanonicalEnsemble empty_ensemble(empty);
+  const auto thermodynamics = qmc::canonical_thermodynamics(empty_ensemble);
+  const auto momentum = qmc::momentum_distribution(empty_ensemble);
+  const auto density_matrix = qmc::one_body_density_matrix(empty_ensemble);
   EXPECT_DOUBLE_EQ(thermodynamics.free_energy.front(), 0.0);
   EXPECT_DOUBLE_EQ(momentum.condensate_occupation, 0.0);
   EXPECT_TRUE(std::ranges::all_of(

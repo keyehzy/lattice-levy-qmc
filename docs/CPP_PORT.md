@@ -118,9 +118,18 @@ struct ContinuousPath {
   std::size_t event_count() const noexcept;
 };
 
-struct FreeBosonTable {
-  std::vector<double> log_z; // index 0 unused/-infinity
-  std::vector<double> log_Z; // log_Z[0] == 0
+class CanonicalEnsemble {
+public:
+  explicit CanonicalEnsemble(Model);
+  const Model& model() const noexcept;
+  std::span<const double> log_cycle_weights() const noexcept;
+  std::span<const double> log_partitions() const noexcept;
+  std::vector<Cycle> sample_cycles(Random&) const;
+
+private:
+  Model model_;
+  std::vector<double> log_z_; // index 0 unused/-infinity
+  std::vector<double> log_Z_; // log_Z_[0] == 0
 };
 
 struct ContinuousConfiguration {
@@ -221,9 +230,6 @@ std::vector<Site> sample_bridge_covering(
     double hopping, Random&, const NumericalOptions&);
 
 double log_one_particle_trace(double duration, const Model&);
-FreeBosonTable canonical_table(const Model&);
-std::vector<Cycle> sample_cycle_labels(
-    const FreeBosonTable&, std::size_t particle_count, Random&);
 Coord sample_winding_1d(
     Coord linear_size, double duration, double hopping,
     Random&, const NumericalOptions&);
@@ -310,8 +316,8 @@ sampler.run(run_options, [](std::size_t sample, const Observables& value) {
 | `_sample_bessel_pair_count` | `free_numerics` | Shared primitive, no longer private to the grid sampler |
 | `sample_midpoint_covering*`, `sample_bridge_covering` | `free_numerics` / free path API | Dense observation-grid output |
 | `periodic_kernel_scaled_1d` | `free_numerics` | Optional if direct torus midpoint sampling remains public |
-| `canonical_log_partition` | `free_boson` | Return `FreeBosonTable`; cache per immutable model |
-| `sample_cycle_labels`, `sample_winding_1d` | `free_boson` | Topology and winding draws |
+| `canonical_log_partition` | `CanonicalEnsemble` | Private recursion bound to its validated model |
+| `sample_cycle_labels`, `sample_winding_1d` | `CanonicalEnsemble` / `free_boson` | Topology and winding draws |
 | `CyclePath`, `IdealBosonConfiguration` | `configuration` | Dense ideal-only records |
 | `ContinuousPath` | `path` | Sparse immutable/value-like path |
 | `ContinuousConfiguration` | `configuration` | Mutable accepted Markov state |
@@ -415,7 +421,7 @@ implementation handles the range safely and has the same acceptance law.
 
 First reproduce behavior, then optimize measured bottlenecks. Likely wins are:
 
-1. cache `FreeBosonTable` and momentum cosines for an immutable model;
+1. retain `CanonicalEnsemble` and cache momentum cosines for its immutable model;
 2. use axis/sign events instead of dense jump vectors;
 3. reserve event buffers from sampled jump counts before filling them;
 4. merge already sorted per-path event streams for the action instead of

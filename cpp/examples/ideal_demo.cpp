@@ -219,7 +219,8 @@ struct SampleAverages {
   double macroscopic_cycle_fraction = 0.0;
 };
 
-SampleAverages sample_ensemble(const CommandLine &command_line, qmc::Random &random) {
+SampleAverages sample_ensemble(const CommandLine &command_line,
+                               const qmc::CanonicalEnsemble &ensemble, qmc::Random &random) {
   const auto &model = command_line.model;
   const auto volume = model.volume();
   SampleAverages averages{
@@ -240,6 +241,15 @@ SampleAverages sample_ensemble(const CommandLine &command_line, qmc::Random &ran
       .displacement_probability = std::vector<double>(command_line.time_links * volume),
       .winding_second_moment = std::vector<double>(model.dimension),
       .winding_fourth_moment = std::vector<double>(model.dimension),
+      .winding_squared_trace = {},
+      .winding_histogram = {},
+      .winding_squared_histogram = {},
+      .winding_conditioned_cycles = {},
+      .cycle_geometry_samples = {},
+      .mean_occupation_squared = 0.0,
+      .mean_factorial_occupation = 0.0,
+      .nonzero_winding_probability = 0.0,
+      .macroscopic_cycle_fraction = 0.0,
   };
   averages.winding_squared_trace.reserve(command_line.samples);
   const std::size_t macroscopic_threshold =
@@ -247,7 +257,7 @@ SampleAverages sample_ensemble(const CommandLine &command_line, qmc::Random &ran
 
   for (std::size_t sample = 0; sample < command_line.samples; ++sample) {
     const auto configuration =
-        qmc::sample_ideal_boson_configuration(model, command_line.time_links, random);
+        qmc::sample_ideal_boson_configuration(ensemble, command_line.time_links, random);
     const auto cycle_histogram = qmc::sampled_cycle_histogram(configuration);
     for (std::size_t length = 1; length <= model.particle_count; ++length) {
       averages.cycle_count[length] += static_cast<double>(cycle_histogram[length]);
@@ -693,7 +703,7 @@ std::filesystem::path write_gnuplot_script(const std::filesystem::path &director
   return script_path;
 }
 
-void print_summary(const CommandLine &command_line, const qmc::FreeBosonTable &canonical,
+void print_summary(const CommandLine &command_line, const qmc::CanonicalEnsemble &canonical,
                    const std::optional<qmc::CanonicalThermodynamics> &thermodynamics,
                    const qmc::MomentumDistribution &momentum,
                    const std::vector<qmc::OneBodyDensityPoint> &density_matrix,
@@ -727,7 +737,7 @@ void print_summary(const CommandLine &command_line, const qmc::FreeBosonTable &c
   std::cout << "model: N=" << model.particle_count << " beta=" << model.beta
             << " L=" << model.linear_size << " d=" << model.dimension << " t=" << model.hopping
             << " M=" << command_line.time_links << " samples=" << command_line.samples << '\n';
-  std::cout << "log Z_N = " << canonical.log_Z[model.particle_count] << '\n';
+  std::cout << "log Z_N = " << canonical.log_partition(model.particle_count) << '\n';
   if (thermodynamics.has_value()) {
     const auto particles = model.particle_count;
     std::cout << "thermodynamics: F=" << thermodynamics->free_energy[particles]
@@ -796,23 +806,21 @@ int main(const int argc, char **argv) {
 
     const auto directory = std::filesystem::absolute(command_line->output_directory);
     std::filesystem::create_directories(directory);
-    const auto canonical = qmc::canonical_table(command_line->model);
+    const qmc::CanonicalEnsemble canonical(command_line->model);
     std::optional<qmc::CanonicalThermodynamics> thermodynamics;
     std::vector<double> twist_curvature(command_line->model.dimension);
     if (command_line->model.beta > 0.0) {
-      thermodynamics = qmc::canonical_thermodynamics(command_line->model, canonical);
+      thermodynamics = qmc::canonical_thermodynamics(canonical);
       for (std::size_t axis = 0; axis < command_line->model.dimension; ++axis) {
-        twist_curvature[axis] =
-            qmc::twist_free_energy_curvature(command_line->model, canonical, axis);
+        twist_curvature[axis] = qmc::twist_free_energy_curvature(canonical, axis);
       }
     }
-    const auto momentum = qmc::momentum_distribution(command_line->model, canonical);
-    const auto density_matrix = qmc::one_body_density_matrix(command_line->model, canonical);
-    const auto exact_cycles =
-        qmc::exact_cycle_statistics(command_line->model.particle_count, canonical);
+    const auto momentum = qmc::momentum_distribution(canonical);
+    const auto density_matrix = qmc::one_body_density_matrix(canonical);
+    const auto exact_cycles = qmc::exact_cycle_statistics(canonical);
 
     qmc::Random random(command_line->seed);
-    const auto sampled = sample_ensemble(*command_line, random);
+    const auto sampled = sample_ensemble(*command_line, canonical, random);
     const qmc::ImaginaryTimeDensityCorrelations averaged_correlations{
         .time_points = command_line->time_links,
         .spatial_points = command_line->model.volume(),

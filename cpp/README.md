@@ -82,16 +82,22 @@ qmc::Model model{
     .dimension = 2,
     .hopping = 1.0,
 };
+const qmc::CanonicalEnsemble ensemble(model);
 qmc::Random random(2026);
 const auto configuration =
-    qmc::sample_ideal_boson_configuration(model, 64, random);
+    qmc::sample_ideal_boson_configuration(ensemble, 64, random);
 configuration.validate();
-const auto table = qmc::canonical_table(model);
-const auto thermodynamics = qmc::canonical_thermodynamics(model, table);
-const auto momentum = qmc::momentum_distribution(model, table);
+const auto thermodynamics = qmc::canonical_thermodynamics(ensemble);
+const auto momentum = qmc::momentum_distribution(ensemble);
 const auto equal_time = qmc::equal_time_observables(configuration);
 const auto correlations = qmc::retained_density_correlations(configuration);
 ```
+
+`CanonicalEnsemble` owns the validated model and its matching canonical
+recursion. Retain it when drawing multiple samples or evaluating several exact
+observables; model-only overloads remain available for one-off calls. Its
+read-only recursion views and cycle/statistics overloads may also reuse any
+particle-number prefix through the ensemble's configured maximum.
 
 `worldlines` stores torus coordinates, while `worldlines_covering` retains
 unwrapped coordinates and therefore the winding information. `64` is the

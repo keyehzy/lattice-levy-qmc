@@ -95,18 +95,20 @@ TEST(CycleDistributionTest, MatchesCanonicalLengthProbabilities) {
       .dimension = 1,
       .hopping = 0.9,
   };
-  const auto table = qmc::canonical_table(model);
+  const qmc::CanonicalEnsemble ensemble(model);
+  const auto log_z = ensemble.log_cycle_weights();
+  const auto log_Z = ensemble.log_partitions();
   std::vector<double> exact(model.particle_count);
   for (std::size_t length = 1; length <= model.particle_count; ++length) {
-    exact[length - 1] = std::exp(table.log_z[length] + table.log_Z[model.particle_count - length] -
-                                 std::log(static_cast<double>(model.particle_count)) -
-                                 table.log_Z[model.particle_count]);
+    exact[length - 1] =
+        std::exp(log_z[length] + log_Z[model.particle_count - length] -
+                 std::log(static_cast<double>(model.particle_count)) - log_Z[model.particle_count]);
   }
 
   std::vector<std::size_t> counts(model.particle_count, 0);
   qmc::Random random(774);
   for (std::size_t sample = 0; sample < sample_count; ++sample) {
-    const auto cycles = qmc::sample_cycle_labels(model.particle_count, table, random);
+    const auto cycles = ensemble.sample_cycles(random);
     ASSERT_FALSE(cycles.empty());
     ++counts[cycles.front().size() - 1];
   }
@@ -151,16 +153,16 @@ TEST(ConfigurationObservableDistributionTest, MatchesExactCycleWindingAndDensity
       .dimension = 1,
       .hopping = 0.8,
   };
-  const auto table = qmc::canonical_table(model);
-  const auto exact_cycles = qmc::exact_cycle_statistics(model.particle_count, table);
+  const qmc::CanonicalEnsemble ensemble(model);
+  const auto exact_cycles = qmc::exact_cycle_statistics(ensemble);
   const double expected_winding_squared =
-      model.beta * qmc::twist_free_energy_curvature(model, table, 0);
+      model.beta * qmc::twist_free_energy_curvature(ensemble, 0);
   std::vector<double> cycle_counts(model.particle_count + 1);
   std::vector<double> density(model.volume());
   double winding_squared_sum = 0.0;
   qmc::Random random(29173);
   for (std::size_t sample = 0; sample < sample_count; ++sample) {
-    const auto configuration = qmc::sample_ideal_boson_configuration(model, 1, random);
+    const auto configuration = qmc::sample_ideal_boson_configuration(ensemble, 1, random);
     const auto histogram = qmc::sampled_cycle_histogram(configuration);
     for (std::size_t length = 1; length <= model.particle_count; ++length) {
       cycle_counts[length] += static_cast<double>(histogram[length]);

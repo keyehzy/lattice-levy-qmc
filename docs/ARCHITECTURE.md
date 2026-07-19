@@ -157,9 +157,10 @@ Z_0=1,\qquad
 Z_n=\frac{1}{n}\sum_{\ell=1}^{n}z_\ell Z_{n-\ell}.
 \]
 
-`canonical_log_partition` computes `log_z[1:N+1]` and `log_Z[0:N+1]` entirely
-in log space. `sample_cycle_labels` then repeatedly samples the length of the
-cycle containing the smallest remaining label with probability
+`CanonicalEnsemble` computes `log_z[1:N+1]` and `log_Z[0:N+1]` entirely in log
+space and keeps them bound to the validated model that produced them. Its
+`sample_cycles` operation then repeatedly samples the length of the cycle
+containing the smallest remaining label with probability
 
 \[
 P(\ell\mid n)=\frac{z_\ell Z_{n-\ell}}{n Z_n}.
@@ -332,7 +333,7 @@ retained winding support.
 
 | Operation | Time | Storage |
 | --- | --- | --- |
-| Canonical table | `O(N*L + N**2)` | `O(N)` |
+| Canonical ensemble construction | `O(N*L + N**2)` | `O(N)` |
 | Cycle-label draw | `O(N**2)` in the list-based implementation | `O(N)` |
 | Winding draw per coordinate | `O(W)` Bessel evaluations per support trial | `O(W)` |
 | Ideal skeleton | `O(N*M*d)` midpoint draws plus inversion work | `O(N*M*d)` |
