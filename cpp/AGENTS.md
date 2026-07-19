@@ -8,13 +8,15 @@ level `docs/` directory.
 
 ## Scope
 
-- Port only the ideal, non-interacting (`U = 0`) sampler initially.
-- Treat the Python ideal-gas implementation and its tests as the behavioral
-  reference. Preserve probability laws, numerical tolerances, coordinate
-  conventions, winding sectors, permutation endpoints, and public results;
-  byte-for-byte random streams are not required.
-- Do not add interacting-path or finite-`U` abstractions speculatively. Add
-  extension points only when they simplify the ideal implementation today.
+- Support both the ideal retained-grid sampler and the exact continuous-time
+  finite-`U` sampler. Keep their path representations distinct: the retained
+  ideal grid is not sufficient for the interacting action.
+- Treat the corresponding Python implementations and tests as behavioral
+  references. Preserve probability laws, numerical tolerances, coordinate
+  conventions, event-boundary semantics, winding sectors, permutation
+  endpoints, and public results; byte-for-byte random streams are not required.
+- Finite-`U` proposals must be exact free conditional or independence draws so
+  their Metropolis ratio contains only the interaction-action difference.
 - Consult `docs/ARCHITECTURE.md` for algorithm semantics and
   `docs/CPP_PORT.md` for the porting contract and suggested interfaces.
 
@@ -79,8 +81,9 @@ the Python tree.
   Centralize stable primitives such as log-sum-exp and discrete CDF inversion.
 - Preserve covering-space paths separately from coordinates reduced modulo
   `L`; winding information must never be inferred from reduced coordinates.
-- Preserve the meaning of `M`: it controls retained bridge points and is not a
-  Trotter approximation.
+- Preserve the meaning of `M`: it controls retained bridge points in the ideal
+  sampler and is not a Trotter approximation. The interacting sampler is sparse
+  and event-driven and has no `M` parameter.
 - Make truncation controls such as tail tolerance and maximum support explicit
   numerical options. A truncated discrete distribution must have a documented
   bound on omitted probability mass and fail clearly if its safety limit is

@@ -6,14 +6,13 @@ calling out semantics that must survive the change of language. It does not
 require the C++ implementation to reproduce NumPy's memory layout or random
 stream byte for byte.
 
-The ideal-sampler stages described in sections 8–10 are implemented under
-`cpp/` in the `qmc` namespace. GSL supplies the scaled modified Bessel
-function, and the deterministic and statistical GoogleTests compare the port
-with the Python/SciPy reference. The C++ ideal observables layer implements
-canonical thermodynamics, momentum and one-body measurements, cycle and
-winding statistics, and density/geometry correlations on the exact retained
-imaginary-time grid; see `MEASUREMENTS.md`. Continuous paths and finite-`U`
-sampling remain Python-only and outside the current C++ port.
+All stages described in sections 8–10 are implemented under `cpp/` in the
+`qmc` namespace. GSL supplies the scaled modified Bessel function, and the
+deterministic and statistical GoogleTests compare the port with the
+Python/SciPy and exact-diagonalization references. The `qmc::ideal` target owns
+the shared free numerics and retained-grid sampler. The `qmc::interacting`
+target adds sparse paths, continuous configurations, exact overlap/action
+evaluation, finite-`U` moves, typed measurements, and an interacting driver.
 
 ## 1. Porting contract
 
@@ -44,10 +43,11 @@ include/qmc/
   free_numerics.hpp     log-sum-exp, Bessel count and winding inversion
   free_boson.hpp        torus trace, canonical table, cycle sampling
   observables.hpp       ideal canonical and retained-grid measurements
-  path.hpp              sites, events, continuous paths, bridge operations
-  configuration.hpp     ideal and continuous configuration records
+  path.hpp              events, continuous paths, bridge operations
+  configuration.hpp     retained-grid ideal configuration records
+  continuous_configuration.hpp  continuous configuration records
   interaction.hpp       overlap/action and observable estimators
-  sampler.hpp           move statistics and finite-U Markov chain
+  interacting_sampler.hpp  move statistics and finite-U Markov chain
 src/
   ...matching implementation files...
 tests/
@@ -82,11 +82,17 @@ struct Model {
   Coord linear_size;
   std::size_t dimension;
   double hopping;
+
+  void validate() const;      // beta >= 0
+  std::size_t volume() const; // checked integer exponentiation
+};
+
+struct InteractingModel {
+  Model free;
   double interaction;
 
-  void validate_free() const;        // beta >= 0
-  void validate_interacting() const; // beta > 0
-  std::size_t volume() const;         // checked integer exponentiation
+  void validate() const;      // beta > 0 and finite interaction
+  std::size_t volume() const;
 };
 
 struct NumericalOptions {
@@ -226,10 +232,10 @@ ContinuousPath sample_continuous_bridge(
     const Site& a, const Site& b, double duration, double hopping,
     Random&, const NumericalOptions&);
 
-std::vector<ContinuousPath> split_path(
+std::vector<ContinuousPath> split_continuous_path(
     const ContinuousPath&, std::span<const double> cut_times);
 
-ContinuousPath resample_interval(
+ContinuousPath resample_path_interval(
     const ContinuousPath&, double tau0, double tau1, double hopping,
     Random&, const NumericalOptions&);
 ```
@@ -262,7 +268,7 @@ struct SweepOptions {
 
 class InteractingSampler {
  public:
-  InteractingSampler(Model, NumericalOptions, std::uint64_t seed);
+  InteractingSampler(InteractingModel, NumericalOptions, std::uint64_t seed);
 
   bool segment_update(
       std::optional<ParticleId> particle = {},
@@ -278,7 +284,7 @@ class InteractingSampler {
   const std::unordered_map<std::string, MoveStatistics>& statistics() const;
 
  private:
-  Model model_;
+  InteractingModel model_;
   NumericalOptions numerical_;
   Random random_;
   ContinuousConfiguration state_;
@@ -473,18 +479,20 @@ with enough samples to detect meaningful bias and thresholds loose enough to
 avoid flaky failures; keep expensive ED/statistical validation separate from
 fast unit tests if necessary.
 
-## 12. Decisions to make before freezing the C++ API
+## 12. Settled C++ API decisions
 
-- Numerical backend for scaled Bessel functions.
-- Header-only templates versus a compiled library and stable ABI.
-- Error policy: exceptions, expected/error values, or a mixed boundary.
-- Whether `Model` owns interaction `U` or separates free parameters from the
-  target action for easier reuse.
-- Whether paths remain value objects or use shared immutable storage for cheap
-  proposals and snapshots.
-- Measurement streaming and checkpoint format.
-- Threading model and deterministic per-chain seed derivation.
+- GSL supplies exponentially scaled modified Bessel functions.
+- `qmc::ideal` and `qmc::interacting` are compiled CMake library targets.
+- Invalid public inputs, numerical work-limit failures, and overflow are
+  reported with descriptive exceptions.
+- `Model` continues to define the reusable free measure. `InteractingModel`
+  composes it with `interaction`, preventing ideal APIs from silently ignoring
+  a finite target coupling.
+- `ContinuousPath` is a value object with sparse axis/sign events. Trial moves
+  are evaluated through a non-owning path overlay and swapped into the accepted
+  state only after acceptance.
+- `run()` returns typed `InteractingObservables`; the example streams its trace
+  directly to disk.
 
-None of these decisions changes the mathematical interfaces above. They should
-be settled with the intended deployment environment and profiling data rather
-than encoded accidentally while translating Python line by line.
+Checkpointing, parallel chains, and deterministic per-chain seed derivation
+remain future deployment features rather than part of the sampling contract.

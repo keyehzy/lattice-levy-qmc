@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(
-  qmc_ideal
+  qmc
   VERSION 0.1.0
-  DESCRIPTION "Ideal-gas lattice Levy QMC"
+  DESCRIPTION "Canonical continuous-time lattice Levy QMC"
   LANGUAGES CXX
 )
 
@@ -40,6 +40,28 @@ target_link_libraries(qmc_ideal PRIVATE GSL::gsl)
 qmc_set_project_warnings(qmc_ideal)
 qmc_enable_clang_tidy(qmc_ideal)
 qmc_enable_sanitizers(qmc_ideal)
+
+add_library(
+  qmc_interacting
+  src/continuous_configuration.cpp
+  src/interacting_model.cpp
+  src/interacting_sampler.cpp
+  src/interaction.cpp
+  src/path.cpp
+)
+add_library(qmc::interacting ALIAS qmc_interacting)
+
+target_compile_features(qmc_interacting PUBLIC cxx_std_20)
+target_include_directories(
+  qmc_interacting
+  PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+    "$<INSTALL_INTERFACE:include>"
+)
+target_link_libraries(qmc_interacting PUBLIC qmc::ideal)
+qmc_set_project_warnings(qmc_interacting)
+qmc_enable_clang_tidy(qmc_interacting)
+qmc_enable_sanitizers(qmc_interacting)
 
 if(QMC_BUILD_EXAMPLES)
   add_subdirectory(examples)

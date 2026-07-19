@@ -8,7 +8,7 @@ two related samplers:
 | --- | --- | --- | --- |
 | `python/lattice_levy.py` | Ideal gas, \(U=0\) | Positions at \(M+1\) times per particle | Exact ideal-gas samples and visualization |
 | `python/interacting_lattice_levy.py` | Finite \(U\) | Continuous-time nearest-neighbor jump events | Metropolis Monte Carlo for the Bose–Hubbard model |
-| `cpp/` | Ideal gas, \(U=0\) | Positions at \(M+1\) times per particle | C++20 port of the ideal sampler |
+| `cpp/` | Ideal and finite \(U\) | Retained ideal points and sparse continuous events | C++20 library, tests, and drivers for both samplers |
 
 The code is deliberately small and explicit. [Architecture and
 algorithms](docs/ARCHITECTURE.md) explains how it works; [C++ porting
@@ -56,7 +56,7 @@ statistical error bars.
 | `python/validate_interacting_ed.py` | Small-system comparison with exact diagonalization |
 | `python/test_lattice_levy.py` | Free-kernel, recursion, winding, bridge, and configuration tests |
 | `python/test_interacting_lattice_levy.py` | Continuous-path, action, update, and state-invariant tests |
-| `cpp/` | C++20 ideal-gas library, example, CMake build, and GoogleTests |
+| `cpp/` | C++20 ideal and interacting libraries, examples, CMake build, and GoogleTests |
 | `interacting_ed_validation.txt` | Checked-in reference output from the exact-diagonalization comparison |
 
 ## Install and verify
@@ -81,6 +81,18 @@ python python/validate_interacting_ed.py
 That program compares the Monte Carlo total, kinetic, and interaction
 energies and pair occupancy with exact diagonalization for \(N=2\), \(L=3\).
 Agreement is statistical rather than bit-for-bit.
+
+Build and verify both C++ libraries from `cpp/` with:
+
+```bash
+cmake --preset dev
+cmake --build --preset dev
+ctest --preset dev
+```
+
+The `statistical` preset additionally runs the continuous bridge distribution
+check and the finite-\(U\) exact-diagonalization regression. See
+[`cpp/README.md`](cpp/README.md) for the C++ APIs and interacting driver.
 
 ## Ideal-gas use
 

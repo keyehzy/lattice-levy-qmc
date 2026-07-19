@@ -1,11 +1,14 @@
-# C++ ideal-gas port
+# C++ canonical lattice Lévy QMC
 
-This directory contains the C++20 port of the ideal, non-interacting sampler.
-It implements conditioned free lattice bridges, finite-torus kernels and
-traces, canonical partition recursion, labeled permutation cycles, explicit
-winding sectors, dense ideal-world-line configuration assembly, and exact or
-retained-grid estimators for canonical thermodynamics, one-body, topology,
-density, and imaginary-time observables.
+This directory contains C++20 implementations of both samplers. The
+`qmc::ideal` target provides independent ideal-gas samples and retained-grid
+measurements. The `qmc::interacting` target layers sparse continuous-time paths,
+the exact on-site interaction action, Metropolis updates, and finite-`U`
+observables on the same free numerical foundation.
+
+The interacting representation stores every nearest-neighbor hopping event and
+has no imaginary-time grid or Trotter approximation. The ideal `M` parameter is
+only the number of bridge observations retained for measurement.
 
 The build requires CMake 3.24 or newer, a C++20 compiler, Ninja, and GSL 2.7
 or newer. Examples use an installed cxxopts 3.3 or newer when available and
@@ -33,7 +36,7 @@ cmake --build --preset tidy
 ctest --preset tidy
 ```
 
-Run the distribution-level midpoint, winding, cycle, and torus tests with:
+Run the distribution-level free and finite-`U` exact-diagonalization tests with:
 
 ```sh
 cmake --preset statistical
@@ -88,6 +91,39 @@ unwrapped coordinates and therefore the winding information. `64` is the
 number of retained time links per interval `beta`; it is an observation
 resolution, not a Trotter discretization.
 
+For the interacting chain, include the separate umbrella header:
+
+```cpp
+#include <qmc/interacting.hpp>
+
+qmc::InteractingModel model{
+    .free = {.particle_count = 6,
+             .beta = 1.5,
+             .linear_size = 8,
+             .dimension = 1,
+             .hopping = 1.0},
+    .interaction = 2.0,
+};
+qmc::InteractingSampler sampler(model, 20260717);
+qmc::SweepOptions sweep{
+    .segment_updates = model.free.particle_count,
+    .segment_fraction = 0.35,
+    .cycle_updates = 1,
+    .global_updates = 1,
+};
+for (std::size_t index = 0; index < 500; ++index) {
+  sampler.sweep(sweep);
+}
+const auto samples = sampler.run(
+    2'000, qmc::RunOptions{.burn_in = 0, .thin = 2, .sweep = sweep});
+```
+
+Segment moves redraw fixed-endpoint intervals, cycle moves redraw one existing
+cycle including its winding, and global ideal proposals change permutation
+topology. All use the interaction-only Metropolis ratio. `state()` exposes the
+accepted configuration read-only, while `statistics()` reports attempts and
+acceptances for each move family.
+
 See [`docs/MEASUREMENTS.md`](../docs/MEASUREMENTS.md) for estimator definitions,
 normalizations, exactness, and retained-grid conventions.
 
@@ -114,3 +150,17 @@ alternate executable can be supplied with `--gnuplot`.
 
 Run it with `--help` to see parameter descriptions and defaults. The positional
 form `[N beta M L d t seed]` remains supported for compatibility.
+
+## Interacting trace demo
+
+The continuous-time driver writes one row per measurement and prints energy,
+double-occupancy, winding, and move-acceptance summaries:
+
+```sh
+./build/dev/examples/qmc_interacting_demo \
+  --particles 6 --beta 1.5 --linear-size 8 --dimension 1 \
+  --hopping 1.0 --interaction 2.0 --burn-in 500 --samples 3000 \
+  --global-updates 1 --output interacting_trace.dat
+```
+
+Use `--help` for segment/cycle scheduling, thinning, seed, and output options.

@@ -17,6 +17,12 @@ qmc_set_project_warnings(qmc_ideal_demo)
 qmc_enable_clang_tidy(qmc_ideal_demo)
 qmc_enable_sanitizers(qmc_ideal_demo)
 
+add_executable(qmc_interacting_demo interacting_demo.cpp)
+target_link_libraries(qmc_interacting_demo PRIVATE qmc::interacting cxxopts::cxxopts)
+qmc_set_project_warnings(qmc_interacting_demo)
+qmc_enable_clang_tidy(qmc_interacting_demo)
+qmc_enable_sanitizers(qmc_interacting_demo)
+
 if(BUILD_TESTING)
   set(QMC_DEMO_TEST_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/test-observables")
   add_test(NAME qmc_ideal_demo_help COMMAND qmc_ideal_demo --help)
@@ -64,4 +70,17 @@ if(BUILD_TESTING)
       "${CMAKE_CURRENT_SOURCE_DIR}/verify_observable_outputs.cmake"
   )
   set_tests_properties(qmc_ideal_demo_observable_outputs PROPERTIES LABELS unit)
+
+  add_test(NAME qmc_interacting_demo_help COMMAND qmc_interacting_demo --help)
+  set_tests_properties(qmc_interacting_demo_help PROPERTIES LABELS unit)
+
+  add_test(
+    NAME qmc_interacting_demo_smoke
+    COMMAND
+      qmc_interacting_demo --particles=2 --beta=0.8 --linear-size=3 --dimension=1
+      --hopping=1 --interaction=1.2 --samples=4 --burn-in=2 --segment-updates=2
+      --cycle-updates=1 --global-updates=1
+      --output=${CMAKE_CURRENT_BINARY_DIR}/interacting-demo-smoke.dat
+  )
+  set_tests_properties(qmc_interacting_demo_smoke PROPERTIES LABELS unit)
 endif()
