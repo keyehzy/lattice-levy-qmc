@@ -30,6 +30,8 @@ struct Model {
   void validate() const;
   // Returns L^d, throwing if it cannot be represented by size_t.
   [[nodiscard]] std::size_t volume() const;
+
+  bool operator==(const Model &) const = default;
 };
 
 } // namespace qmc

@@ -167,40 +167,35 @@ only axis and sign, reducing event memory from `O(E*d)` to `O(E)` and making
 the nearest-neighbor invariant explicit. A structure-of-arrays representation
 is also reasonable if profiling favors it.
 
-For the ideal skeleton, use a flat row-major buffer rather than nested vectors:
+For the ideal skeleton, the C++ implementation uses one shape-safe flat
+row-major covering-space buffer:
 
 ```cpp
-struct DenseWorldlines {
-  std::size_t particles;
-  std::size_t time_points; // M + 1
-  std::size_t dimension;
-  std::vector<Coord> values;
-
-  Coord& at(ParticleId p, std::size_t m, Axis a);
+class DenseWorldlines {
+public:
+  std::size_t particle_count() const;
+  std::size_t time_points() const; // M + 1
+  std::size_t dimension() const;
+  std::span<const Coord> site(ParticleId p, std::size_t m) const;
 };
 
-struct IdealCyclePath {
-  Cycle labels;
-  Site base_point;
-  Site winding;
-  std::vector<Site> covering_path; // ell*M + 1 points
-  std::vector<Site> torus_path;    // same path reduced modulo L
-};
-
-struct IdealSkeleton {
-  std::size_t time_links_per_beta; // M
-  std::vector<IdealCyclePath> cycles;
-  std::vector<ParticleId> permutation;
-  DenseWorldlines worldlines;
-  DenseWorldlines worldlines_covering;
-  double log_ZN;
-
-  void validate(const Model&) const;
+class IdealBosonConfiguration {
+public:
+  const Model& model() const;
+  std::size_t time_links_per_beta() const; // M
+  const Permutation& topology() const;
+  const DenseWorldlines& covering_worldlines() const;
+  Site cycle_winding(std::size_t cycle_index) const;
+  void validate() const;
 };
 ```
 
-Keep covering and torus buffers distinct, as the Python `IdealBosonConfiguration`
-does. Winding cannot be reconstructed from already reduced coordinates.
+The covering buffer and `Permutation` are authoritative. Physical torus sites
+are reduced on demand, and cycle paths/windings are reconstructed from the
+ordered label pieces. This preserves winding while avoiding the Python
+configuration's synchronized covering path, torus path, and dense torus copies.
+Canonical normalization is obtained from `CanonicalEnsemble`, not copied into
+each sample.
 
 ## 4. Numerical and free-boson interfaces
 
@@ -328,7 +323,7 @@ sampler.run(run_options, [](std::size_t sample, const Observables& value) {
 | `periodic_kernel_scaled_1d` | `free_numerics` | Optional if direct torus midpoint sampling remains public |
 | `canonical_log_partition` | `CanonicalEnsemble` | Private recursion bound to its validated model |
 | `sample_cycle_labels`, `sample_winding_1d` | `CanonicalEnsemble` / `free_boson` | Topology and winding draws |
-| `CyclePath`, `IdealBosonConfiguration` | `configuration` | Dense ideal-only records |
+| `CyclePath`, `IdealBosonConfiguration` | `configuration` | Validated topology plus authoritative dense covering geometry |
 | `ContinuousPath` | `path` | Sparse immutable/value-like path |
 | `ContinuousConfiguration` | `configuration` | Mutable accepted Markov state |
 | `_paths_for_cycle` | `free_boson` internal helper | Returns label/path associations or fills indexed paths |

@@ -104,9 +104,12 @@ observables; model-only overloads remain available for one-off calls. Its
 read-only recursion views and cycle/statistics overloads may also reuse any
 particle-number prefix through the ensemble's configured maximum.
 
-`worldlines` stores torus coordinates, while `worldlines_covering` retains
-unwrapped coordinates and therefore the winding information. `64` is the
-number of retained time links per interval `beta`; it is an observation
+`configuration.covering_worldlines()` exposes the retained unwrapped
+coordinates through a read-only, shape-safe buffer;
+`configuration.topology()` exposes the matching validated permutation and its
+cycle views. Torus coordinates and cycle windings are derived from those two
+authoritative values instead of being stored as synchronized copies. `64` is
+the number of retained time links per interval `beta`; it is an observation
 resolution, not a Trotter discretization.
 
 `qmc::TorusLayout` is the shared checked geometry for flattened lattice data.

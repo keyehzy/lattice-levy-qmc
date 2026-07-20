@@ -1,164 +1,136 @@
 #include "qmc/configuration.hpp"
 
+#include "checked_math.hpp"
 #include "qmc/torus_layout.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace qmc {
 namespace {
 
-std::size_t checked_product(const std::size_t left, const std::size_t right,
-                            const char *description) {
-  if (right != 0 && left > std::numeric_limits<std::size_t>::max() / right) {
-    throw std::overflow_error(description);
+enum class ValidationBoundary : std::uint8_t { Construction, Audit };
+
+std::size_t dense_worldline_extent(const std::size_t particle_count, const std::size_t point_count,
+                                   const std::size_t dimensions) {
+  if (particle_count > std::numeric_limits<ParticleId>::max()) {
+    throw std::invalid_argument("dense world-line particle count exceeds the ParticleId range");
   }
-  return left * right;
+  if (dimensions == 0) {
+    throw std::invalid_argument("dense world-line dimension must be positive");
+  }
+  const auto particle_points =
+      detail::checked_product(particle_count, point_count, "dense world-line shape exceeds size_t");
+  return detail::checked_product(particle_points, dimensions,
+                                 "dense world-line shape exceeds size_t");
 }
 
-Coord checked_scale(const Coord scale, const Coord value) {
-  if (scale < 0) {
-    throw std::logic_error("coordinate scale must be nonnegative");
+[[noreturn]] void fail_validation(const ValidationBoundary boundary, const char *message) {
+  if (boundary == ValidationBoundary::Construction) {
+    throw std::invalid_argument(message);
   }
-  if (scale == 0) {
-    return 0;
-  }
-  if (value > 0 && scale > std::numeric_limits<Coord>::max() / value) {
-    throw std::overflow_error("winding displacement exceeds int64 range");
-  }
-  if (value < 0 && value < std::numeric_limits<Coord>::min() / scale) {
-    throw std::overflow_error("winding displacement exceeds int64 range");
-  }
-  return scale * value;
+  throw std::logic_error(message);
 }
 
-Coord checked_add(const Coord left, const Coord right) {
-  if (right > 0 && left > std::numeric_limits<Coord>::max() - right) {
-    throw std::overflow_error("covering endpoint exceeds int64 range");
+Coord winding_component(const Coord start, const Coord end, const Coord linear_size,
+                        const ValidationBoundary boundary) {
+  const auto [nonnegative, magnitude] = detail::displacement(start, end);
+  const auto size = static_cast<std::uint64_t>(linear_size);
+  if (magnitude % size != 0) {
+    fail_validation(boundary, "cycle covering displacement is not a torus winding");
   }
-  if (right < 0 && left < std::numeric_limits<Coord>::min() - right) {
-    throw std::overflow_error("covering endpoint exceeds int64 range");
-  }
-  return left + right;
-}
 
-void validate_site(const Site &site, const std::size_t dimension, const char *description) {
-  if (site.size() != dimension) {
-    throw std::logic_error(description);
-  }
-}
-
-void validate_dense_buffers(const IdealBosonConfiguration &configuration) {
-  configuration.worldlines.validate_shape();
-  configuration.worldlines_covering.validate_shape();
-  const auto expected_points = configuration.time_links_per_beta + 1;
-  const auto has_expected_shape = [&configuration, expected_points](const DenseWorldlines &dense) {
-    return dense.particles == configuration.model.particle_count &&
-           dense.time_points == expected_points && dense.dimension == configuration.model.dimension;
-  };
-  if (!has_expected_shape(configuration.worldlines) ||
-      !has_expected_shape(configuration.worldlines_covering)) {
-    throw std::logic_error("dense world-line shape does not match the configuration model");
-  }
-}
-
-void validate_permutation(const IdealBosonConfiguration &configuration) {
-  if (configuration.permutation.size() != configuration.model.particle_count) {
-    throw std::logic_error("permutation size does not match particle_count");
-  }
-  std::vector<bool> seen(configuration.model.particle_count, false);
-  for (const ParticleId successor : configuration.permutation) {
-    if (static_cast<std::size_t>(successor) >= configuration.model.particle_count ||
-        seen[successor]) {
-      throw std::logic_error("permutation is not a bijection");
+  const std::uint64_t quotient = magnitude / size;
+  const auto maximum = static_cast<std::uint64_t>(std::numeric_limits<Coord>::max());
+  if (nonnegative) {
+    if (quotient > maximum) {
+      throw std::overflow_error("cycle winding exceeds int64 range");
     }
-    seen[successor] = true;
+    return static_cast<Coord>(quotient);
   }
+
+  const std::uint64_t minimum_magnitude = maximum + 1;
+  if (quotient > minimum_magnitude) {
+    throw std::overflow_error("cycle winding exceeds int64 range");
+  }
+  if (quotient == minimum_magnitude) {
+    return std::numeric_limits<Coord>::min();
+  }
+  return -static_cast<Coord>(quotient);
 }
 
-std::size_t validate_cycle_geometry(const IdealBosonConfiguration &configuration,
-                                    const IdealCyclePath &cycle, const TorusLayout &layout) {
-  if (cycle.labels.empty()) {
-    throw std::logic_error("cycles must not be empty");
+Site derive_cycle_winding(const IdealBosonConfiguration &configuration,
+                          const std::size_t cycle_index, const ValidationBoundary boundary) {
+  const auto cycles = configuration.topology().cycles();
+  if (cycle_index >= cycles.size()) {
+    throw std::out_of_range("cycle index is out of range");
   }
-  validate_site(cycle.base_point, configuration.model.dimension,
-                "cycle base point has wrong dimension");
-  validate_site(cycle.winding, configuration.model.dimension, "cycle winding has wrong dimension");
-  for (const Coord coordinate : cycle.base_point) {
-    if (coordinate < 0 || coordinate >= configuration.model.linear_size) {
-      throw std::logic_error("cycle base point lies outside the torus");
-    }
+  const Cycle &cycle = cycles[cycle_index];
+  if (cycle.empty()) {
+    fail_validation(boundary, "retained topology contains an empty cycle");
   }
 
-  const auto steps = checked_product(cycle.labels.size(), configuration.time_links_per_beta,
-                                     "cycle skeleton length exceeds size_t");
-  if (steps == std::numeric_limits<std::size_t>::max() || cycle.covering_path.size() != steps + 1 ||
-      cycle.torus_path.size() != steps + 1) {
-    throw std::logic_error("cycle path length is inconsistent with its labels");
+  const Model &model = configuration.model();
+  const DenseWorldlines &worldlines = configuration.covering_worldlines();
+  const ParticleId root = cycle.front();
+  const ParticleId last = cycle.back();
+  Site winding(model.dimension);
+  for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+    winding[axis] =
+        winding_component(worldlines.at(root, 0, axis),
+                          worldlines.at(last, configuration.time_links_per_beta(), axis),
+                          model.linear_size, boundary);
   }
-
-  Site reduced(layout.dimension());
-  for (std::size_t point = 0; point <= steps; ++point) {
-    validate_site(cycle.covering_path[point], configuration.model.dimension,
-                  "covering path site has wrong dimension");
-    validate_site(cycle.torus_path[point], configuration.model.dimension,
-                  "torus path site has wrong dimension");
-    layout.reduce_into(cycle.covering_path[point], reduced);
-    if (cycle.torus_path[point] != reduced) {
-      throw std::logic_error("torus path is not the reduction of its covering path");
-    }
-  }
-  for (std::size_t axis = 0; axis < configuration.model.dimension; ++axis) {
-    const Coord displacement = checked_scale(configuration.model.linear_size, cycle.winding[axis]);
-    if (checked_add(cycle.covering_path.front()[axis], displacement) !=
-        cycle.covering_path.back()[axis]) {
-      throw std::logic_error("cycle covering displacement does not match its winding");
-    }
-  }
-  return steps;
+  return winding;
 }
 
-void validate_cycle_assignment(const IdealBosonConfiguration &configuration,
-                               const IdealCyclePath &cycle, std::vector<bool> &labels_seen) {
-  for (std::size_t cycle_index = 0; cycle_index < cycle.labels.size(); ++cycle_index) {
-    const ParticleId label = cycle.labels[cycle_index];
-    if (static_cast<std::size_t>(label) >= configuration.model.particle_count ||
-        labels_seen[label]) {
-      throw std::logic_error("cycles do not partition the particle labels");
+void validate_configuration(const IdealBosonConfiguration &configuration,
+                            const ValidationBoundary boundary) {
+  try {
+    configuration.model().validate();
+  } catch (const std::invalid_argument &error) {
+    if (boundary == ValidationBoundary::Construction) {
+      throw;
     }
-    labels_seen[label] = true;
-    const ParticleId successor = cycle.labels[(cycle_index + 1) % cycle.labels.size()];
-    if (configuration.permutation[label] != successor) {
-      throw std::logic_error("cycle order and permutation disagree");
-    }
+    throw std::logic_error(error.what());
+  }
 
-    const auto cycle_start = cycle_index * configuration.time_links_per_beta;
-    for (std::size_t time = 0; time <= configuration.time_links_per_beta; ++time) {
-      for (std::size_t axis = 0; axis < configuration.model.dimension; ++axis) {
-        if (configuration.worldlines.at(label, time, axis) !=
-                cycle.torus_path[cycle_start + time][axis] ||
-            configuration.worldlines_covering.at(label, time, axis) !=
-                cycle.covering_path[cycle_start + time][axis]) {
-          throw std::logic_error("dense world lines do not match their cycle paths");
-        }
+  const Model &model = configuration.model();
+  const std::size_t time_links = configuration.time_links_per_beta();
+  if (time_links < 1) {
+    fail_validation(boundary, "time_links_per_beta must be positive");
+  }
+  const auto expected_points =
+      detail::checked_add_size(time_links, 1, "world-line time-point count exceeds size_t");
+  if (configuration.topology().size() != model.particle_count) {
+    fail_validation(boundary, "retained topology size does not match particle_count");
+  }
+
+  const DenseWorldlines &worldlines = configuration.covering_worldlines();
+  if (worldlines.particle_count() != model.particle_count ||
+      worldlines.time_points() != expected_points || worldlines.dimension() != model.dimension) {
+    fail_validation(boundary,
+                    "covering world-line shape does not match the retained configuration");
+  }
+
+  static_cast<void>(TorusLayout(model.linear_size, model.dimension));
+
+  const auto cycles = configuration.topology().cycles();
+  for (std::size_t cycle_index = 0; cycle_index < cycles.size(); ++cycle_index) {
+    const Cycle &cycle = cycles[cycle_index];
+    for (std::size_t index = 0; index + 1 < cycle.size(); ++index) {
+      if (!std::ranges::equal(worldlines.site(cycle[index], time_links),
+                              worldlines.site(cycle[index + 1], 0))) {
+        fail_validation(boundary,
+                        "covering world-line pieces do not join their permutation successor");
       }
     }
-  }
-}
-
-void validate_endpoint_joining(const IdealBosonConfiguration &configuration) {
-  for (std::size_t particle = 0; particle < configuration.model.particle_count; ++particle) {
-    const auto label = static_cast<ParticleId>(particle);
-    const auto successor = configuration.permutation[particle];
-    for (std::size_t axis = 0; axis < configuration.model.dimension; ++axis) {
-      if (configuration.worldlines.at(label, configuration.time_links_per_beta, axis) !=
-          configuration.worldlines.at(successor, 0, axis)) {
-        throw std::logic_error("world-line endpoint does not join its permutation successor");
-      }
-    }
+    static_cast<void>(derive_cycle_winding(configuration, cycle_index, boundary));
   }
 }
 
@@ -166,11 +138,26 @@ void validate_endpoint_joining(const IdealBosonConfiguration &configuration) {
 
 DenseWorldlines::DenseWorldlines(const std::size_t particle_count, const std::size_t point_count,
                                  const std::size_t dimensions)
-    : particles(particle_count), time_points(point_count), dimension(dimensions) {
-  const auto particle_points =
-      checked_product(particles, time_points, "dense world-line shape exceeds size_t");
-  values.resize(
-      checked_product(particle_points, dimension, "dense world-line shape exceeds size_t"));
+    : DenseWorldlines(
+          particle_count, point_count, dimensions,
+          std::vector<Coord>(dense_worldline_extent(particle_count, point_count, dimensions))) {}
+
+DenseWorldlines::DenseWorldlines(const std::size_t particle_count, const std::size_t point_count,
+                                 const std::size_t dimensions, std::vector<Coord> values)
+    : particle_count_(particle_count), time_points_(point_count), dimension_(dimensions),
+      values_(std::move(values)) {
+  const auto expected = dense_worldline_extent(particle_count_, time_points_, dimension_);
+  if (values_.size() != expected) {
+    throw std::invalid_argument("dense world-line buffer does not match its declared shape");
+  }
+}
+
+std::size_t DenseWorldlines::site_offset(const ParticleId particle,
+                                         const std::size_t time_index) const {
+  if (static_cast<std::size_t>(particle) >= particle_count_ || time_index >= time_points_) {
+    throw std::out_of_range("dense world-line index is out of range");
+  }
+  return ((static_cast<std::size_t>(particle) * time_points_) + time_index) * dimension_;
 }
 
 Coord &DenseWorldlines::at(const ParticleId particle, const std::size_t time_index,
@@ -180,51 +167,32 @@ Coord &DenseWorldlines::at(const ParticleId particle, const std::size_t time_ind
 
 const Coord &DenseWorldlines::at(const ParticleId particle, const std::size_t time_index,
                                  const std::size_t axis) const {
-  if (static_cast<std::size_t>(particle) >= particles || time_index >= time_points ||
-      axis >= dimension) {
-    throw std::out_of_range("dense world-line index is out of range");
+  if (axis >= dimension_) {
+    throw std::out_of_range("dense world-line axis is out of range");
   }
-  validate_shape();
-  const auto offset =
-      ((static_cast<std::size_t>(particle) * time_points + time_index) * dimension) + axis;
-  return values[offset];
+  return values_[site_offset(particle, time_index) + axis];
 }
 
-void DenseWorldlines::validate_shape() const {
-  const auto particle_points =
-      checked_product(particles, time_points, "dense world-line shape exceeds size_t");
-  const auto expected =
-      checked_product(particle_points, dimension, "dense world-line shape exceeds size_t");
-  if (values.size() != expected) {
-    throw std::logic_error("dense world-line buffer does not match its declared shape");
-  }
+std::span<const Coord> DenseWorldlines::site(const ParticleId particle,
+                                             const std::size_t time_index) const {
+  const auto offset = site_offset(particle, time_index);
+  return std::span<const Coord>(values_).subspan(offset, dimension_);
+}
+
+IdealBosonConfiguration::IdealBosonConfiguration(Model model, const std::size_t time_links_per_beta,
+                                                 Permutation topology,
+                                                 DenseWorldlines covering_worldlines)
+    : model_(model), time_links_per_beta_(time_links_per_beta), topology_(std::move(topology)),
+      covering_worldlines_(std::move(covering_worldlines)) {
+  validate_configuration(*this, ValidationBoundary::Construction);
+}
+
+Site IdealBosonConfiguration::cycle_winding(const std::size_t cycle_index) const {
+  return derive_cycle_winding(*this, cycle_index, ValidationBoundary::Audit);
 }
 
 void IdealBosonConfiguration::validate() const {
-  model.validate();
-  if (time_links_per_beta < 1) {
-    throw std::logic_error("time_links_per_beta must be positive");
-  }
-  if (!std::isfinite(log_ZN)) {
-    throw std::logic_error("log_ZN must be finite");
-  }
-  if (time_links_per_beta == std::numeric_limits<std::size_t>::max()) {
-    throw std::logic_error("world-line time-point count exceeds size_t");
-  }
-
-  validate_dense_buffers(*this);
-  validate_permutation(*this);
-  const TorusLayout layout(model.linear_size, model.dimension);
-  std::vector<bool> labels_seen(model.particle_count, false);
-  for (const IdealCyclePath &cycle : cycles) {
-    static_cast<void>(validate_cycle_geometry(*this, cycle, layout));
-    validate_cycle_assignment(*this, cycle, labels_seen);
-  }
-  if (std::ranges::find(labels_seen, false) != labels_seen.end()) {
-    throw std::logic_error("cycles do not cover every particle label");
-  }
-
-  validate_endpoint_joining(*this);
+  validate_configuration(*this, ValidationBoundary::Audit);
 }
 
 IdealBosonConfiguration sample_ideal_boson_configuration(const CanonicalEnsemble &ensemble,
@@ -232,28 +200,17 @@ IdealBosonConfiguration sample_ideal_boson_configuration(const CanonicalEnsemble
                                                          Random &random,
                                                          const NumericalOptions &options) {
   const Model &model = ensemble.model();
-  const TorusLayout layout(model.linear_size, model.dimension);
+  static_cast<void>(TorusLayout(model.linear_size, model.dimension));
   options.validate();
   if (time_links_per_beta < 1) {
     throw std::invalid_argument("time_links_per_beta must be positive");
   }
-  if (time_links_per_beta == std::numeric_limits<std::size_t>::max()) {
-    throw std::overflow_error("world-line time-point count exceeds size_t");
-  }
+  const auto time_points = detail::checked_add_size(time_links_per_beta, 1,
+                                                    "world-line time-point count exceeds size_t");
 
   const std::vector<Cycle> cycle_labels = ensemble.sample_cycles(random);
-
-  IdealBosonConfiguration configuration{
-      .model = model,
-      .time_links_per_beta = time_links_per_beta,
-      .cycles = {},
-      .permutation = std::vector<ParticleId>(model.particle_count),
-      .worldlines = DenseWorldlines(model.particle_count, time_links_per_beta + 1, model.dimension),
-      .worldlines_covering =
-          DenseWorldlines(model.particle_count, time_links_per_beta + 1, model.dimension),
-      .log_ZN = ensemble.log_partition(model.particle_count),
-  };
-  configuration.cycles.reserve(cycle_labels.size());
+  std::vector<ParticleId> successors(model.particle_count);
+  DenseWorldlines covering_worldlines(model.particle_count, time_points, model.dimension);
 
   for (const Cycle &labels : cycle_labels) {
     const auto length = labels.size();
@@ -270,41 +227,32 @@ IdealBosonConfiguration sample_ideal_boson_configuration(const CanonicalEnsemble
           static_cast<Coord>(random.uniform_index(static_cast<std::uint64_t>(model.linear_size)));
       winding[axis] =
           sample_winding_1d(model.linear_size, duration, model.hopping, random, options);
-      endpoint[axis] = checked_add(base[axis], checked_scale(model.linear_size, winding[axis]));
+      endpoint[axis] =
+          detail::checked_add(base[axis],
+                              detail::checked_scale(model.linear_size, winding[axis],
+                                                    "winding displacement exceeds int64 range"),
+                              "covering endpoint exceeds int64 range");
     }
 
-    const auto steps =
-        checked_product(length, time_links_per_beta, "cycle skeleton length exceeds size_t");
-    CoveringPath covering =
+    const auto steps = detail::checked_product(length, time_links_per_beta,
+                                               "cycle skeleton length exceeds size_t");
+    const CoveringPath covering =
         sample_bridge_covering(base, endpoint, duration, steps, model.hopping, random, options);
-    CoveringPath torus(covering.size(), Site(model.dimension));
-    for (std::size_t point = 0; point < covering.size(); ++point) {
-      layout.reduce_into(covering[point], torus[point]);
-    }
 
     for (std::size_t cycle_index = 0; cycle_index < length; ++cycle_index) {
       const ParticleId label = labels[cycle_index];
       const auto start = cycle_index * time_links_per_beta;
       for (std::size_t time = 0; time <= time_links_per_beta; ++time) {
         for (std::size_t axis = 0; axis < model.dimension; ++axis) {
-          configuration.worldlines.at(label, time, axis) = torus[start + time][axis];
-          configuration.worldlines_covering.at(label, time, axis) = covering[start + time][axis];
+          covering_worldlines.at(label, time, axis) = covering[start + time][axis];
         }
       }
-      configuration.permutation[label] = labels[(cycle_index + 1) % length];
+      successors[label] = labels[(cycle_index + 1) % length];
     }
-
-    configuration.cycles.push_back(IdealCyclePath{
-        .labels = labels,
-        .base_point = std::move(base),
-        .winding = std::move(winding),
-        .covering_path = std::move(covering),
-        .torus_path = std::move(torus),
-    });
   }
 
-  configuration.validate();
-  return configuration;
+  return {model, time_links_per_beta, Permutation(std::move(successors)),
+          std::move(covering_worldlines)};
 }
 
 IdealBosonConfiguration sample_ideal_boson_configuration(const Model &model,

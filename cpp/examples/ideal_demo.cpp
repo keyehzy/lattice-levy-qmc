@@ -275,11 +275,9 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
 
     const auto cycle_geometry = qmc::retained_cycle_geometry(configuration);
     std::size_t macroscopic_particles = 0;
-    for (std::size_t cycle_index = 0; cycle_index < configuration.cycles.size(); ++cycle_index) {
-      const qmc::IdealCyclePath &cycle = configuration.cycles[cycle_index];
-      const auto &geometry = cycle_geometry[cycle_index];
-      const auto length = cycle.labels.size();
-      const double cycle_winding_value = winding_squared(cycle.winding);
+    for (const auto &geometry : cycle_geometry) {
+      const auto length = geometry.length;
+      const double cycle_winding_value = winding_squared(geometry.winding);
       averages.cycle_winding_squared[length] += cycle_winding_value;
       averages.cycle_radius_of_gyration_squared[length] += geometry.radius_of_gyration_squared;
       averages.cycle_maximum_radius_squared[length] += geometry.maximum_radius_squared;
@@ -292,7 +290,7 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
           .cycle_winding_squared = cycle_winding_value,
           .radius_of_gyration_squared = geometry.radius_of_gyration_squared,
           .maximum_radius_squared = geometry.maximum_radius_squared,
-          .cycle_winding = cycle.winding,
+          .cycle_winding = geometry.winding,
       });
       if (length >= macroscopic_threshold) {
         macroscopic_particles += length;

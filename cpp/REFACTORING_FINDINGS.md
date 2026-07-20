@@ -69,13 +69,13 @@ type collects one invariant that is currently spread across several files.
 | P0 | Make occupancy replacement transactional (done 2026-07-19) | Correctness and simpler move code | Medium |
 | P0/P1 | Checked flat extents and `TorusLayout`/`SiteId` (done 2026-07-19); add grid provenance | Memory safety, shared geometry, and fewer allocations | Medium |
 | P0 | Bind model and canonical table (done 2026-07-19); add reusable free numerics | Correctness and large repeated-work reduction | Medium |
-| P0 | Make paths/configurations valid-by-construction (`ContinuousPath` done 2026-07-20) | Ownership clarity and removal of nested validation | Large |
+| P0 | Make paths/configurations valid-by-construction (`ContinuousPath` and retained ideal configuration done 2026-07-20) | Ownership clarity and removal of nested validation | Large |
 | P1 | Path cursor/slice migration (done 2026-07-20) | Simpler boundary semantics and faster path surgery | Medium |
 | P1 | Add a retained-measurement context and accumulators | Less repeated work and a smaller demo | Medium |
 | P1 | Collect reusable free-particle numerics | Numerical clarity and less repeated setup | Medium |
 | P1 | Unify discrete log-weight and bounded-tail sampling | One truncation policy and fewer allocations | Medium |
 | P1 | Unify full/incremental action around accepted state | One source of truth and faster full evaluation | Medium |
-| P1 | Make permutation topology authoritative (continuous done 2026-07-20) | Remove duplicated state and synchronization code | Medium |
+| P1 | Make permutation topology authoritative (continuous and retained ideal done 2026-07-20) | Remove duplicated state and synchronization code | Medium |
 | P1 | Separate stitch selection, proposal, and commit | Readability, testability, and API clarity | Medium |
 | P2 | Add streaming runs, checkpoints, and prepared options | Operational quality of life | Small/medium |
 | P2 | Consolidate local helpers, names, and value equality | Less duplication and review noise | Small |
@@ -239,18 +239,21 @@ Verification:
 
 ### 3. P0: replace mutable record bags with valid-by-construction values
 
-Status (2026-07-20): the `ContinuousPath` slice is complete. Construction now
+Status (2026-07-20): the `ContinuousPath` and retained ideal-configuration
+slices are complete. `ContinuousPath` construction now
 owns and validates duration, endpoint dimensions, sorted event times, axes,
 directions, coordinate range, and endpoint consistency. Path storage is private;
 callers receive read-only endpoint references and an event span, and structural
 equality is defined for paths and events. Trusted queries, cursor operations,
 interaction sweeps, and occupancy transactions no longer revalidate complete
-path storage. The configuration `validate()` path remains an explicit diagnostic
-audit and verifies model-dimension compatibility. Construction-failure tests and
-the existing boundary, surgery, sampling, topology, action, and cache tests cover
-the migration. `Model`, dense/ideal configurations, and the remaining
-`ContinuousConfiguration` storage remain open; its authoritative permutation
-topology is complete under finding 10.
+path storage. `DenseWorldlines` now owns immutable shape metadata and private flat
+storage, and `IdealBosonConfiguration` validates its private model, retained-grid
+size, topology, covering geometry, endpoint joining, and representable winding
+at construction. Its `validate()` remains an explicit diagnostic audit. Torus
+positions and cycle geometry are derived from the read-only covering buffer.
+Construction-failure tests and the existing boundary, surgery, sampling,
+topology, observable, action, and cache tests cover the migrations. `Model` and
+the remaining `ContinuousConfiguration` storage remain open.
 
 Pre-refactor evidence:
 
@@ -629,7 +632,7 @@ production evaluator while retaining the global sort as a reference oracle
 
 ### 10. P1: make permutation topology authoritative
 
-Status (2026-07-20): the continuous-configuration slice is complete. A validated
+Status (2026-07-20): the continuous and retained ideal slices are complete. A validated
 `Permutation` now owns authoritative successors and a private deterministic
 cycle cache, exposing both only through read-only views. `ContinuousConfiguration`
 stores one private topology value instead of parallel public cycle and successor
@@ -638,8 +641,13 @@ that value. Stitch preparation validates the complete proposed permutation while
 the occupancy replacement is staged, and acceptance publishes topology with one
 non-throwing move. Construction, deterministic decomposition, invalid-successor,
 endpoint-connectivity, accepted/rejected stitch, and transaction-failure tests
-cover the migration. The retained ideal configuration still duplicates topology
-and geometry representations and remains open.
+cover the migration. `IdealBosonConfiguration` now uses the same authoritative
+topology and stores only one private covering-space retained-worldline buffer.
+The sampler no longer retains per-cycle labels/base/winding/path records, a
+dense torus copy, or `log_ZN`; physical sites, cycle winding, and cycle geometry
+are derived without changing the sampled stream. Construction, topology,
+endpoint, winding, empty-system, seeded reusable/one-off equivalence, observable,
+and statistical tests cover the retained migration.
 
 Evidence:
 
@@ -977,10 +985,9 @@ visible at the assertion sites.
 4. Completed 2026-07-20: `PathCursor`/`PathSlice` migration for split,
    resample, stitch, and time-origin rotation, with exact traversal and boundary
    equivalence tests.
-5. `ContinuousPath` encapsulation and authoritative continuous `Permutation`
-   completed 2026-07-20; encapsulate the remaining configuration storage and
-   migrate retained ideal topology, then move full validation to
-   construction/import/debug audits.
+5. Completed 2026-07-20: `ContinuousPath` and retained dense/configuration
+   encapsulation, plus authoritative continuous and retained `Permutation`
+   topology; full validation remains available as an explicit diagnostic audit.
 6. Add retained measurement context and accumulators, then optimize direct
    correlation kernels from benchmark evidence.
 7. Consolidate canonical derivative/log-distribution numerics.

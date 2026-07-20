@@ -200,9 +200,10 @@ TEST(ConfigurationObservablesTest, ExactSampleInvariantsHoldOnRetainedGrid) {
   EXPECT_EQ(particles_in_cycles, model.particle_count);
   EXPECT_GE(qmc::longest_cycle_length(configuration), 1U);
   qmc::Site winding_reference(model.dimension);
-  for (const auto &cycle : configuration.cycles) {
+  for (std::size_t cycle = 0; cycle < configuration.topology().cycles().size(); ++cycle) {
+    const qmc::Site cycle_winding = configuration.cycle_winding(cycle);
     for (std::size_t axis = 0; axis < model.dimension; ++axis) {
-      winding_reference[axis] += cycle.winding[axis];
+      winding_reference[axis] += cycle_winding[axis];
     }
   }
   EXPECT_EQ(winding, winding_reference);
@@ -221,7 +222,7 @@ TEST(ConfigurationObservablesTest, ExactSampleInvariantsHoldOnRetainedGrid) {
                   static_cast<double>(model.particle_count),
               2e-12);
 
-  ASSERT_EQ(imaginary_time.time_points, configuration.time_links_per_beta);
+  ASSERT_EQ(imaginary_time.time_points, configuration.time_links_per_beta());
   ASSERT_EQ(imaginary_time.spatial_points, model.volume());
   const double density =
       static_cast<double>(model.particle_count) / static_cast<double>(model.volume());
@@ -241,7 +242,7 @@ TEST(ConfigurationObservablesTest, ExactSampleInvariantsHoldOnRetainedGrid) {
     EXPECT_NEAR(std::abs(matsubara.values[frequency * model.volume()]), 0.0, 3e-12);
   }
 
-  ASSERT_EQ(retained_geometry.time_points, configuration.time_links_per_beta);
+  ASSERT_EQ(retained_geometry.time_points, configuration.time_links_per_beta());
   EXPECT_DOUBLE_EQ(retained_geometry.mean_square_displacement.front(), 0.0);
   EXPECT_DOUBLE_EQ(retained_geometry.return_probability.front(), 1.0);
   for (std::size_t time = 0; time < retained_geometry.time_points; ++time) {
@@ -252,10 +253,10 @@ TEST(ConfigurationObservablesTest, ExactSampleInvariantsHoldOnRetainedGrid) {
     EXPECT_NEAR(retained_geometry.return_probability[time], *begin, 2e-13);
     EXPECT_GE(retained_geometry.mean_square_displacement[time], 0.0);
   }
-  ASSERT_EQ(cycle_geometry.size(), configuration.cycles.size());
+  ASSERT_EQ(cycle_geometry.size(), configuration.topology().cycles().size());
   for (std::size_t cycle = 0; cycle < cycle_geometry.size(); ++cycle) {
-    EXPECT_EQ(cycle_geometry[cycle].length, configuration.cycles[cycle].labels.size());
-    EXPECT_EQ(cycle_geometry[cycle].winding, configuration.cycles[cycle].winding);
+    EXPECT_EQ(cycle_geometry[cycle].length, configuration.topology().cycles()[cycle].size());
+    EXPECT_EQ(cycle_geometry[cycle].winding, configuration.cycle_winding(cycle));
     EXPECT_GE(cycle_geometry[cycle].radius_of_gyration_squared, 0.0);
     EXPECT_GE(cycle_geometry[cycle].maximum_radius_squared,
               cycle_geometry[cycle].radius_of_gyration_squared);

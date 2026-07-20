@@ -76,7 +76,7 @@ struct ExactCycleStatistics {
 sampled_cycle_histogram(const IdealBosonConfiguration &configuration);
 [[nodiscard]] std::size_t longest_cycle_length(const IdealBosonConfiguration &configuration);
 
-// Sum of the explicitly retained per-cycle covering-space winding vectors.
+// Sum of the per-cycle winding vectors derived from authoritative covering paths.
 [[nodiscard]] Site total_winding(const IdealBosonConfiguration &configuration);
 
 // Exact log Z_N for a boundary twist phi. Each component enters as q_alpha + phi_alpha/L.

@@ -202,8 +202,9 @@ events and splits them at multiples of `beta`.
 
 | Type | Important fields | Invariants and ownership |
 | --- | --- | --- |
-| `CyclePath` | labels, base point, winding, covering and torus paths | Frozen ideal-skeleton record for one long cycle; displacement is `L*winding`; torus endpoints coincide |
-| `IdealBosonConfiguration` | model parameters, tuple of cycles, permutation, dense world-line arrays, `log_ZN` | Frozen top-level ideal sample; dense arrays have shape `(N, M+1, d)` |
+| `CyclePath` (Python) | labels, base point, winding, covering and torus paths | Frozen ideal-skeleton record for one long cycle; displacement is `L*winding`; torus endpoints coincide |
+| `IdealBosonConfiguration` (Python) | model parameters, tuple of cycles, permutation, dense world-line arrays, `log_ZN` | Frozen top-level ideal sample; dense arrays have shape `(N, M+1, d)` |
+| `qmc::IdealBosonConfiguration` (C++) | validated model, retained-grid size, `Permutation`, dense covering world lines | Valid by construction; topology and covering geometry are authoritative, while torus sites, cycle paths, and winding are derived |
 | `ContinuousPath` | duration, start/end vectors, sorted times, jump matrix | Frozen, value-like record; each jump has one `+1` or `-1`; sum of jumps exactly connects start to end; positions are right-continuous |
 | `ContinuousConfiguration` | model parameters, cycle list, permutation, list of paths, `log_Z0_N` | Mutable path container used by moves; cycles partition labels; path `i` ends at the start of `permutation[i]` modulo `L` |
 | `MoveStatistics` | attempts, accepts, topology changes | Mutable counters; rates are undefined before an attempt |

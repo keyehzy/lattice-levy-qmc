@@ -18,20 +18,15 @@ namespace {
 
 std::vector<std::vector<SiteId>> retained_positions(const IdealBosonConfiguration &configuration,
                                                     const TorusLayout &layout) {
-  const auto time_points = configuration.time_links_per_beta;
+  const auto time_points = configuration.time_links_per_beta();
+  const Model &model = configuration.model();
+  const DenseWorldlines &worldlines = configuration.covering_worldlines();
   std::vector<std::vector<SiteId>> positions(time_points);
-  Site position(layout.dimension());
   for (std::size_t time = 0; time < time_points; ++time) {
-    positions[time].reserve(configuration.model.particle_count);
-    for (std::size_t particle = 0; particle < configuration.model.particle_count; ++particle) {
-      for (std::size_t axis = 0; axis < layout.dimension(); ++axis) {
-        position[axis] = configuration.worldlines.at(static_cast<ParticleId>(particle), time, axis);
-      }
-      try {
-        positions[time].push_back(layout.encode(position));
-      } catch (const std::invalid_argument &) {
-        throw std::logic_error("world-line coordinate lies outside the torus");
-      }
+    positions[time].reserve(model.particle_count);
+    for (std::size_t particle = 0; particle < model.particle_count; ++particle) {
+      positions[time].push_back(
+          layout.encode_covering(worldlines.site(static_cast<ParticleId>(particle), time)));
     }
   }
   return positions;
@@ -396,32 +391,27 @@ ExactCycleStatistics exact_cycle_statistics(const Model &model) {
 }
 
 std::vector<std::size_t> sampled_cycle_histogram(const IdealBosonConfiguration &configuration) {
-  std::vector<std::size_t> result(configuration.model.particle_count + 1);
-  for (const IdealCyclePath &cycle : configuration.cycles) {
-    if (cycle.labels.empty() || cycle.labels.size() > configuration.model.particle_count) {
-      throw std::logic_error("configuration contains an invalid cycle length");
-    }
-    ++result[cycle.labels.size()];
+  std::vector<std::size_t> result(configuration.model().particle_count + 1);
+  for (const Cycle &cycle : configuration.topology().cycles()) {
+    ++result[cycle.size()];
   }
   return result;
 }
 
 std::size_t longest_cycle_length(const IdealBosonConfiguration &configuration) {
   std::size_t result = 0;
-  for (const IdealCyclePath &cycle : configuration.cycles) {
-    result = std::max(result, cycle.labels.size());
+  for (const Cycle &cycle : configuration.topology().cycles()) {
+    result = std::max(result, cycle.size());
   }
   return result;
 }
 
 Site total_winding(const IdealBosonConfiguration &configuration) {
-  Site result(configuration.model.dimension);
-  for (const IdealCyclePath &cycle : configuration.cycles) {
-    if (cycle.winding.size() != configuration.model.dimension) {
-      throw std::logic_error("configuration contains a winding vector of the wrong dimension");
-    }
-    for (std::size_t axis = 0; axis < configuration.model.dimension; ++axis) {
-      const Coord value = cycle.winding[axis];
+  Site result(configuration.model().dimension);
+  for (std::size_t cycle = 0; cycle < configuration.topology().cycles().size(); ++cycle) {
+    const Site winding = configuration.cycle_winding(cycle);
+    for (std::size_t axis = 0; axis < configuration.model().dimension; ++axis) {
+      const Coord value = winding[axis];
       if ((value > 0 && result[axis] > std::numeric_limits<Coord>::max() - value) ||
           (value < 0 && result[axis] < std::numeric_limits<Coord>::min() - value)) {
         throw std::overflow_error("total winding exceeds the coordinate range");
@@ -552,11 +542,10 @@ double twist_free_energy_curvature(const Model &model, const std::size_t axis) {
 }
 
 EqualTimeObservables equal_time_observables(const IdealBosonConfiguration &configuration) {
-  configuration.validate();
-  const Model &model = configuration.model;
+  const Model &model = configuration.model();
   const TorusLayout layout(model.linear_size, model.dimension);
   const auto volume = layout.volume();
-  const auto time_points = configuration.time_links_per_beta;
+  const auto time_points = configuration.time_links_per_beta();
   const auto positions = retained_positions(configuration, layout);
 
   EqualTimeObservables result{
@@ -611,11 +600,10 @@ EqualTimeObservables equal_time_observables(const IdealBosonConfiguration &confi
 
 ImaginaryTimeDensityCorrelations
 retained_density_correlations(const IdealBosonConfiguration &configuration) {
-  configuration.validate();
-  const Model &model = configuration.model;
+  const Model &model = configuration.model();
   const TorusLayout layout(model.linear_size, model.dimension);
   const auto volume = layout.volume();
-  const auto time_points = configuration.time_links_per_beta;
+  const auto time_points = configuration.time_links_per_beta();
   const auto grid_size =
       detail::checked_product(time_points, volume, "density-correlation grid exceeds size_t");
   const auto positions = retained_positions(configuration, layout);
@@ -704,11 +692,11 @@ retained_grid_matsubara_transform(const Model &model,
 
 RetainedGeometryObservables
 retained_geometry_observables(const IdealBosonConfiguration &configuration) {
-  configuration.validate();
-  const Model &model = configuration.model;
+  const Model &model = configuration.model();
   const TorusLayout layout(model.linear_size, model.dimension);
   const auto volume = layout.volume();
-  const auto time_points = configuration.time_links_per_beta;
+  const auto time_points = configuration.time_links_per_beta();
+  const DenseWorldlines &worldlines = configuration.covering_worldlines();
   const auto grid_size =
       detail::checked_product(time_points, volume, "retained-geometry grid exceeds size_t");
   RetainedGeometryObservables result{
@@ -723,23 +711,19 @@ retained_geometry_observables(const IdealBosonConfiguration &configuration) {
   }
 
   const auto particle_count = static_cast<double>(model.particle_count);
-  Site origin_site(layout.dimension());
-  Site target_site(layout.dimension());
   for (std::size_t time = 0; time < time_points; ++time) {
     for (std::size_t particle = 0; particle < model.particle_count; ++particle) {
       double squared_displacement = 0.0;
+      const auto label = static_cast<ParticleId>(particle);
       for (std::size_t axis = 0; axis < model.dimension; ++axis) {
-        const auto label = static_cast<ParticleId>(particle);
-        const double value =
-            static_cast<double>(configuration.worldlines_covering.at(label, time, axis)) -
-            static_cast<double>(configuration.worldlines_covering.at(label, 0, axis));
+        const double value = static_cast<double>(worldlines.at(label, time, axis)) -
+                             static_cast<double>(worldlines.at(label, 0, axis));
         squared_displacement += value * value;
-        origin_site[axis] = configuration.worldlines.at(label, 0, axis);
-        target_site[axis] = configuration.worldlines.at(label, time, axis);
       }
       result.mean_square_displacement[time] += squared_displacement / particle_count;
       const SiteId flat =
-          layout.flat_displacement(layout.encode(origin_site), layout.encode(target_site));
+          layout.flat_displacement(layout.encode_covering(worldlines.site(label, 0)),
+                                   layout.encode_covering(worldlines.site(label, time)));
       result.displacement_probability[(time * volume) + flat.value()] += 1.0 / particle_count;
       if (flat.value() == 0) {
         result.return_probability[time] += 1.0 / particle_count;
@@ -751,18 +735,22 @@ retained_geometry_observables(const IdealBosonConfiguration &configuration) {
 
 std::vector<RetainedCycleGeometry>
 retained_cycle_geometry(const IdealBosonConfiguration &configuration) {
-  configuration.validate();
+  const Model &model = configuration.model();
+  const auto time_links = configuration.time_links_per_beta();
+  const DenseWorldlines &worldlines = configuration.covering_worldlines();
+  const auto cycles = configuration.topology().cycles();
   std::vector<RetainedCycleGeometry> result;
-  result.reserve(configuration.cycles.size());
-  for (const IdealCyclePath &cycle : configuration.cycles) {
-    const auto distinct_points = cycle.labels.size() * configuration.time_links_per_beta;
-    if (distinct_points == 0 || cycle.covering_path.size() != distinct_points + 1) {
-      throw std::logic_error("cycle path has an invalid retained-point count");
-    }
-    std::vector<double> center(configuration.model.dimension);
-    for (std::size_t point = 0; point < distinct_points; ++point) {
-      for (std::size_t axis = 0; axis < configuration.model.dimension; ++axis) {
-        center[axis] += static_cast<double>(cycle.covering_path[point][axis]);
+  result.reserve(cycles.size());
+  for (std::size_t cycle_index = 0; cycle_index < cycles.size(); ++cycle_index) {
+    const Cycle &cycle = cycles[cycle_index];
+    const auto distinct_points = detail::checked_product(
+        cycle.size(), time_links, "cycle retained-point count exceeds size_t");
+    std::vector<double> center(model.dimension);
+    for (const ParticleId label : cycle) {
+      for (std::size_t time = 0; time < time_links; ++time) {
+        for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+          center[axis] += static_cast<double>(worldlines.at(label, time, axis));
+        }
       }
     }
     for (double &component : center) {
@@ -770,18 +758,21 @@ retained_cycle_geometry(const IdealBosonConfiguration &configuration) {
     }
 
     RetainedCycleGeometry geometry{
-        .length = cycle.labels.size(),
-        .winding = cycle.winding,
+        .length = cycle.size(),
+        .winding = configuration.cycle_winding(cycle_index),
     };
-    for (std::size_t point = 0; point < distinct_points; ++point) {
-      double squared_radius = 0.0;
-      for (std::size_t axis = 0; axis < configuration.model.dimension; ++axis) {
-        const double displacement =
-            static_cast<double>(cycle.covering_path[point][axis]) - center[axis];
-        squared_radius += displacement * displacement;
+    for (const ParticleId label : cycle) {
+      for (std::size_t time = 0; time < time_links; ++time) {
+        double squared_radius = 0.0;
+        for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+          const double displacement =
+              static_cast<double>(worldlines.at(label, time, axis)) - center[axis];
+          squared_radius += displacement * displacement;
+        }
+        geometry.radius_of_gyration_squared +=
+            squared_radius / static_cast<double>(distinct_points);
+        geometry.maximum_radius_squared = std::max(geometry.maximum_radius_squared, squared_radius);
       }
-      geometry.radius_of_gyration_squared += squared_radius / static_cast<double>(distinct_points);
-      geometry.maximum_radius_squared = std::max(geometry.maximum_radius_squared, squared_radius);
     }
     result.push_back(std::move(geometry));
   }

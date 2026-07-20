@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Store continuous-configuration topology as one `Permutation`; cycle views are
   now derived by that owner and stitch acceptance publishes topology with one
   non-throwing move instead of synchronizing two public vectors.
+- Make retained ideal configurations valid by construction with one
+  authoritative `Permutation` and one private covering-space world-line
+  buffer; physical sites, cycle paths, and winding are now derived from those
+  read-only values.
 - Use the shared torus layout for retained observables, full and incremental
   interaction occupancy, stitch locality buckets, and example flat indexing.
 - Route reusable ideal sampling and exact observables through
@@ -41,6 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Remove the mutable public `FreeBosonTable` and APIs that accepted a `Model`
   and canonical table separately, preventing mismatched physical provenance.
+- Remove retained samples' duplicate torus/cycle path storage and copied
+  `log_ZN`; canonical normalization remains owned by `CanonicalEnsemble`.
 
 ### Fixed
 
