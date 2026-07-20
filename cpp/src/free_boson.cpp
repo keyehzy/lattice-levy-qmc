@@ -185,18 +185,11 @@ std::vector<Cycle> CanonicalEnsemble::sample_cycles(const std::size_t particle_c
 
   while (!remaining.empty()) {
     const auto remaining_count = remaining.size();
-    std::vector<double> log_probabilities(remaining_count);
+    std::vector<double> log_weights(remaining_count);
     for (std::size_t length = 1; length <= remaining_count; ++length) {
-      log_probabilities[length - 1] = log_z_[length] + log_Z_[remaining_count - length] -
-                                      std::log(static_cast<double>(remaining_count)) -
-                                      log_Z_[remaining_count];
+      log_weights[length - 1] = log_z_[length] + log_Z_[remaining_count - length];
     }
-    const double normalization = log_sum_exp(log_probabilities);
-    std::vector<double> probabilities(remaining_count);
-    for (std::size_t index = 0; index < remaining_count; ++index) {
-      probabilities[index] = std::exp(log_probabilities[index] - normalization);
-    }
-    const std::size_t length = random.discrete_index(probabilities) + 1;
+    const std::size_t length = random.discrete_log_index(log_weights) + 1;
 
     Cycle cycle;
     cycle.reserve(length);

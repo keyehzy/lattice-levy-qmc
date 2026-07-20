@@ -83,20 +83,19 @@ std::vector<std::size_t> sample_permanent_matching(const std::span<const double>
   std::size_t mask = 0;
   for (std::size_t row = 0; row < strand_count; ++row) {
     std::vector<std::size_t> columns;
-    std::vector<double> probabilities;
+    std::vector<double> candidate_log_weights;
     columns.reserve(strand_count - row);
-    probabilities.reserve(strand_count - row);
+    candidate_log_weights.reserve(strand_count - row);
     for (std::size_t column = 0; column < strand_count; ++column) {
       const std::size_t column_bit = std::size_t{1} << column;
       if ((mask & column_bit) != 0) {
         continue;
       }
       columns.push_back(column);
-      const double log_probability = log_weights[(row * strand_count) + column] +
-                                     permanent_table[mask | column_bit] - permanent_table[mask];
-      probabilities.push_back(std::exp(log_probability));
+      candidate_log_weights.push_back(log_weights[(row * strand_count) + column] +
+                                      permanent_table[mask | column_bit]);
     }
-    const std::size_t selected = random.discrete_index(probabilities);
+    const std::size_t selected = random.discrete_log_index(candidate_log_weights);
     const std::size_t column = columns[selected];
     matching[row] = column;
     mask |= std::size_t{1} << column;

@@ -374,14 +374,8 @@ std::vector<std::size_t> sample_stitch_matching(const std::span<const double> lo
   if (!std::isfinite(log_identity) && !std::isfinite(log_exchange)) {
     throw std::runtime_error("both stitch matchings have zero free weight");
   }
-  bool exchanged = false;
-  if (!std::isfinite(log_identity)) {
-    exchanged = true;
-  } else if (std::isfinite(log_exchange)) {
-    const std::array<double, 2> matching_weights{log_identity, log_exchange};
-    const double log_normalizer = log_sum_exp(matching_weights);
-    exchanged = std::log(random.uniform_open()) < log_exchange - log_normalizer;
-  }
+  const std::array<double, 2> matching_log_weights{log_identity, log_exchange};
+  const bool exchanged = random.discrete_log_index(matching_log_weights) == 1;
   return exchanged ? std::vector<std::size_t>{1, 0} : std::vector<std::size_t>{0, 1};
 }
 

@@ -211,11 +211,7 @@ std::uint64_t sample_bessel_pair_count(const std::uint64_t abs_delta, const doub
 
     const double log_tail_bound = log_first_omitted - std::log1p(-ratio_after_first);
     if (log_tail_bound - log_inside <= log_tolerance) {
-      std::vector<double> weights(log_weights.size());
-      for (std::size_t index = 0; index < weights.size(); ++index) {
-        weights[index] = std::exp(log_weights[index] - log_inside);
-      }
-      return static_cast<std::uint64_t>(random.discrete_index(weights));
+      return static_cast<std::uint64_t>(random.discrete_log_index(log_weights));
     }
     support = grow_support(support, 32, 1.5);
   }

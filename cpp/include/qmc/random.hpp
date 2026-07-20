@@ -23,6 +23,9 @@ public:
   [[nodiscard]] std::uint64_t binomial(std::uint64_t trials, double probability);
   // Draws an index proportional to finite nonnegative, not necessarily normalized weights.
   [[nodiscard]] std::size_t discrete_index(std::span<const double> weights);
+  // Draws an index proportional to exp(log_weight). Values may be finite or negative infinity;
+  // empty inputs, NaN, positive infinity, and all-negative-infinity inputs are rejected.
+  [[nodiscard]] std::size_t discrete_log_index(std::span<const double> log_weights);
   void shuffle(std::span<ParticleId> labels);
 
 private:

@@ -65,6 +65,46 @@ std::size_t Random::discrete_index(const std::span<const double> weights) {
   return weights.size() - 1;
 }
 
+std::size_t Random::discrete_log_index(const std::span<const double> log_weights) {
+  if (log_weights.empty()) {
+    throw std::invalid_argument("discrete log weights must not be empty");
+  }
+
+  double maximum = -std::numeric_limits<double>::infinity();
+  for (const double log_weight : log_weights) {
+    if (std::isnan(log_weight) || log_weight == std::numeric_limits<double>::infinity()) {
+      throw std::invalid_argument("discrete log weights must be finite or negative infinity");
+    }
+    maximum = std::max(maximum, log_weight);
+  }
+  if (maximum == -std::numeric_limits<double>::infinity()) {
+    throw std::invalid_argument("discrete log weights must contain positive probability mass");
+  }
+
+  double scaled_total = 0.0;
+  for (const double log_weight : log_weights) {
+    scaled_total += std::exp(log_weight - maximum);
+  }
+  if (!std::isfinite(scaled_total) || scaled_total <= 0.0) {
+    throw std::invalid_argument("discrete log weights must have a finite positive scaled sum");
+  }
+
+  const double draw = uniform_unit() * scaled_total;
+  double cumulative = 0.0;
+  std::size_t last_positive = 0;
+  for (std::size_t index = 0; index < log_weights.size(); ++index) {
+    if (log_weights[index] == -std::numeric_limits<double>::infinity()) {
+      continue;
+    }
+    last_positive = index;
+    cumulative += std::exp(log_weights[index] - maximum);
+    if (draw < cumulative) {
+      return index;
+    }
+  }
+  return last_positive;
+}
+
 void Random::shuffle(const std::span<ParticleId> labels) {
   std::shuffle(labels.begin(), labels.end(), engine_);
 }

@@ -3,14 +3,33 @@
 #include "qmc/free_numerics.hpp"
 #include "qmc/observables.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <gtest/gtest.h>
+#include <limits>
 #include <numeric>
 #include <vector>
 
 namespace {
+
+TEST(LogWeightDistributionTest, MatchesCategoricalLawWithExtremeCommonOffset) {
+  constexpr std::size_t sample_count = 60'000;
+  const std::array log_weights{-10'000.0 + std::log(0.1), -10'000.0 + std::log(0.3),
+                               -std::numeric_limits<double>::infinity(), -10'000.0 + std::log(0.6)};
+  const std::array expected{0.1, 0.3, 0.0, 0.6};
+  std::array<std::size_t, expected.size()> counts{};
+  qmc::Random random(1927);
+
+  for (std::size_t sample = 0; sample < sample_count; ++sample) {
+    ++counts[random.discrete_log_index(log_weights)];
+  }
+  for (std::size_t index = 0; index < expected.size(); ++index) {
+    const double empirical = static_cast<double>(counts[index]) / sample_count;
+    EXPECT_NEAR(empirical, expected[index], 0.006);
+  }
+}
 
 TEST(MidpointDistributionTest, MatchesExactBesselPmf) {
   constexpr qmc::Coord minimum = -8;

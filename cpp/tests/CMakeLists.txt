@@ -25,6 +25,7 @@ add_executable(
   test_free_numerics.cpp
   test_model.cpp
   test_observables.cpp
+  test_random.cpp
   test_torus_layout.cpp
   test_version.cpp
 )

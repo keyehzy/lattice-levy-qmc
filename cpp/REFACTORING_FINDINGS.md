@@ -73,7 +73,7 @@ type collects one invariant that is currently spread across several files.
 | P1 | Path cursor/slice migration (done 2026-07-20) | Simpler boundary semantics and faster path surgery | Medium |
 | P1 | Add a retained-measurement context (done 2026-07-20); add accumulators | Less repeated work and a smaller demo | Medium |
 | P1 | Collect reusable free-particle numerics | Numerical clarity and less repeated setup | Medium |
-| P1 | Unify discrete log-weight and bounded-tail sampling | One truncation policy and fewer allocations | Medium |
+| P1 | Unify discrete log-weight draws (done 2026-07-20) and bounded-tail sampling | One truncation policy and fewer allocations | Medium |
 | P1 | Unify full/incremental action around accepted state | One source of truth and faster full evaluation | Medium |
 | P1 | Make permutation topology authoritative (continuous and retained ideal done 2026-07-20) | Remove duplicated state and synchronization code | Medium |
 | P1 | Separate stitch selection, proposal, and commit | Readability, testability, and API clarity | Medium |
@@ -547,13 +547,29 @@ cache boundaries and removes repeated trigonometry naturally.
 
 ### 8. P1: unify discrete log-weight and bounded-tail sampling
 
-Evidence:
+Status (2026-07-20): the log-weight categorical-sampling slice is complete.
+`Random::discrete_log_index()` now validates finite-or-negative-infinity inputs,
+normalizes after subtracting the maximum, and rejects empty or zero-mass laws
+before consuming randomness. Canonical cycle lengths, conditioned Bessel pair
+counts, permanent-matching rows, and the two-strand stitch choice consume log
+weights directly instead of allocating and normalizing probability buffers or
+maintaining a separate log-space draw. Exact validation, extreme-offset,
+deterministic-support, seeded offset-equivalence, and distribution tests cover
+the shared boundary. Seeded streams may change where callers previously used a
+different CDF convention or skipped deterministic draws; the probability laws
+are unchanged. Adaptive support unification, incremental weight extension, and
+fixed-capacity prepared permanents remain open.
+
+Pre-slice evidence:
 
 - cycle sampling converts log probabilities to a new probability vector before
   calling `Random::discrete_index()` (`src/free_boson.cpp:173-186`).
 - permanent matching repeats the same conversion row by row
   (`src/stitch_matching.cpp:82-100`), while pair stitching has a third custom
   log-space draw (`src/interacting_sampler.cpp:410-430`).
+
+Remaining evidence:
+
 - the permanent builder returns a raw vector, so its immediately following
   sampler revalidates the matrix and every table entry that the library just
   produced (`src/stitch_matching.cpp:40-80`).
@@ -1011,7 +1027,8 @@ visible at the assertion sites.
    topology; full validation remains available as an explicit diagnostic audit.
 6. Retained measurement context completed 2026-07-20; add accumulators, then
    optimize direct correlation kernels from benchmark evidence.
-7. Consolidate canonical derivative/log-distribution numerics.
+7. Log-weight categorical draws completed 2026-07-20; consolidate canonical
+   derivative recurrences and adaptive-support numerics.
 8. Split translation units and demos after responsibilities have stabilized.
 9. GoogleTest exclusion from clang-tidy completed 2026-07-19; add install, CI,
    benchmark support, and an external consumer test.

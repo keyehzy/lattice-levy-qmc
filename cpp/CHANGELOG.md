@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add stable log-weight categorical sampling to `Random`, including explicit
+  zero-mass and non-finite-input validation.
 - Add `TorusLayout` and the strong `SiteId` physical-site identity for checked
   lattice volume, encoding, displacement, shifts, and neighborhood traversal.
 - Add an immutable `CanonicalEnsemble` that binds a validated free model to its
@@ -24,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Route canonical-cycle, conditioned Bessel-count, and stitch-matching draws
+  through the shared log-weight sampler without temporary probability buffers.
 - Make retained density-correlation results valid by construction and bind
   their inverse temperature, time grid, and torus layout directly to the data;
   Matsubara transforms no longer accept a separately supplied model.
