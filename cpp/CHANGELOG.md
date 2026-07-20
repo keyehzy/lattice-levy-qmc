@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   canonical recursion and supports explicit particle-number prefix reuse.
 - Add a validated `Permutation` value with authoritative successor storage and
   a deterministic read-only cycle decomposition.
+- Add an owning `RetainedMeasurementContext` so equal-time and retained-density
+  estimators can share one physical-site traversal and retained-grid provenance.
 - Add generated compile-time version metadata in `<qmc/version.hpp>`, sourced
   from the CMake project version.
 - Document the C++ refactoring audit, including correctness, performance,

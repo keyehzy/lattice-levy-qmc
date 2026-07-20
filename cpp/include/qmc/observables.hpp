@@ -91,21 +91,6 @@ sampled_cycle_histogram(const IdealBosonConfiguration &configuration);
                                                  std::size_t axis);
 [[nodiscard]] double twist_free_energy_curvature(const Model &model, std::size_t axis);
 
-struct EqualTimeObservables {
-  // Flat site/momentum ordering uses axis zero as the least-significant base-L digit.
-  // Values are averaged over the M distinct retained slices; the duplicate beta endpoint
-  // is excluded.
-  std::vector<double> site_density;
-  std::vector<double> pair_correlation;
-  std::vector<double> static_structure_factor;
-  std::vector<double> onsite_occupation_probability;
-  double mean_occupation_squared = 0.0;
-  double mean_factorial_occupation = 0.0;
-};
-
-[[nodiscard]] EqualTimeObservables
-equal_time_observables(const IdealBosonConfiguration &configuration);
-
 // Immutable provenance for an exact retained-time grid on one torus. beta may
 // be zero, but transforms that divide by beta reject that boundary value.
 class RetainedGrid {
@@ -124,6 +109,46 @@ private:
   TorusLayout layout_;
   std::size_t time_points_;
 };
+
+// Reusable, owning measurement state derived from one retained ideal
+// configuration. Positions are reduced to physical SiteId values once and the
+// duplicate beta endpoint is excluded.
+class RetainedMeasurementContext {
+public:
+  explicit RetainedMeasurementContext(const IdealBosonConfiguration &configuration);
+
+  [[nodiscard]] const RetainedGrid &grid() const noexcept { return grid_; }
+  [[nodiscard]] std::size_t particle_count() const noexcept { return particle_count_; }
+  // Returns one particle-ordered retained slice and throws out_of_range for an
+  // index outside [0, grid().time_points()).
+  [[nodiscard]] std::span<const SiteId> positions_at(std::size_t time_index) const;
+
+  bool operator==(const RetainedMeasurementContext &) const = default;
+
+private:
+  RetainedGrid grid_;
+  std::size_t particle_count_;
+  std::vector<SiteId> positions_;
+};
+
+struct EqualTimeObservables {
+  // Flat site/momentum ordering uses axis zero as the least-significant base-L digit.
+  // Values are averaged over the M distinct retained slices; the duplicate beta endpoint
+  // is excluded.
+  std::vector<double> site_density;
+  std::vector<double> pair_correlation;
+  std::vector<double> static_structure_factor;
+  std::vector<double> onsite_occupation_probability;
+  double mean_occupation_squared = 0.0;
+  double mean_factorial_occupation = 0.0;
+};
+
+[[nodiscard]] EqualTimeObservables
+equal_time_observables(const RetainedMeasurementContext &context);
+// One-off convenience overload; construct a RetainedMeasurementContext when
+// evaluating more than one retained observable for the same configuration.
+[[nodiscard]] EqualTimeObservables
+equal_time_observables(const IdealBosonConfiguration &configuration);
 
 // Shape-safe connected C_nn(delta, tau_j). The estimator averages all retained
 // time origins and uses periodic imaginary-time differences. Flat storage uses
@@ -150,6 +175,10 @@ private:
   std::vector<double> connected_density_;
 };
 
+[[nodiscard]] ImaginaryTimeDensityCorrelations
+retained_density_correlations(const RetainedMeasurementContext &context);
+// One-off convenience overload; construct a RetainedMeasurementContext when
+// evaluating more than one retained observable for the same configuration.
 [[nodiscard]] ImaginaryTimeDensityCorrelations
 retained_density_correlations(const IdealBosonConfiguration &configuration);
 

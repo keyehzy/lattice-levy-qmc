@@ -16,22 +16,6 @@
 namespace qmc {
 namespace {
 
-std::vector<std::vector<SiteId>> retained_positions(const IdealBosonConfiguration &configuration,
-                                                    const TorusLayout &layout) {
-  const auto time_points = configuration.time_links_per_beta();
-  const Model &model = configuration.model();
-  const DenseWorldlines &worldlines = configuration.covering_worldlines();
-  std::vector<std::vector<SiteId>> positions(time_points);
-  for (std::size_t time = 0; time < time_points; ++time) {
-    positions[time].reserve(model.particle_count);
-    for (std::size_t particle = 0; particle < model.particle_count; ++particle) {
-      positions[time].push_back(
-          layout.encode_covering(worldlines.site(static_cast<ParticleId>(particle), time)));
-    }
-  }
-  return positions;
-}
-
 struct LogDerivatives {
   double first = 0.0;
   double second = 0.0;
@@ -164,8 +148,9 @@ void accumulate_pair_counts(const std::span<const SiteId> positions, const Torus
 }
 
 void accumulate_structure_factor(const std::span<const SiteId> positions, const TorusLayout &layout,
-                                 const Model &model, std::vector<double> &structure_factor) {
-  if (model.particle_count == 0) {
+                                 const std::size_t particle_count,
+                                 std::vector<double> &structure_factor) {
+  if (particle_count == 0) {
     return;
   }
   std::vector<std::size_t> site_components(layout.dimension());
@@ -177,8 +162,7 @@ void accumulate_structure_factor(const std::span<const SiteId> positions, const 
       const double phase = phase_for_indices(momentum_components, site_components, layout);
       density_mode += std::polar(1.0, -phase);
     }
-    structure_factor[momentum] +=
-        std::norm(density_mode) / static_cast<double>(model.particle_count);
+    structure_factor[momentum] += std::norm(density_mode) / static_cast<double>(particle_count);
   }
 }
 
@@ -551,6 +535,31 @@ RetainedGrid::RetainedGrid(const double beta, TorusLayout layout, const std::siz
   }
 }
 
+RetainedMeasurementContext::RetainedMeasurementContext(const IdealBosonConfiguration &configuration)
+    : grid_(configuration.model().beta,
+            TorusLayout(configuration.model().linear_size, configuration.model().dimension),
+            configuration.time_links_per_beta()),
+      particle_count_(configuration.model().particle_count) {
+  const auto position_count = detail::checked_product(grid_.time_points(), particle_count_,
+                                                      "retained-position grid exceeds size_t");
+  positions_.reserve(position_count);
+  const DenseWorldlines &worldlines = configuration.covering_worldlines();
+  for (std::size_t time = 0; time < grid_.time_points(); ++time) {
+    for (std::size_t particle = 0; particle < particle_count_; ++particle) {
+      positions_.push_back(
+          grid_.layout().encode_covering(worldlines.site(static_cast<ParticleId>(particle), time)));
+    }
+  }
+}
+
+std::span<const SiteId>
+RetainedMeasurementContext::positions_at(const std::size_t time_index) const {
+  if (time_index >= grid_.time_points()) {
+    throw std::out_of_range("retained-position time index is outside the measurement grid");
+  }
+  return std::span<const SiteId>(positions_).subspan(time_index * particle_count_, particle_count_);
+}
+
 ImaginaryTimeDensityCorrelations::ImaginaryTimeDensityCorrelations(
     RetainedGrid grid, std::vector<double> connected_density)
     : grid_(std::move(grid)), connected_density_(std::move(connected_density)) {
@@ -569,36 +578,37 @@ double ImaginaryTimeDensityCorrelations::at(const std::size_t time_index,
   return connected_density_[(time_index * spatial_points()) + displacement.value()];
 }
 
-EqualTimeObservables equal_time_observables(const IdealBosonConfiguration &configuration) {
-  const Model &model = configuration.model();
-  const TorusLayout layout(model.linear_size, model.dimension);
+EqualTimeObservables equal_time_observables(const RetainedMeasurementContext &context) {
+  const TorusLayout &layout = context.grid().layout();
   const auto volume = layout.volume();
-  const auto time_points = configuration.time_links_per_beta();
-  const auto positions = retained_positions(configuration, layout);
+  const auto time_points = context.grid().time_points();
+  const auto particle_count = context.particle_count();
 
   EqualTimeObservables result{
       .site_density = std::vector<double>(volume),
       .pair_correlation = std::vector<double>(volume),
       .static_structure_factor = std::vector<double>(volume),
-      .onsite_occupation_probability = std::vector<double>(model.particle_count + 1),
+      .onsite_occupation_probability = std::vector<double>(particle_count + 1),
   };
   std::vector<double> pair_counts(volume);
-  std::vector<std::vector<std::size_t>> occupancies(time_points, std::vector<std::size_t>(volume));
+  std::vector<std::size_t> occupancies(volume);
 
   for (std::size_t time = 0; time < time_points; ++time) {
-    for (const SiteId site : positions[time]) {
-      ++occupancies[time][site.value()];
+    std::ranges::fill(occupancies, 0);
+    const auto positions = context.positions_at(time);
+    for (const SiteId site : positions) {
+      ++occupancies[site.value()];
     }
     for (std::size_t site = 0; site < volume; ++site) {
-      const auto occupation = occupancies[time][site];
+      const auto occupation = occupancies[site];
       result.site_density[site] += static_cast<double>(occupation);
       ++result.onsite_occupation_probability[occupation];
       const auto occupation_value = static_cast<double>(occupation);
       result.mean_occupation_squared += occupation_value * occupation_value;
       result.mean_factorial_occupation += occupation_value * std::max(0.0, occupation_value - 1.0);
     }
-    accumulate_pair_counts(positions[time], layout, pair_counts);
-    accumulate_structure_factor(positions[time], layout, model, result.static_structure_factor);
+    accumulate_pair_counts(positions, layout, pair_counts);
+    accumulate_structure_factor(positions, layout, particle_count, result.static_structure_factor);
   }
 
   const auto slice_count = static_cast<double>(time_points);
@@ -615,8 +625,8 @@ EqualTimeObservables equal_time_observables(const IdealBosonConfiguration &confi
     structure_factor /= slice_count;
   }
 
-  if (model.particle_count > 0) {
-    const double density = static_cast<double>(model.particle_count) / static_cast<double>(volume);
+  if (particle_count > 0) {
+    const double density = static_cast<double>(particle_count) / static_cast<double>(volume);
     for (std::size_t displacement = 0; displacement < volume; ++displacement) {
       const double correlation = pair_counts[displacement] / site_observation_count;
       const double self_term = displacement == 0 ? density : 0.0;
@@ -626,22 +636,29 @@ EqualTimeObservables equal_time_observables(const IdealBosonConfiguration &confi
   return result;
 }
 
+EqualTimeObservables equal_time_observables(const IdealBosonConfiguration &configuration) {
+  return equal_time_observables(RetainedMeasurementContext(configuration));
+}
+
 ImaginaryTimeDensityCorrelations
-retained_density_correlations(const IdealBosonConfiguration &configuration) {
-  const Model &model = configuration.model();
-  const TorusLayout layout(model.linear_size, model.dimension);
+retained_density_correlations(const RetainedMeasurementContext &context) {
+  const RetainedGrid &grid = context.grid();
+  const TorusLayout &layout = grid.layout();
   const auto volume = layout.volume();
-  const auto time_points = configuration.time_links_per_beta();
+  const auto time_points = grid.time_points();
   const auto grid_size =
       detail::checked_product(time_points, volume, "density-correlation grid exceeds size_t");
-  const auto positions = retained_positions(configuration, layout);
   std::vector<double> connected_density(grid_size);
 
   for (std::size_t lag = 0; lag < time_points; ++lag) {
     for (std::size_t origin_time = 0; origin_time < time_points; ++origin_time) {
-      const std::size_t target_time = (origin_time + lag) % time_points;
-      for (const SiteId origin : positions[origin_time]) {
-        for (const SiteId target : positions[target_time]) {
+      const auto time_until_wrap = time_points - origin_time;
+      const std::size_t target_time =
+          lag >= time_until_wrap ? lag - time_until_wrap : origin_time + lag;
+      const auto origins = context.positions_at(origin_time);
+      const auto targets = context.positions_at(target_time);
+      for (const SiteId origin : origins) {
+        for (const SiteId target : targets) {
           const auto displacement = layout.flat_displacement(origin, target);
           ++connected_density[(lag * volume) + displacement.value()];
         }
@@ -650,11 +667,17 @@ retained_density_correlations(const IdealBosonConfiguration &configuration) {
   }
 
   const double normalization = static_cast<double>(time_points) * static_cast<double>(volume);
-  const double density = static_cast<double>(model.particle_count) / static_cast<double>(volume);
+  const double density =
+      static_cast<double>(context.particle_count()) / static_cast<double>(volume);
   for (double &correlation : connected_density) {
     correlation = (correlation / normalization) - (density * density);
   }
-  return {RetainedGrid(model.beta, layout, time_points), std::move(connected_density)};
+  return {grid, std::move(connected_density)};
+}
+
+ImaginaryTimeDensityCorrelations
+retained_density_correlations(const IdealBosonConfiguration &configuration) {
+  return retained_density_correlations(RetainedMeasurementContext(configuration));
 }
 
 MatsubaraDensityCorrelations

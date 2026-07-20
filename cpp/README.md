@@ -94,8 +94,9 @@ const auto configuration =
 configuration.validate();
 const auto thermodynamics = qmc::canonical_thermodynamics(ensemble);
 const auto momentum = qmc::momentum_distribution(ensemble);
-const auto equal_time = qmc::equal_time_observables(configuration);
-const auto correlations = qmc::retained_density_correlations(configuration);
+const qmc::RetainedMeasurementContext measurements(configuration);
+const auto equal_time = qmc::equal_time_observables(measurements);
+const auto correlations = qmc::retained_density_correlations(measurements);
 ```
 
 `CanonicalEnsemble` owns the validated model and its matching canonical
@@ -111,6 +112,11 @@ cycle views. Torus coordinates and cycle windings are derived from those two
 authoritative values instead of being stored as synchronized copies. `64` is
 the number of retained time links per interval `beta`; it is an observation
 resolution, not a Trotter discretization.
+
+`RetainedMeasurementContext` owns the retained-grid provenance and physical
+site positions derived from a configuration. Reuse one when evaluating several
+retained observables for the same sample. Configuration-taking convenience
+overloads remain available for one-off measurements.
 
 `qmc::TorusLayout` is the shared checked geometry for flattened lattice data.
 It fixes axis zero as the least-significant base-`L` digit and produces compact

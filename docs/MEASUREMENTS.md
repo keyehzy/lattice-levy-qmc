@@ -60,6 +60,13 @@ density.
 
 ## Equal-time configuration estimators
 
+For workflows that evaluate several retained estimators on one ideal
+configuration, `RetainedMeasurementContext` reduces the covering paths to
+physical sites once and owns the matching retained-grid provenance. Both
+`equal_time_observables` and `retained_density_correlations` accept this context;
+their configuration-taking overloads construct a temporary context for one-off
+use.
+
 `equal_time_observables` averages over the `M` distinct exact retained slices
 and returns:
 

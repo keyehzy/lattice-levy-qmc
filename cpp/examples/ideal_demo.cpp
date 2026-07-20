@@ -302,7 +302,8 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
           static_cast<double>(macroscopic_particles) / static_cast<double>(model.particle_count);
     }
 
-    const auto equal_time = qmc::equal_time_observables(configuration);
+    const qmc::RetainedMeasurementContext measurement_context(configuration);
+    const auto equal_time = qmc::equal_time_observables(measurement_context);
     add_values(averages.site_density, equal_time.site_density);
     add_values(averages.pair_correlation, equal_time.pair_correlation);
     add_values(averages.structure_factor, equal_time.static_structure_factor);
@@ -310,7 +311,7 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
     averages.mean_occupation_squared += equal_time.mean_occupation_squared;
     averages.mean_factorial_occupation += equal_time.mean_factorial_occupation;
 
-    const auto imaginary_time = qmc::retained_density_correlations(configuration);
+    const auto imaginary_time = qmc::retained_density_correlations(measurement_context);
     add_values(averages.connected_density, imaginary_time.connected_density());
     const auto retained_geometry = qmc::retained_geometry_observables(configuration);
     add_values(averages.mean_square_displacement, retained_geometry.mean_square_displacement);

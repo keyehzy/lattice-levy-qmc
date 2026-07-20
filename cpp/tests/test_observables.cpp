@@ -266,6 +266,51 @@ TEST(ConfigurationObservablesTest, ExactSampleInvariantsHoldOnRetainedGrid) {
   }
 }
 
+TEST(ConfigurationObservablesTest, RetainedMeasurementContextReusesOwnedPositions) {
+  const qmc::Model model{
+      .particle_count = 5,
+      .beta = 0.8,
+      .linear_size = 4,
+      .dimension = 2,
+      .hopping = 0.7,
+  };
+  qmc::Random random(1907);
+  const auto configuration = qmc::sample_ideal_boson_configuration(model, 6, random);
+  const qmc::RetainedMeasurementContext context(configuration);
+  const qmc::TorusLayout layout(model.linear_size, model.dimension);
+
+  EXPECT_DOUBLE_EQ(context.grid().beta(), model.beta);
+  EXPECT_EQ(context.grid().layout(), layout);
+  EXPECT_EQ(context.grid().time_points(), configuration.time_links_per_beta());
+  EXPECT_EQ(context.particle_count(), model.particle_count);
+  for (std::size_t time = 0; time < context.grid().time_points(); ++time) {
+    const auto positions = context.positions_at(time);
+    ASSERT_EQ(positions.size(), model.particle_count);
+    for (std::size_t particle = 0; particle < model.particle_count; ++particle) {
+      const auto label = static_cast<qmc::ParticleId>(particle);
+      EXPECT_EQ(positions[particle],
+                layout.encode_covering(configuration.covering_worldlines().site(label, time)));
+    }
+  }
+  EXPECT_THROW(static_cast<void>(context.positions_at(context.grid().time_points())),
+               std::out_of_range);
+
+  const auto direct_equal_time = qmc::equal_time_observables(context);
+  const auto wrapped_equal_time = qmc::equal_time_observables(configuration);
+  EXPECT_EQ(direct_equal_time.site_density, wrapped_equal_time.site_density);
+  EXPECT_EQ(direct_equal_time.pair_correlation, wrapped_equal_time.pair_correlation);
+  EXPECT_EQ(direct_equal_time.static_structure_factor, wrapped_equal_time.static_structure_factor);
+  EXPECT_EQ(direct_equal_time.onsite_occupation_probability,
+            wrapped_equal_time.onsite_occupation_probability);
+  EXPECT_DOUBLE_EQ(direct_equal_time.mean_occupation_squared,
+                   wrapped_equal_time.mean_occupation_squared);
+  EXPECT_DOUBLE_EQ(direct_equal_time.mean_factorial_occupation,
+                   wrapped_equal_time.mean_factorial_occupation);
+
+  EXPECT_EQ(qmc::retained_density_correlations(context),
+            qmc::retained_density_correlations(configuration));
+}
+
 TEST(ConfigurationObservablesTest, RejectsWrappedMatsubaraGridExtent) {
   const qmc::TorusLayout layout(2, 1);
   const auto overflowing_time_points =
@@ -344,6 +389,22 @@ TEST(CanonicalObservablesTest, HandlesEmptySystemAndRejectsUndefinedTemperatureQ
       momentum.modes, [](const qmc::MomentumMode &mode) { return mode.occupation == 0.0; }));
   EXPECT_TRUE(std::ranges::all_of(
       density_matrix, [](const qmc::OneBodyDensityPoint &point) { return point.value == 0.0; }));
+
+  qmc::Random random(1911);
+  const auto configuration = qmc::sample_ideal_boson_configuration(empty_ensemble, 3, random);
+  const qmc::RetainedMeasurementContext context(configuration);
+  EXPECT_EQ(context.particle_count(), 0U);
+  for (std::size_t time = 0; time < context.grid().time_points(); ++time) {
+    EXPECT_TRUE(context.positions_at(time).empty());
+  }
+  const auto equal_time = qmc::equal_time_observables(context);
+  ASSERT_EQ(equal_time.onsite_occupation_probability.size(), 1U);
+  EXPECT_DOUBLE_EQ(equal_time.onsite_occupation_probability.front(), 1.0);
+  EXPECT_TRUE(std::ranges::all_of(equal_time.site_density,
+                                  [](const double density) { return density == 0.0; }));
+  const auto correlations = qmc::retained_density_correlations(context);
+  EXPECT_TRUE(std::ranges::all_of(correlations.connected_density(),
+                                  [](const double density) { return density == 0.0; }));
 }
 
 } // namespace

@@ -71,7 +71,7 @@ type collects one invariant that is currently spread across several files.
 | P0 | Bind model and canonical table (done 2026-07-19); add reusable free numerics | Correctness and large repeated-work reduction | Medium |
 | P0 | Make paths/configurations valid-by-construction (`ContinuousPath` and retained ideal configuration done 2026-07-20) | Ownership clarity and removal of nested validation | Large |
 | P1 | Path cursor/slice migration (done 2026-07-20) | Simpler boundary semantics and faster path surgery | Medium |
-| P1 | Add a retained-measurement context and accumulators | Less repeated work and a smaller demo | Medium |
+| P1 | Add a retained-measurement context (done 2026-07-20); add accumulators | Less repeated work and a smaller demo | Medium |
 | P1 | Collect reusable free-particle numerics | Numerical clarity and less repeated setup | Medium |
 | P1 | Unify discrete log-weight and bounded-tail sampling | One truncation policy and fewer allocations | Medium |
 | P1 | Unify full/incremental action around accepted state | One source of truth and faster full evaluation | Medium |
@@ -429,7 +429,18 @@ proportional to events plus pieces and is easier to reason about.
 
 ### 6. P1: share retained measurement state and provide real accumulators
 
-Evidence:
+Status (2026-07-20): the retained-measurement-context slice is complete.
+`RetainedMeasurementContext` owns the retained-grid provenance and flattened,
+time-major physical positions derived once from a retained configuration.
+Equal-time and retained-density estimators consume it, while their existing
+configuration overloads remain as one-off wrappers. The ideal demo constructs
+one context per sample, and equal-time occupancy measurement now reuses one
+volume-sized slice buffer instead of retaining an `M x volume` matrix. Exact
+context/wrapper equivalence, position derivation, bounds, and empty-system tests
+cover the new boundary. Typed accumulators, shape-aware result accessors, and
+transform plans remain open.
+
+Pre-context evidence:
 
 - `equal_time_observables()` and `retained_density_correlations()` independently
   call `retained_positions()` (`src/observables.cpp:584-590` and
@@ -440,6 +451,9 @@ Evidence:
 - equal-time measurement materializes both all retained positions and an
   `M x volume` occupancy matrix even though occupancies are consumed one slice
   at a time (`src/observables.cpp:92-104` and `src/observables.cpp:584-614`).
+
+Remaining evidence:
+
 - `SampleAverages` has 27 manually initialized/added/divided fields
   (`examples/ideal_demo.cpp:193-243` and `examples/ideal_demo.cpp:318-342`).
   Adding a result field requires updating several distant blocks correctly.
@@ -995,8 +1009,8 @@ visible at the assertion sites.
 5. Completed 2026-07-20: `ContinuousPath` and retained dense/configuration
    encapsulation, plus authoritative continuous and retained `Permutation`
    topology; full validation remains available as an explicit diagnostic audit.
-6. Add retained measurement context and accumulators, then optimize direct
-   correlation kernels from benchmark evidence.
+6. Retained measurement context completed 2026-07-20; add accumulators, then
+   optimize direct correlation kernels from benchmark evidence.
 7. Consolidate canonical derivative/log-distribution numerics.
 8. Split translation units and demos after responsibilities have stabilized.
 9. GoogleTest exclusion from clang-tidy completed 2026-07-19; add install, CI,
