@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 #include <limits>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <vector>
 
@@ -94,7 +95,8 @@ BruteMatchingLaw brute_matching_law(const std::array<double, 9> &weights) {
   return law;
 }
 
-std::size_t matching_rank(const std::vector<std::size_t> &matching, const BruteMatchingLaw &law) {
+std::size_t matching_rank(const std::span<const std::size_t> matching,
+                          const BruteMatchingLaw &law) {
   for (std::size_t index = 0; index < law.matchings.size(); ++index) {
     if (std::ranges::equal(matching, law.matchings[index])) {
       return index;
@@ -108,21 +110,36 @@ TEST(InteractingSamplerTest, PermanentRecursionMatchesBruteForceAndLimits) {
   std::array<double, 9> log_weights{};
   std::ranges::transform(weights, log_weights.begin(),
                          [](const double value) { return std::log(value); });
-  const std::vector<double> table = detail::log_permanent_table(log_weights, 3);
+  const detail::PreparedPermanent permanent(log_weights, 3);
   const BruteMatchingLaw law = brute_matching_law(weights);
-  EXPECT_NEAR(std::exp(table[0]), law.permanent, 2e-14);
+  EXPECT_EQ(permanent.strand_count(), 3);
+  EXPECT_NEAR(std::exp(permanent.log_total_weight()), law.permanent, 2e-14);
 
   const std::array<double, 64> all_ones{};
-  EXPECT_NEAR(std::exp(detail::log_permanent_table(all_ones, 8)[0]), 40'320.0, 1e-9);
+  EXPECT_NEAR(std::exp(detail::PreparedPermanent(all_ones, 8).log_total_weight()), 40'320.0, 1e-9);
   std::array<double, 64> unique{};
   unique.fill(-std::numeric_limits<double>::infinity());
   for (std::size_t index = 0; index < 8; ++index) {
     unique[(index * 8) + index] = 0.0;
   }
-  const std::vector<double> unique_table = detail::log_permanent_table(unique, 8);
+  const detail::PreparedPermanent unique_permanent(unique, 8);
+  unique.fill(0.0);
   Random random(72);
-  EXPECT_EQ(detail::sample_permanent_matching(unique, 8, unique_table, random),
-            (std::vector<std::size_t>{0, 1, 2, 3, 4, 5, 6, 7}));
+  EXPECT_EQ(unique_permanent.sample(random), (detail::StitchMatching{0, 1, 2, 3, 4, 5, 6, 7}));
+}
+
+TEST(InteractingSamplerTest, PreparedPermanentRejectsInvalidWeights) {
+  const std::array<double, 1> one_weight{0.0};
+  EXPECT_THROW(detail::PreparedPermanent(one_weight, 0), std::invalid_argument);
+  EXPECT_THROW(detail::PreparedPermanent(one_weight, 9), std::invalid_argument);
+  EXPECT_THROW(detail::PreparedPermanent(one_weight, 2), std::invalid_argument);
+
+  const std::array<double, 1> nan_weight{std::numeric_limits<double>::quiet_NaN()};
+  EXPECT_THROW(detail::PreparedPermanent(nan_weight, 1), std::invalid_argument);
+  const std::array<double, 1> positive_infinity{std::numeric_limits<double>::infinity()};
+  EXPECT_THROW(detail::PreparedPermanent(positive_infinity, 1), std::invalid_argument);
+  const std::array<double, 1> zero_mass{-std::numeric_limits<double>::infinity()};
+  EXPECT_THROW(detail::PreparedPermanent(zero_mass, 1), std::runtime_error);
 }
 
 TEST(InteractingSamplerTest, PermanentMatchingSamplerMatchesBruteForceLaw) {
@@ -130,15 +147,14 @@ TEST(InteractingSamplerTest, PermanentMatchingSamplerMatchesBruteForceLaw) {
   std::array<double, 9> log_weights{};
   std::ranges::transform(weights, log_weights.begin(),
                          [](const double value) { return std::log(value); });
-  const std::vector<double> table = detail::log_permanent_table(log_weights, 3);
+  const detail::PreparedPermanent permanent(log_weights, 3);
   const BruteMatchingLaw law = brute_matching_law(weights);
 
   Random random(72);
   std::array<std::size_t, 6> counts{};
   for (std::size_t draw = 0; draw < 30'000; ++draw) {
-    const std::vector<std::size_t> matching =
-        detail::sample_permanent_matching(log_weights, 3, table, random);
-    ++counts[matching_rank(matching, law)];
+    const detail::StitchMatching matching = permanent.sample(random);
+    ++counts[matching_rank(std::span(matching).first(permanent.strand_count()), law)];
   }
   for (std::size_t index = 0; index < law.weights.size(); ++index) {
     EXPECT_NEAR(static_cast<double>(counts[index]) / 30'000.0, law.weights[index] / law.permanent,

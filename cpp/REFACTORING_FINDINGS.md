@@ -567,7 +567,13 @@ one log weight and extend it with the adjacent-term ratio instead of repeatedly
 evaluating `lgamma` over the full prefix. Controller, work-limit, finite-ring
 kernel, exact conditioned-count distribution, midpoint, winding, bridge, and
 statistical tests cover the shared policy and all three laws. Centralized
-`log_add_exp` and fixed-capacity prepared permanents remain open.
+`log_add_exp` remains open. The fixed-capacity prepared-permanent slice is also
+complete. A private `PreparedPermanent` owns its validated log-weight matrix and
+maximum 256-state recursion table, then samples into a fixed-capacity matching
+with fixed-capacity row scratch and without revalidating the matrix or table.
+Exact recursion, input ownership, invalid-input, unique-matching, and
+distribution tests cover the boundary. The legacy two-strand draw remains
+separate pending the stitch-mechanics work in finding 11.
 
 Pre-slice evidence:
 
@@ -577,7 +583,7 @@ Pre-slice evidence:
   (`src/stitch_matching.cpp:82-100`), while pair stitching has a third custom
   log-space draw (`src/interacting_sampler.cpp:410-430`).
 
-Remaining evidence:
+Pre-prepared-permanent evidence:
 
 - the permanent builder returns a raw vector, so its immediately following
   sampler revalidates the matrix and every table entry that the library just

@@ -358,11 +358,10 @@ std::vector<double> stitch_log_weights(const std::vector<Site> &left,
   return weights;
 }
 
-std::vector<std::size_t> sample_stitch_matching(const std::span<const double> log_weights,
-                                                const std::size_t strand_count, Random &random) {
+detail::StitchMatching sample_stitch_matching(const std::span<const double> log_weights,
+                                              const std::size_t strand_count, Random &random) {
   if (strand_count != 2) {
-    const std::vector<double> permanent = detail::log_permanent_table(log_weights, strand_count);
-    return detail::sample_permanent_matching(log_weights, strand_count, permanent, random);
+    return detail::PreparedPermanent(log_weights, strand_count).sample(random);
   }
 
   const double log_identity = log_weights[0] + log_weights[3];
@@ -372,7 +371,10 @@ std::vector<std::size_t> sample_stitch_matching(const std::span<const double> lo
   }
   const std::array<double, 2> matching_log_weights{log_identity, log_exchange};
   const bool exchanged = random.discrete_log_index(matching_log_weights) == 1;
-  return exchanged ? std::vector<std::size_t>{1, 0} : std::vector<std::size_t>{0, 1};
+  detail::StitchMatching matching{};
+  matching[0] = exchanged ? 1 : 0;
+  matching[1] = exchanged ? 0 : 1;
+  return matching;
 }
 
 ContinuousPath splice_path_interval(const detail::PathSlice &prefix_slice,
@@ -632,7 +634,7 @@ InteractingSampler::sample_stitch_proposal(const std::span<const ParticleId> str
 
   const std::vector<double> log_weights =
       stitch_log_weights(left, right, duration, model_.free, numerical_);
-  const std::vector<std::size_t> matching =
+  const detail::StitchMatching matching =
       sample_stitch_matching(log_weights, strand_count, random_);
 
   StitchProposal proposal;
