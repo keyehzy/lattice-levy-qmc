@@ -1,5 +1,6 @@
 #include "qmc/path.hpp"
 
+#include "adaptive_discrete_support.hpp"
 #include "checked_math.hpp"
 #include "path_cursor.hpp"
 
@@ -91,29 +92,9 @@ std::size_t initial_displaced_winding_support(const double argument, const Coord
   return std::max<std::size_t>(4, static_cast<std::size_t>(estimate));
 }
 
-DisplacedWindingWeights evaluate_displaced_winding_support(const Coord delta,
-                                                           const Coord linear_size,
-                                                           const double argument,
-                                                           const std::size_t support) {
-  if (support > (std::numeric_limits<std::size_t>::max() - 1) / 2) {
-    throw std::overflow_error("displaced winding support size overflowed");
-  }
-  DisplacedWindingWeights result;
-  result.windings.reserve((2 * support) + 1);
-  result.weights.reserve((2 * support) + 1);
-  const auto signed_support = static_cast<Coord>(support);
-  for (std::size_t offset = 0; offset <= 2 * support; ++offset) {
-    const Coord winding = offset <= support ? static_cast<Coord>(offset) - signed_support
-                                            : static_cast<Coord>(offset - support);
-    result.windings.push_back(winding);
-    result.weights.push_back(displaced_winding_weight(delta, linear_size, winding, argument));
-  }
-  return result;
-}
-
-std::optional<double> displaced_winding_tail_bound(const Coord delta, const Coord linear_size,
-                                                   const double argument,
-                                                   const std::size_t support) {
+std::optional<double> displaced_winding_log_tail_bound(const Coord delta, const Coord linear_size,
+                                                       const double argument,
+                                                       const std::size_t support) {
   if (support > static_cast<std::size_t>(std::numeric_limits<Coord>::max()) - 2) {
     throw std::overflow_error("displaced winding tail index overflowed");
   }
@@ -132,20 +113,35 @@ std::optional<double> displaced_winding_tail_bound(const Coord delta, const Coor
     }
     tail_bound += first / (1.0 - ratio);
   }
-  return tail_bound;
+  if (tail_bound == 0.0) {
+    return -std::numeric_limits<double>::infinity();
+  }
+  return std::log(tail_bound);
 }
 
-std::size_t grow_displaced_winding_support(const std::size_t support) {
-  if (support > std::numeric_limits<std::size_t>::max() - 8) {
-    throw std::overflow_error("displaced winding support overflowed");
+DisplacedWindingWeights
+materialize_displaced_winding_weights(const double zero_weight,
+                                      const std::vector<double> &negative_weights,
+                                      const std::vector<double> &positive_weights) {
+  if (negative_weights.size() != positive_weights.size() ||
+      negative_weights.size() > (std::numeric_limits<std::size_t>::max() - 1) / 2) {
+    throw std::overflow_error("displaced winding support size overflowed");
   }
-  const std::size_t additive = support + 8;
-  const double scaled = (1.5 * static_cast<double>(support)) + 1.0;
-  if (!std::isfinite(scaled) ||
-      scaled > static_cast<double>(std::numeric_limits<std::size_t>::max())) {
-    throw std::overflow_error("displaced winding support overflowed");
+  DisplacedWindingWeights result;
+  const std::size_t support = negative_weights.size();
+  result.windings.reserve((2 * support) + 1);
+  result.weights.reserve((2 * support) + 1);
+  for (std::size_t magnitude = support; magnitude > 0; --magnitude) {
+    result.windings.push_back(-static_cast<Coord>(magnitude));
+    result.weights.push_back(negative_weights[magnitude - 1]);
   }
-  return std::max(additive, static_cast<std::size_t>(scaled));
+  result.windings.push_back(0);
+  result.weights.push_back(zero_weight);
+  for (std::size_t magnitude = 1; magnitude <= support; ++magnitude) {
+    result.windings.push_back(static_cast<Coord>(magnitude));
+    result.weights.push_back(positive_weights[magnitude - 1]);
+  }
+  return result;
 }
 
 DisplacedWindingWeights displaced_winding_weights_1d(Coord delta, const Coord linear_size,
@@ -170,28 +166,37 @@ DisplacedWindingWeights displaced_winding_weights_1d(Coord delta, const Coord li
     return DisplacedWindingWeights{.windings = {0}, .weights = {1.0}};
   }
 
-  std::size_t support = initial_displaced_winding_support(argument, linear_size);
-  const double log_tolerance = std::log(options.tail_tolerance);
+  const std::size_t maximum_support =
+      std::min(options.max_winding, static_cast<std::size_t>(std::numeric_limits<Coord>::max()));
+  detail::AdaptiveDiscreteSupport support(
+      initial_displaced_winding_support(argument, linear_size), maximum_support,
+      options.tail_tolerance, "displaced winding support exceeded max_winding",
+      "displaced winding support overflowed", "failed to evaluate displaced winding weights");
+  const double zero_weight = displaced_winding_weight(delta, linear_size, 0, argument);
+  support.add_weight(zero_weight);
+  std::vector<double> negative_weights;
+  std::vector<double> positive_weights;
 
   while (true) {
-    if (support > options.max_winding ||
-        support > static_cast<std::size_t>(std::numeric_limits<Coord>::max())) {
-      throw std::runtime_error("displaced winding support exceeded max_winding");
+    negative_weights.reserve(support.support());
+    positive_weights.reserve(support.support());
+    while (negative_weights.size() < support.support()) {
+      const std::size_t magnitude = negative_weights.size() + 1;
+      const auto signed_magnitude = static_cast<Coord>(magnitude);
+      const double negative =
+          displaced_winding_weight(delta, linear_size, -signed_magnitude, argument);
+      const double positive =
+          displaced_winding_weight(delta, linear_size, signed_magnitude, argument);
+      negative_weights.push_back(negative);
+      positive_weights.push_back(positive);
+      support.add_weight(negative);
+      support.add_weight(positive);
     }
-    DisplacedWindingWeights result =
-        evaluate_displaced_winding_support(delta, linear_size, argument, support);
-    const double included = std::accumulate(result.weights.begin(), result.weights.end(), 0.0);
-    if (!std::isfinite(included) || included <= 0.0) {
-      throw std::runtime_error("failed to evaluate displaced winding weights");
+    if (support.tail_is_controlled(
+            displaced_winding_log_tail_bound(delta, linear_size, argument, support.support()))) {
+      return materialize_displaced_winding_weights(zero_weight, negative_weights, positive_weights);
     }
-
-    const std::optional<double> tail_bound =
-        displaced_winding_tail_bound(delta, linear_size, argument, support);
-    if (tail_bound.has_value() &&
-        (*tail_bound == 0.0 || std::log(*tail_bound) - std::log(included) <= log_tolerance)) {
-      return result;
-    }
-    support = grow_displaced_winding_support(support);
+    support.grow(detail::SupportGrowth{.minimum = 8, .factor = 1.5});
   }
 }
 

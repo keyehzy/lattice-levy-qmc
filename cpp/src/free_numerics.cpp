@@ -1,5 +1,7 @@
 #include "qmc/free_numerics.hpp"
 
+#include "adaptive_discrete_support.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <gsl/gsl_errno.h>
@@ -64,20 +66,6 @@ Coord apply_jump_counts(const Coord start, const std::uint64_t plus, const std::
     offset -= decrease;
   }
   return coordinate_from_offset(offset);
-}
-
-std::size_t grow_support(const std::size_t current, const std::size_t minimum_growth,
-                         const double factor) {
-  if (current > std::numeric_limits<std::size_t>::max() - minimum_growth) {
-    throw std::overflow_error("discrete support size overflowed");
-  }
-  const auto additive = current + minimum_growth;
-  const double scaled = (factor * static_cast<double>(current)) + 1.0;
-  if (!std::isfinite(scaled) ||
-      scaled > static_cast<double>(std::numeric_limits<std::size_t>::max())) {
-    throw std::overflow_error("discrete support size overflowed");
-  }
-  return std::max(additive, static_cast<std::size_t>(scaled));
 }
 
 } // namespace
@@ -180,40 +168,55 @@ std::uint64_t sample_bessel_pair_count(const std::uint64_t abs_delta, const doub
       width_value > static_cast<double>(std::numeric_limits<std::size_t>::max() - mode)) {
     throw std::overflow_error("Bessel-count initial support overflowed");
   }
-  std::size_t support = std::max<std::size_t>(16, mode + static_cast<std::size_t>(width_value));
+  const std::size_t initial_support =
+      std::max<std::size_t>(16, mode + static_cast<std::size_t>(width_value));
 
   const double log_lambda = std::log(lambda);
-  const double log_tolerance = std::log(options.tail_tolerance);
+  detail::AdaptiveDiscreteSupport support(
+      initial_support, options.max_bessel_terms, options.tail_tolerance,
+      "Bessel-count support exceeded max_bessel_terms", "discrete support size overflowed",
+      "failed to evaluate Bessel-count weights");
+  std::vector<double> log_weights;
 
   while (true) {
-    if (support > options.max_bessel_terms) {
-      throw std::runtime_error("Bessel-count support exceeded max_bessel_terms");
+    if (support.support() == std::numeric_limits<std::size_t>::max()) {
+      throw std::overflow_error("discrete support size overflowed");
     }
-
-    std::vector<double> log_weights(support + 1);
-    for (std::size_t index = 0; index <= support; ++index) {
+    const std::size_t required_size = support.support() + 1;
+    log_weights.reserve(required_size);
+    if (log_weights.empty()) {
+      const double log_weight = (delta * log_lambda) - std::lgamma(delta + 1.0);
+      log_weights.push_back(log_weight);
+      support.add_log_weight(log_weight);
+    }
+    while (log_weights.size() < required_size) {
+      const std::size_t index = log_weights.size();
       const auto count = static_cast<double>(index);
-      log_weights[index] = ((2.0 * count + delta) * log_lambda) - std::lgamma(count + 1.0) -
-                           std::lgamma(count + delta + 1.0);
+      const double log_weight =
+          log_weights.back() + (2.0 * log_lambda) - std::log(count) - std::log(count + delta);
+      log_weights.push_back(log_weight);
+      support.add_log_weight(log_weight);
     }
-    const double log_inside = log_sum_exp(log_weights);
 
-    const double first = static_cast<double>(support) + 1.0;
-    const double log_first_omitted = ((2.0 * first + delta) * log_lambda) -
-                                     std::lgamma(first + 1.0) - std::lgamma(first + delta + 1.0);
-    const double next = static_cast<double>(support) + 2.0;
+    if (support.support() > std::numeric_limits<std::size_t>::max() - 2) {
+      throw std::overflow_error("Bessel-count tail support overflowed");
+    }
+    const double first = static_cast<double>(support.support()) + 1.0;
+    const double log_first_omitted =
+        log_weights.back() + (2.0 * log_lambda) - std::log(first) - std::log(first + delta);
+    const double next = static_cast<double>(support.support()) + 2.0;
     const double ratio_after_first = (lambda / next) * (lambda / (next + delta));
 
     if (!std::isfinite(ratio_after_first) || ratio_after_first >= 1.0) {
-      support = grow_support(support, 32, 2.0);
+      support.grow(detail::SupportGrowth{.minimum = 32, .factor = 2.0});
       continue;
     }
 
     const double log_tail_bound = log_first_omitted - std::log1p(-ratio_after_first);
-    if (log_tail_bound - log_inside <= log_tolerance) {
+    if (support.tail_is_controlled(log_tail_bound)) {
       return static_cast<std::uint64_t>(random.discrete_log_index(log_weights));
     }
-    support = grow_support(support, 32, 1.5);
+    support.grow(detail::SupportGrowth{.minimum = 32, .factor = 1.5});
   }
 }
 

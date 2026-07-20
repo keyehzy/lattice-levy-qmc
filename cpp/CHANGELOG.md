@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Centralize bounded-tail growth, work limits, included-mass tracking, and tail
+  acceptance for winding and conditioned Bessel-count laws; support expansion
+  now preserves evaluated weights, and Bessel counts use an adjacent-term
+  recurrence after one seeded weight.
 - Route canonical-cycle, conditioned Bessel-count, and stitch-matching draws
   through the shared log-weight sampler without temporary probability buffers.
 - Make retained density-correlation results valid by construction and bind

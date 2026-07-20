@@ -2,6 +2,7 @@
 #include "qmc/path.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <gtest/gtest.h>
@@ -174,6 +175,31 @@ TEST(ContinuousPathTest, TorusBridgeSamplesCoveringEndpointAtRequestedPhysicalSi
     EXPECT_EQ(Site({torus_mod(path.end()[0], 6), torus_mod(path.end()[1], 6)}), Site({1, 4}));
     EXPECT_EQ(path.position_at(path.duration()), path.end());
   }
+}
+
+TEST(ContinuousPathTest, TorusKernelMatchesTheFiniteRingKernelAfterAdaptiveTruncation) {
+  constexpr double duration = 1.3;
+  constexpr Coord linear_size = 5;
+  constexpr double hopping = 0.7;
+  const double expected = periodic_kernel_scaled_1d(2, duration, linear_size, hopping);
+
+  EXPECT_NEAR(std::exp(log_torus_kernel_scaled({0}, {2}, duration, linear_size, hopping)), expected,
+              2e-14);
+}
+
+TEST(ContinuousPathTest, TorusBridgeHonorsTheWindingWorkLimitBeforeDrawing) {
+  const NumericalOptions options{
+      .tail_tolerance = 1e-14,
+      .max_bessel_terms = 100,
+      .max_winding = 1,
+  };
+  Random random(71);
+  Random control(71);
+
+  EXPECT_THROW(
+      static_cast<void>(sample_continuous_bridge_torus({0}, {0}, 10.0, 1, 1.0, random, options)),
+      std::runtime_error);
+  EXPECT_DOUBLE_EQ(random.uniform_unit(), control.uniform_unit());
 }
 
 TEST(ContinuousPathTest, SplitsCutEventsIntoTheLeftPiece) {

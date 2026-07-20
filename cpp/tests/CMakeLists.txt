@@ -20,6 +20,7 @@ include(GoogleTest)
 
 add_executable(
   qmc_unit_tests
+  test_adaptive_discrete_support.cpp
   test_configuration.cpp
   test_free_boson.cpp
   test_free_numerics.cpp
@@ -30,6 +31,7 @@ add_executable(
   test_version.cpp
 )
 target_link_libraries(qmc_unit_tests PRIVATE qmc::ideal GTest::gtest_main)
+target_include_directories(qmc_unit_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 qmc_set_project_warnings(qmc_unit_tests)
 qmc_enable_sanitizers(qmc_unit_tests)
 gtest_discover_tests(qmc_unit_tests PROPERTIES LABELS unit)

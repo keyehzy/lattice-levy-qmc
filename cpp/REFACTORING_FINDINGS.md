@@ -73,7 +73,7 @@ type collects one invariant that is currently spread across several files.
 | P1 | Path cursor/slice migration (done 2026-07-20) | Simpler boundary semantics and faster path surgery | Medium |
 | P1 | Add a retained-measurement context (done 2026-07-20); add accumulators | Less repeated work and a smaller demo | Medium |
 | P1 | Collect reusable free-particle numerics | Numerical clarity and less repeated setup | Medium |
-| P1 | Unify discrete log-weight draws (done 2026-07-20) and bounded-tail sampling | One truncation policy and fewer allocations | Medium |
+| P1 | Unify discrete log-weight draws and bounded-tail sampling (done 2026-07-20) | One truncation policy and fewer allocations | Medium |
 | P1 | Unify full/incremental action around accepted state | One source of truth and faster full evaluation | Medium |
 | P1 | Make permutation topology authoritative (continuous and retained ideal done 2026-07-20) | Remove duplicated state and synchronization code | Medium |
 | P1 | Separate stitch selection, proposal, and commit | Readability, testability, and API clarity | Medium |
@@ -557,8 +557,17 @@ maintaining a separate log-space draw. Exact validation, extreme-offset,
 deterministic-support, seeded offset-equivalence, and distribution tests cover
 the shared boundary. Seeded streams may change where callers previously used a
 different CDF convention or skipped deterministic draws; the probability laws
-are unchanged. Adaptive support unification, incremental weight extension, and
-fixed-capacity prepared permanents remain open.
+are unchanged. The bounded-tail slice is also complete. A private
+`AdaptiveDiscreteSupport` now owns support growth, hard work limits, included
+log mass, and the relative tail-tolerance decision while leaving each named
+distribution's weights and geometric tail bound beside its sampler. Symmetric
+winding, displaced torus winding, and conditioned Bessel-count samplers append
+only newly exposed weights when support grows. Conditioned Bessel counts seed
+one log weight and extend it with the adjacent-term ratio instead of repeatedly
+evaluating `lgamma` over the full prefix. Controller, work-limit, finite-ring
+kernel, exact conditioned-count distribution, midpoint, winding, bridge, and
+statistical tests cover the shared policy and all three laws. Centralized
+`log_add_exp` and fixed-capacity prepared permanents remain open.
 
 Pre-slice evidence:
 
@@ -575,6 +584,9 @@ Remaining evidence:
   produced (`src/stitch_matching.cpp:40-80`).
 - `log_add_exp` is private to stitch matching even though `log_sum_exp` is a
   public numerical primitive (`src/stitch_matching.cpp:27-35`).
+
+Pre-bounded-tail evidence:
+
 - symmetric winding and displaced torus winding independently implement initial
   support, `1.5x/+8` growth, Bessel evaluation, geometric tail bounds, limits,
   and signed support construction (`src/free_boson.cpp:12-89` and
@@ -1027,8 +1039,8 @@ visible at the assertion sites.
    topology; full validation remains available as an explicit diagnostic audit.
 6. Retained measurement context completed 2026-07-20; add accumulators, then
    optimize direct correlation kernels from benchmark evidence.
-7. Log-weight categorical draws completed 2026-07-20; consolidate canonical
-   derivative recurrences and adaptive-support numerics.
+7. Log-weight categorical draws and adaptive-support numerics completed
+   2026-07-20; consolidate canonical derivative recurrences.
 8. Split translation units and demos after responsibilities have stabilized.
 9. GoogleTest exclusion from clang-tidy completed 2026-07-19; add install, CI,
    benchmark support, and an external consumer test.

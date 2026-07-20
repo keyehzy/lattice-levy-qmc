@@ -31,6 +31,35 @@ TEST(LogWeightDistributionTest, MatchesCategoricalLawWithExtremeCommonOffset) {
   }
 }
 
+TEST(BesselPairCountDistributionTest, MatchesExactConditionedCountLaw) {
+  constexpr std::uint64_t abs_delta = 3;
+  constexpr double lambda = 2.3;
+  constexpr std::size_t support = 12;
+  constexpr std::size_t sample_count = 60'000;
+  const double delta = static_cast<double>(abs_delta);
+  const double log_lambda = std::log(lambda);
+  std::vector<double> log_weights(support + 1);
+  for (std::size_t count = 0; count <= support; ++count) {
+    const double value = static_cast<double>(count);
+    log_weights[count] = ((2.0 * value + delta) * log_lambda) - std::lgamma(value + 1.0) -
+                         std::lgamma(value + delta + 1.0);
+  }
+  const double log_normalization = qmc::log_sum_exp(log_weights);
+
+  std::vector<std::size_t> counts(support + 1);
+  qmc::Random random(9281);
+  for (std::size_t sample = 0; sample < sample_count; ++sample) {
+    const std::uint64_t count = qmc::sample_bessel_pair_count(abs_delta, lambda, random);
+    ASSERT_LE(count, support);
+    ++counts[static_cast<std::size_t>(count)];
+  }
+  for (std::size_t count = 0; count <= support; ++count) {
+    const double expected = std::exp(log_weights[count] - log_normalization);
+    const double empirical = static_cast<double>(counts[count]) / sample_count;
+    EXPECT_NEAR(empirical, expected, 0.006);
+  }
+}
+
 TEST(MidpointDistributionTest, MatchesExactBesselPmf) {
   constexpr qmc::Coord minimum = -8;
   constexpr qmc::Coord maximum = 10;
