@@ -72,11 +72,11 @@ void validate_worldlines(const ContinuousConfiguration &configuration, const Mod
   for (std::size_t particle = 0; particle < model.particle_count; ++particle) {
     const ContinuousPath &path = configuration.worldlines[particle];
     path.validate(model.dimension);
-    if (!nearly_equal_time(path.duration, model.beta)) {
+    if (!nearly_equal_time(path.duration(), model.beta)) {
       throw std::logic_error("continuous worldline duration does not match beta");
     }
     const ContinuousPath &successor = configuration.worldlines[configuration.permutation[particle]];
-    if (layout.encode_covering(path.end) != layout.encode_covering(successor.start)) {
+    if (layout.encode_covering(path.end()) != layout.encode_covering(successor.start())) {
       throw std::logic_error(
           "continuous worldline endpoint does not join its permutation successor");
     }
@@ -132,16 +132,16 @@ std::vector<ContinuousPath> sample_paths_for_cycle(const Cycle &labels, const Mo
   // beta by a few ulps. Worldline time is exactly [0,beta], so normalize that
   // harmless arithmetic drift before the paths enter the Markov state.
   for (ContinuousPath &path : paths) {
-    if (!nearly_equal_time(path.duration, model.beta)) {
+    if (!nearly_equal_time(path.duration(), model.beta)) {
       throw std::runtime_error("continuous cycle piece duration drift exceeds tolerance");
     }
-    for (JumpEvent &event : path.events) {
+    std::vector<JumpEvent> events(path.events().begin(), path.events().end());
+    for (JumpEvent &event : events) {
       if (event.time > model.beta && nearly_equal_time(event.time, model.beta)) {
         event.time = model.beta;
       }
     }
-    path.duration = model.beta;
-    path.validate(model.dimension);
+    path = ContinuousPath(model.beta, path.start(), path.end(), std::move(events));
   }
   return paths;
 }
@@ -198,14 +198,14 @@ ContinuousConfiguration rotate_configuration_time_origin(const ContinuousConfigu
     const detail::PathCut start_cut = cursor.cut(0.0);
     detail::PathCut seam_cut;
     detail::PathCut end_cut;
-    if (shift <= path.duration) {
+    if (shift <= path.duration()) {
       seam_cut = cursor.cut(shift);
-      end_cut = cursor.cut(path.duration);
+      end_cut = cursor.cut(path.duration());
     } else {
       // Validation permits a few ulps of duration drift from beta. A shift in
       // that gap lies after every source event, just as lower_bound(shift) did
       // before the cursor migration.
-      end_cut = cursor.cut(path.duration);
+      end_cut = cursor.cut(path.duration());
       seam_cut = end_cut;
       seam_cut.time = shift;
       seam_cut.position_before = end_cut.position_through;
@@ -226,7 +226,7 @@ ContinuousConfiguration rotate_configuration_time_origin(const ContinuousConfigu
     Site successor_translation(model.dimension);
     for (std::size_t axis = 0; axis < successor_translation.size(); ++axis) {
       successor_translation[axis] =
-          detail::checked_subtract(path.end[axis], successor.start[axis],
+          detail::checked_subtract(path.end()[axis], successor.start()[axis],
                                    "time-rotation path translation exceeds int64 range");
       const Coord translation = successor_translation[axis];
       if (translation % model.linear_size != 0) {
@@ -286,7 +286,7 @@ std::vector<Site> ContinuousConfiguration::positions_at(const double tau,
   std::vector<Site> positions;
   positions.reserve(worldlines.size());
   for (const ContinuousPath &path : worldlines) {
-    Site position = path.position_at(std::min(tau, path.duration));
+    Site position = path.position_at(std::min(tau, path.duration()));
     layout.reduce_into(position, position);
     positions.push_back(std::move(position));
   }
@@ -299,7 +299,7 @@ Site ContinuousConfiguration::total_winding(const Model &model) const {
   for (const ContinuousPath &path : worldlines) {
     for (std::size_t axis = 0; axis < model.dimension; ++axis) {
       const Coord path_displacement = detail::checked_subtract(
-          path.end[axis], path.start[axis], "path displacement exceeds int64 range");
+          path.end()[axis], path.start()[axis], "path displacement exceeds int64 range");
       displacement[axis] = detail::checked_add(displacement[axis], path_displacement,
                                                "total winding displacement exceeds int64 range");
     }

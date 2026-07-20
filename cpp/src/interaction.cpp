@@ -65,14 +65,16 @@ OverlapWorkspace initialize_workspace(const Model &model, const TorusLayout &lay
     if (path == nullptr) {
       throw std::logic_error("pair-overlap path view contains null");
     }
-    path->validate(model.dimension);
-    const SiteId key = layout.encode_covering(path->start);
+    if (path->dimension() != model.dimension) {
+      throw std::invalid_argument("pair-overlap path dimension does not match the model");
+    }
+    const SiteId key = layout.encode_covering(path->start());
     auto [entry, inserted] = workspace.occupancies.try_emplace(key, 0);
     static_cast<void>(inserted);
     add_pairs(workspace.pair_count, entry->second);
     ++entry->second;
     workspace.positions.push_back(key);
-    workspace.total_events = detail::checked_add_size(workspace.total_events, path->events.size(),
+    workspace.total_events = detail::checked_add_size(workspace.total_events, path->events().size(),
                                                       "pair-overlap event count exceeds size_t");
   }
   return workspace;
@@ -87,7 +89,7 @@ std::vector<TimedEvent> collect_events(const Model &model,
   }
   events.reserve(total_events);
   for (std::size_t particle = 0; particle < worldlines.size(); ++particle) {
-    for (const JumpEvent &event : worldlines[particle]->events) {
+    for (const JumpEvent &event : worldlines[particle]->events()) {
       events.push_back(TimedEvent{
           .time = normalize_event_time(event.time, model.beta),
           .particle = particle,

@@ -388,11 +388,11 @@ std::vector<std::size_t> sample_stitch_matching(const std::span<const double> lo
 ContinuousPath splice_path_interval(const detail::PathSlice &prefix_slice,
                                     const detail::PathSlice &suffix_slice,
                                     const ContinuousPath &bridge, const Coord linear_size) {
-  if (bridge.start != prefix_slice.start || bridge.end.size() != suffix_slice.end.size()) {
+  if (bridge.start() != prefix_slice.start || bridge.end().size() != suffix_slice.end.size()) {
     throw std::invalid_argument("stitch bridge does not start at the prefix cut");
   }
   const TorusLayout layout(linear_size, suffix_slice.end.size());
-  if (layout.encode_covering(bridge.end) != layout.encode_covering(suffix_slice.end)) {
+  if (layout.encode_covering(bridge.end()) != layout.encode_covering(suffix_slice.end)) {
     throw std::invalid_argument("stitch bridge does not end at the suffix torus site");
   }
   return detail::splice_path_slices(prefix_slice, suffix_slice, bridge);
@@ -515,7 +515,9 @@ bool InteractingSampler::try_proposal(LocalProposal proposal, MoveStatistics &mo
         (index != 0 && proposal.replacements[index - 1].first == replacement.first)) {
       throw std::logic_error("path replacements contain an invalid or duplicate label");
     }
-    replacement.second.validate(model_.free.dimension);
+    if (replacement.second.dimension() != model_.free.dimension) {
+      throw std::invalid_argument("replacement path dimension does not match the model");
+    }
     replacement_views.push_back(detail::PathReplacementView{
         .label = replacement.first,
         .old_path = state_.worldlines[label],

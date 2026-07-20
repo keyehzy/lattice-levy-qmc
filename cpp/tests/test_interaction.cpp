@@ -8,12 +8,7 @@ namespace qmc {
 namespace {
 
 ContinuousPath static_path(const Coord site, const double beta = 1.0) {
-  return ContinuousPath{
-      .duration = beta,
-      .start = {site},
-      .end = {site},
-      .events = {},
-  };
+  return ContinuousPath(beta, {site}, {site}, {});
 }
 
 ContinuousConfiguration two_particle_state(const ContinuousPath &first,
@@ -35,13 +30,9 @@ TEST(InteractionTest, IntegratesPiecewisePairOverlapExactly) {
       .hopping = 1.0,
   };
   const InteractingModel model{.free = free, .interaction = 3.0};
-  const ContinuousPath moving{
-      .duration = 1.0,
-      .start = {0},
-      .end = {0},
-      .events = {{.time = 0.25, .axis = 0, .direction = 1},
-                 {.time = 0.75, .axis = 0, .direction = -1}},
-  };
+  const ContinuousPath moving(
+      1.0, {0}, {0},
+      {{.time = 0.25, .axis = 0, .direction = 1}, {.time = 0.75, .axis = 0, .direction = -1}});
   const auto state = two_particle_state(static_path(0), moving);
   state.validate(free);
 
@@ -62,13 +53,9 @@ TEST(InteractionTest, UsesEuclideanModuloForNegativeCoveringCoordinates) {
       .dimension = 1,
       .hopping = 1.0,
   };
-  const ContinuousPath moving{
-      .duration = 1.0,
-      .start = {-3},
-      .end = {-3},
-      .events = {{.time = 0.25, .axis = 0, .direction = 1},
-                 {.time = 0.75, .axis = 0, .direction = -1}},
-  };
+  const ContinuousPath moving(
+      1.0, {-3}, {-3},
+      {{.time = 0.25, .axis = 0, .direction = 1}, {.time = 0.75, .axis = 0, .direction = -1}});
   const auto state = two_particle_state(static_path(0), moving);
   EXPECT_DOUBLE_EQ(pair_overlap_time(state, model), 0.5);
 }
@@ -81,20 +68,12 @@ TEST(InteractionTest, SimultaneousEventsHaveNoOrderingDuration) {
       .dimension = 1,
       .hopping = 1.0,
   };
-  const ContinuousPath first{
-      .duration = 1.0,
-      .start = {0},
-      .end = {0},
-      .events = {{.time = 0.5, .axis = 0, .direction = 1},
-                 {.time = 0.5, .axis = 0, .direction = -1}},
-  };
-  const ContinuousPath second{
-      .duration = 1.0,
-      .start = {1},
-      .end = {1},
-      .events = {{.time = 0.5, .axis = 0, .direction = -1},
-                 {.time = 0.5, .axis = 0, .direction = 1}},
-  };
+  const ContinuousPath first(
+      1.0, {0}, {0},
+      {{.time = 0.5, .axis = 0, .direction = 1}, {.time = 0.5, .axis = 0, .direction = -1}});
+  const ContinuousPath second(
+      1.0, {1}, {1},
+      {{.time = 0.5, .axis = 0, .direction = -1}, {.time = 0.5, .axis = 0, .direction = 1}});
   const auto state = two_particle_state(first, second);
   EXPECT_DOUBLE_EQ(pair_overlap_time(state, model), 0.0);
 }

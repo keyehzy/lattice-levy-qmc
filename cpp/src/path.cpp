@@ -205,17 +205,24 @@ Coord reduced_endpoint_delta(const Coord left, const Coord right, const Coord li
 
 } // namespace
 
+ContinuousPath::ContinuousPath(const double duration, Site start, Site end,
+                               std::vector<JumpEvent> events)
+    : duration_(duration), start_(std::move(start)), end_(std::move(end)),
+      events_(std::move(events)) {
+  validate(start_.size());
+}
+
 void ContinuousPath::validate(const std::size_t dimension) const {
-  validate_duration(duration);
-  if (start.size() != dimension || end.size() != dimension) {
+  validate_duration(duration_);
+  if (start_.size() != dimension || end_.size() != dimension) {
     throw std::invalid_argument("continuous path endpoint dimension mismatch");
   }
 
-  Site calculated = start;
+  Site calculated = start_;
   double previous_time = 0.0;
   bool first = true;
-  for (const JumpEvent &event : events) {
-    if (!std::isfinite(event.time) || event.time < 0.0 || event.time > duration) {
+  for (const JumpEvent &event : events_) {
+    if (!std::isfinite(event.time) || event.time < 0.0 || event.time > duration_) {
       throw std::invalid_argument("continuous path event time lies outside [0, duration]");
     }
     if (!first && event.time < previous_time) {
@@ -231,31 +238,29 @@ void ContinuousPath::validate(const std::size_t dimension) const {
     previous_time = event.time;
     first = false;
   }
-  if (calculated != end) {
+  if (calculated != end_) {
     throw std::invalid_argument("continuous path endpoint is inconsistent with its events");
   }
 }
 
 Site ContinuousPath::position_at(const double tau) const {
-  if (!std::isfinite(tau) || tau < 0.0 || tau > duration) {
+  if (!std::isfinite(tau) || tau < 0.0 || tau > duration_) {
     throw std::invalid_argument("tau must lie in [0, duration]");
   }
-  validate(start.size());
 
-  const auto event_end = std::ranges::upper_bound(events, tau, {}, &JumpEvent::time);
-  Site position = start;
-  for (auto event = events.begin(); event != event_end; ++event) {
+  const auto event_end = std::ranges::upper_bound(events_, tau, {}, &JumpEvent::time);
+  Site position = start_;
+  for (auto event = events_.begin(); event != event_end; ++event) {
     position[event->axis] = apply_direction(position[event->axis], event->direction);
   }
   return position;
 }
 
 std::vector<Site> ContinuousPath::positions_after_events() const {
-  validate(start.size());
   std::vector<Site> positions;
-  positions.reserve(events.size());
-  Site position = start;
-  for (const JumpEvent &event : events) {
+  positions.reserve(events_.size());
+  Site position = start_;
+  for (const JumpEvent &event : events_) {
     position[event.axis] = apply_direction(position[event.axis], event.direction);
     positions.push_back(position);
   }
@@ -263,24 +268,18 @@ std::vector<Site> ContinuousPath::positions_after_events() const {
 }
 
 ContinuousPath ContinuousPath::translated(const Site &displacement) const {
-  validate(start.size());
-  if (displacement.size() != start.size()) {
+  if (displacement.size() != start_.size()) {
     throw std::invalid_argument("translation displacement has the wrong dimension");
   }
-  Site translated_start(start.size());
-  Site translated_end(end.size());
-  for (std::size_t axis = 0; axis < start.size(); ++axis) {
-    translated_start[axis] = detail::checked_add(start[axis], displacement[axis],
+  Site translated_start(start_.size());
+  Site translated_end(end_.size());
+  for (std::size_t axis = 0; axis < start_.size(); ++axis) {
+    translated_start[axis] = detail::checked_add(start_[axis], displacement[axis],
                                                  "translated path start exceeds int64 range");
-    translated_end[axis] = detail::checked_add(end[axis], displacement[axis],
+    translated_end[axis] = detail::checked_add(end_[axis], displacement[axis],
                                                "translated path end exceeds int64 range");
   }
-  return ContinuousPath{
-      .duration = duration,
-      .start = std::move(translated_start),
-      .end = std::move(translated_end),
-      .events = events,
-  };
+  return {duration_, std::move(translated_start), std::move(translated_end), events_};
 }
 
 ContinuousPath sample_continuous_bridge(const Site &a, const Site &b, const double duration,
@@ -300,7 +299,7 @@ ContinuousPath sample_continuous_bridge(const Site &a, const Site &b, const doub
     if (a != b) {
       throw std::invalid_argument("nonzero displacement has zero free bridge weight");
     }
-    return ContinuousPath{.duration = duration, .start = a, .end = b, .events = {}};
+    return {duration, a, b, {}};
   }
 
   const double lambda = hopping * duration;
@@ -356,14 +355,7 @@ ContinuousPath sample_continuous_bridge(const Site &a, const Site &b, const doub
   }
   std::ranges::stable_sort(events, {}, &JumpEvent::time);
 
-  ContinuousPath path{
-      .duration = duration,
-      .start = a,
-      .end = b,
-      .events = std::move(events),
-  };
-  path.validate(a.size());
-  return path;
+  return {duration, a, b, std::move(events)};
 }
 
 ContinuousPath sample_continuous_bridge_torus(const Site &a, const Site &b, const double duration,
@@ -416,10 +408,9 @@ double log_torus_kernel_scaled(const Site &a, const Site &b, const double durati
 
 std::vector<ContinuousPath> split_continuous_path(const ContinuousPath &path,
                                                   const std::span<const double> cut_times) {
-  path.validate(path.start.size());
   double previous = 0.0;
   for (const double cut : cut_times) {
-    if (!std::isfinite(cut) || cut <= previous || cut >= path.duration) {
+    if (!std::isfinite(cut) || cut <= previous || cut >= path.duration()) {
       throw std::invalid_argument("cut times must be strictly increasing and internal");
     }
     previous = cut;
@@ -434,7 +425,7 @@ std::vector<ContinuousPath> split_continuous_path(const ContinuousPath &path,
     pieces.push_back(detail::materialize_path_slice(cursor.slice(left, right)));
     left = std::move(right);
   }
-  const detail::PathCut right = cursor.cut(path.duration);
+  const detail::PathCut right = cursor.cut(path.duration());
   pieces.push_back(detail::materialize_path_slice(cursor.slice(left, right)));
   return pieces;
 }
@@ -442,8 +433,7 @@ std::vector<ContinuousPath> split_continuous_path(const ContinuousPath &path,
 ContinuousPath resample_path_interval(const ContinuousPath &path, const double tau0,
                                       const double tau1, const double hopping, Random &random,
                                       const NumericalOptions &options) {
-  path.validate(path.start.size());
-  if (!std::isfinite(tau0) || !std::isfinite(tau1) || tau0 < 0.0 || tau1 > path.duration ||
+  if (!std::isfinite(tau0) || !std::isfinite(tau1) || tau0 < 0.0 || tau1 > path.duration() ||
       tau1 <= tau0) {
     throw std::invalid_argument("require 0 <= tau0 < tau1 <= path duration");
   }

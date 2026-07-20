@@ -11,12 +11,7 @@ namespace qmc::detail {
 namespace {
 
 ContinuousPath stationary_path(const Coord site, const double duration = 1.0) {
-  return ContinuousPath{
-      .duration = duration,
-      .start = {site},
-      .end = {site},
-      .events = {},
-  };
+  return ContinuousPath(duration, {site}, {site}, {});
 }
 
 Model occupancy_model() {

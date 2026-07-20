@@ -18,21 +18,39 @@ struct JumpEvent {
   double time = 0.0;
   Axis axis = 0;
   std::int8_t direction = 1;
+
+  [[nodiscard]] bool operator==(const JumpEvent &) const = default;
 };
 
 // A piecewise-constant covering-space path. Positions are right-continuous:
 // an event at tau is included in position_at(tau).
-struct ContinuousPath {
-  double duration = 0.0;
-  Site start;
-  Site end;
-  std::vector<JumpEvent> events;
+class ContinuousPath {
+public:
+  // Validates the complete path and takes ownership of its endpoints and
+  // events. Throws std::invalid_argument for malformed path data and an
+  // overflow exception when applying an event exceeds the coordinate range.
+  ContinuousPath(double duration, Site start, Site end, std::vector<JumpEvent> events);
 
+  // Expensive diagnostic audit, including compatibility with dimension.
   void validate(std::size_t dimension) const;
+  [[nodiscard]] double duration() const noexcept { return duration_; }
+  [[nodiscard]] std::size_t dimension() const noexcept { return start_.size(); }
+  // These references and the event span borrow from this path and remain valid
+  // until the path is assigned a different value or destroyed.
+  [[nodiscard]] const Site &start() const noexcept { return start_; }
+  [[nodiscard]] const Site &end() const noexcept { return end_; }
+  [[nodiscard]] std::span<const JumpEvent> events() const noexcept { return events_; }
   [[nodiscard]] Site position_at(double tau) const;
   [[nodiscard]] std::vector<Site> positions_after_events() const;
   [[nodiscard]] ContinuousPath translated(const Site &displacement) const;
-  [[nodiscard]] std::size_t event_count() const noexcept { return events.size(); }
+  [[nodiscard]] std::size_t event_count() const noexcept { return events_.size(); }
+  [[nodiscard]] bool operator==(const ContinuousPath &) const = default;
+
+private:
+  double duration_;
+  Site start_;
+  Site end_;
+  std::vector<JumpEvent> events_;
 };
 
 // Exact conditioned continuous-time free bridge on the covering lattice Z^d.

@@ -55,20 +55,7 @@ InteractingModel sampler_model(const double interaction) {
   };
 }
 
-bool equal_path(const ContinuousPath &left, const ContinuousPath &right) {
-  if (left.duration != right.duration || left.start != right.start || left.end != right.end ||
-      left.events.size() != right.events.size()) {
-    return false;
-  }
-  for (std::size_t index = 0; index < left.events.size(); ++index) {
-    if (left.events[index].time != right.events[index].time ||
-        left.events[index].axis != right.events[index].axis ||
-        left.events[index].direction != right.events[index].direction) {
-      return false;
-    }
-  }
-  return true;
-}
+bool equal_path(const ContinuousPath &left, const ContinuousPath &right) { return left == right; }
 
 bool equal_state(const ContinuousConfiguration &left, const ContinuousConfiguration &right) {
   if (left.cycles != right.cycles || left.permutation != right.permutation ||

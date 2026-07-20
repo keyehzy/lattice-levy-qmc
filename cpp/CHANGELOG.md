@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Make `ContinuousPath` a valid-by-construction value with private storage,
+  read-only endpoint/event views, and structural equality; malformed paths are
+  now rejected at construction instead of remaining mutable public records.
 - Use the shared torus layout for retained observables, full and incremental
   interaction occupancy, stitch locality buckets, and example flat indexing.
 - Route reusable ideal sampling and exact observables through

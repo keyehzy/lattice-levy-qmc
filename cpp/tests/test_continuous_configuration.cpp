@@ -10,18 +10,7 @@ namespace qmc {
 namespace {
 
 bool paths_are_equal(const ContinuousPath &left, const ContinuousPath &right) {
-  if (left.duration != right.duration || left.start != right.start || left.end != right.end ||
-      left.events.size() != right.events.size()) {
-    return false;
-  }
-  for (std::size_t index = 0; index < left.events.size(); ++index) {
-    if (left.events[index].time != right.events[index].time ||
-        left.events[index].axis != right.events[index].axis ||
-        left.events[index].direction != right.events[index].direction) {
-      return false;
-    }
-  }
-  return true;
+  return left == right;
 }
 
 bool configurations_are_equal(const ContinuousConfiguration &left,
@@ -46,24 +35,24 @@ reference_rotate_configuration_time_origin(const ContinuousConfiguration &state,
   for (std::size_t particle = 0; particle < state.worldlines.size(); ++particle) {
     const ContinuousPath &path = state.worldlines[particle];
     const ContinuousPath &successor = state.worldlines[state.permutation[particle]];
-    const auto path_cut = std::ranges::lower_bound(path.events, shift, {}, &JumpEvent::time);
+    const auto path_cut = std::ranges::lower_bound(path.events(), shift, {}, &JumpEvent::time);
     const auto successor_cut =
-        std::ranges::lower_bound(successor.events, shift, {}, &JumpEvent::time);
+        std::ranges::lower_bound(successor.events(), shift, {}, &JumpEvent::time);
 
-    Site start = path.start;
-    for (auto event = path.events.begin(); event != path_cut; ++event) {
+    Site start = path.start();
+    for (auto event = path.events().begin(); event != path_cut; ++event) {
       start[event->axis] += static_cast<Coord>(event->direction);
     }
 
     std::vector<JumpEvent> events;
-    for (auto event = path_cut; event != path.events.end(); ++event) {
+    for (auto event = path_cut; event != path.events().end(); ++event) {
       events.push_back(JumpEvent{
           .time = event->time - shift,
           .axis = event->axis,
           .direction = event->direction,
       });
     }
-    for (auto event = successor.events.begin(); event != successor_cut; ++event) {
+    for (auto event = successor.events().begin(); event != successor_cut; ++event) {
       events.push_back(JumpEvent{
           .time = (model.beta - shift) + event->time,
           .axis = event->axis,
@@ -71,19 +60,14 @@ reference_rotate_configuration_time_origin(const ContinuousConfiguration &state,
       });
     }
 
-    Site end = successor.start;
-    for (auto event = successor.events.begin(); event != successor_cut; ++event) {
+    Site end = successor.start();
+    for (auto event = successor.events().begin(); event != successor_cut; ++event) {
       end[event->axis] += static_cast<Coord>(event->direction);
     }
     for (std::size_t axis = 0; axis < model.dimension; ++axis) {
-      end[axis] += path.end[axis] - successor.start[axis];
+      end[axis] += path.end()[axis] - successor.start()[axis];
     }
-    paths.push_back(ContinuousPath{
-        .duration = model.beta,
-        .start = std::move(start),
-        .end = std::move(end),
-        .events = std::move(events),
-    });
+    paths.emplace_back(model.beta, std::move(start), std::move(end), std::move(events));
   }
   return ContinuousConfiguration{
       .cycles = state.cycles,
@@ -110,7 +94,7 @@ TEST(ContinuousConfigurationTest, SamplesConsistentCanonicalState) {
   EXPECT_EQ(std::accumulate(lengths.begin(), lengths.end(), std::size_t{0}), 8U);
   EXPECT_EQ(state.total_winding(model).size(), 2U);
   for (const ContinuousPath &path : state.worldlines) {
-    EXPECT_DOUBLE_EQ(path.duration, model.beta);
+    EXPECT_DOUBLE_EQ(path.duration(), model.beta);
   }
   for (const Site &position : state.positions_at(0.7, model)) {
     ASSERT_EQ(position.size(), 2U);
@@ -168,8 +152,14 @@ TEST(ContinuousConfigurationTest, ValidationDetectsTopologyAndEndpointCorruption
   EXPECT_THROW(state.validate(model), std::logic_error);
 
   state = sample_ideal_continuous_configuration(model, random);
-  ++state.worldlines[0].end[0];
-  EXPECT_THROW(state.validate(model), std::invalid_argument);
+  const ContinuousPath &path = state.worldlines[0];
+  Site disconnected_end = path.end();
+  ++disconnected_end[0];
+  std::vector<JumpEvent> disconnected_events(path.events().begin(), path.events().end());
+  disconnected_events.push_back(JumpEvent{.time = path.duration(), .axis = 0, .direction = 1});
+  state.worldlines[0] = ContinuousPath(path.duration(), path.start(), std::move(disconnected_end),
+                                       std::move(disconnected_events));
+  EXPECT_THROW(state.validate(model), std::logic_error);
 }
 
 TEST(ContinuousConfigurationTest, RejectsZeroBetaContinuousSampling) {
@@ -214,13 +204,9 @@ TEST(ContinuousConfigurationTest, TimeOriginRotationRetainsJumpAtNewSeam) {
       .dimension = 1,
       .hopping = 1.0,
   };
-  const ContinuousPath path{
-      .duration = 1.0,
-      .start = {0},
-      .end = {0},
-      .events = {{.time = 0.25, .axis = 0, .direction = 1},
-                 {.time = 0.75, .axis = 0, .direction = -1}},
-  };
+  const ContinuousPath path(
+      1.0, {0}, {0},
+      {{.time = 0.25, .axis = 0, .direction = 1}, {.time = 0.75, .axis = 0, .direction = -1}});
   const ContinuousConfiguration state{
       .cycles = {{0}},
       .permutation = {0},
@@ -230,9 +216,9 @@ TEST(ContinuousConfigurationTest, TimeOriginRotationRetainsJumpAtNewSeam) {
   state.validate(model);
   const auto rotated = rotate_configuration_time_origin(state, model, 0.25);
   rotated.validate(model);
-  ASSERT_EQ(rotated.worldlines[0].events.size(), 2U);
-  EXPECT_DOUBLE_EQ(rotated.worldlines[0].events[0].time, 0.0);
-  EXPECT_EQ(rotated.worldlines[0].events[0].direction, 1);
+  ASSERT_EQ(rotated.worldlines[0].events().size(), 2U);
+  EXPECT_DOUBLE_EQ(rotated.worldlines[0].events()[0].time, 0.0);
+  EXPECT_EQ(rotated.worldlines[0].events()[0].direction, 1);
   EXPECT_EQ(rotated.worldlines[0].position_at(0.0), Site({1}));
   EXPECT_EQ(rotated.total_winding(model), state.total_winding(model));
 }
@@ -245,28 +231,20 @@ TEST(ContinuousConfigurationTest, CursorRotationMatchesCoincidentSeamTraversalEx
       .dimension = 1,
       .hopping = 1.0,
   };
-  const ContinuousPath first{
-      .duration = 1.0,
-      .start = {0},
-      .end = {1},
-      .events = {{.time = 0.0, .axis = 0, .direction = 1},
-                 {.time = 0.25, .axis = 0, .direction = 1},
-                 {.time = 0.25, .axis = 0, .direction = -1},
-                 {.time = 0.75, .axis = 0, .direction = 1},
-                 {.time = 1.0, .axis = 0, .direction = -1}},
-  };
-  const ContinuousPath second{
-      .duration = 1.0,
-      .start = {1},
-      .end = {0},
-      .events = {{.time = 0.0, .axis = 0, .direction = -1},
-                 {.time = 0.25, .axis = 0, .direction = 1},
-                 {.time = 0.5, .axis = 0, .direction = 1},
-                 {.time = 0.75, .axis = 0, .direction = -1},
-                 {.time = 0.75, .axis = 0, .direction = 1},
-                 {.time = 1.0, .axis = 0, .direction = -1},
-                 {.time = 1.0, .axis = 0, .direction = -1}},
-  };
+  const ContinuousPath first(1.0, {0}, {1},
+                             {{.time = 0.0, .axis = 0, .direction = 1},
+                              {.time = 0.25, .axis = 0, .direction = 1},
+                              {.time = 0.25, .axis = 0, .direction = -1},
+                              {.time = 0.75, .axis = 0, .direction = 1},
+                              {.time = 1.0, .axis = 0, .direction = -1}});
+  const ContinuousPath second(1.0, {1}, {0},
+                              {{.time = 0.0, .axis = 0, .direction = -1},
+                               {.time = 0.25, .axis = 0, .direction = 1},
+                               {.time = 0.5, .axis = 0, .direction = 1},
+                               {.time = 0.75, .axis = 0, .direction = -1},
+                               {.time = 0.75, .axis = 0, .direction = 1},
+                               {.time = 1.0, .axis = 0, .direction = -1},
+                               {.time = 1.0, .axis = 0, .direction = -1}});
   const ContinuousConfiguration state{
       .cycles = {{0, 1}},
       .permutation = {1, 0},
@@ -281,9 +259,9 @@ TEST(ContinuousConfigurationTest, CursorRotationMatchesCoincidentSeamTraversalEx
   EXPECT_TRUE(configurations_are_equal(actual, expected));
   EXPECT_NO_THROW(actual.validate(model));
   EXPECT_EQ(actual.event_count(), state.event_count());
-  ASSERT_GE(actual.worldlines[0].events.size(), 2U);
-  EXPECT_DOUBLE_EQ(actual.worldlines[0].events[0].time, 0.0);
-  EXPECT_DOUBLE_EQ(actual.worldlines[0].events[1].time, 0.0);
+  ASSERT_GE(actual.worldlines[0].events().size(), 2U);
+  EXPECT_DOUBLE_EQ(actual.worldlines[0].events()[0].time, 0.0);
+  EXPECT_DOUBLE_EQ(actual.worldlines[0].events()[1].time, 0.0);
 }
 
 TEST(ContinuousConfigurationTest, CursorRotationPreservesAllowedDurationDriftSemantics) {
@@ -299,11 +277,9 @@ TEST(ContinuousConfigurationTest, CursorRotationPreservesAllowedDurationDriftSem
   const ContinuousConfiguration state{
       .cycles = {{0}},
       .permutation = {0},
-      .worldlines = {{.duration = duration,
-                      .start = {0},
-                      .end = {0},
-                      .events = {{.time = duration, .axis = 0, .direction = 1},
-                                 {.time = duration, .axis = 0, .direction = -1}}}},
+      .worldlines = {ContinuousPath(duration, {0}, {0},
+                                    {{.time = duration, .axis = 0, .direction = 1},
+                                     {.time = duration, .axis = 0, .direction = -1}})},
       .log_Z0_N = 0.0,
   };
   state.validate(model);

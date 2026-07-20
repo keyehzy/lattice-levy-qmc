@@ -107,15 +107,25 @@ struct JumpEvent {
   std::int8_t direction; // exactly -1 or +1
 };
 
-struct ContinuousPath {
-  double duration;
-  Site start;
-  Site end;
-  std::vector<JumpEvent> events; // sorted, internal event times
+class ContinuousPath {
+public:
+  ContinuousPath(double duration, Site start, Site end,
+                 std::vector<JumpEvent> events);
 
   void validate(std::size_t dimension) const;
+  double duration() const noexcept;
+  std::size_t dimension() const noexcept;
+  const Site& start() const noexcept;
+  const Site& end() const noexcept;
+  std::span<const JumpEvent> events() const noexcept;
   Site position_at(double tau) const;
   std::size_t event_count() const noexcept;
+
+private:
+  double duration_;
+  Site start_;
+  Site end_;
+  std::vector<JumpEvent> events_; // sorted, times in [0, duration]
 };
 
 class CanonicalEnsemble {

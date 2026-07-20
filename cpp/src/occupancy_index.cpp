@@ -163,8 +163,7 @@ OccupancyIndex::SiteTimeline &OccupancyIndex::timeline(TimelineMap &timelines, c
 }
 
 void OccupancyIndex::stage_path_timelines(const ContinuousPath &path, TimelineMap &staged) const {
-  path.validate(layout_.dimension());
-  SiteId position = layout_.encode_covering(path.start);
+  SiteId position = layout_.encode_covering(path.start());
   const auto stage_site = [this, &staged](const SiteId key) {
     if (staged.contains(key)) {
       return;
@@ -178,7 +177,7 @@ void OccupancyIndex::stage_path_timelines(const ContinuousPath &path, TimelineMa
   };
 
   stage_site(position);
-  for (const JumpEvent &event : path.events) {
+  for (const JumpEvent &event : path.events()) {
     position = layout_.shifted(position, event.axis, static_cast<Coord>(event.direction));
     stage_site(position);
   }
@@ -189,10 +188,9 @@ void OccupancyIndex::adjust_path(TimelineMap &timelines, const ContinuousPath &p
   if (sign != -1 && sign != 1) {
     throw std::invalid_argument("occupancy path adjustment sign must be -1 or +1");
   }
-  path.validate(layout_.dimension());
-  SiteId position = layout_.encode_covering(path.start);
+  SiteId position = layout_.encode_covering(path.start());
   timeline(timelines, position).adjust_initial(sign);
-  for (const JumpEvent &event : path.events) {
+  for (const JumpEvent &event : path.events()) {
     const SiteId old_key = position;
     position = layout_.shifted(position, event.axis, static_cast<Coord>(event.direction));
     if (old_key == position) {
@@ -205,22 +203,24 @@ void OccupancyIndex::adjust_path(TimelineMap &timelines, const ContinuousPath &p
 
 double OccupancyIndex::integrate_path_occupancy(TimelineMap &timelines,
                                                 const ContinuousPath &path) const {
-  path.validate(layout_.dimension());
-  SiteId position = layout_.encode_covering(path.start);
+  SiteId position = layout_.encode_covering(path.start());
   double previous = 0.0;
   double total = 0.0;
-  for (const JumpEvent &event : path.events) {
+  for (const JumpEvent &event : path.events()) {
     total += timeline(timelines, position).integral(previous, event.time);
     position = layout_.shifted(position, event.axis, static_cast<Coord>(event.direction));
     previous = event.time;
   }
-  total += timeline(timelines, position).integral(previous, path.duration);
+  total += timeline(timelines, position).integral(previous, path.duration());
   return total;
 }
 
 void OccupancyIndex::rebuild(const std::span<const ContinuousPath> paths) {
   TimelineMap rebuilt;
   for (const ContinuousPath &path : paths) {
+    if (path.dimension() != layout_.dimension()) {
+      throw std::invalid_argument("occupancy path dimension does not match the layout");
+    }
     adjust_path(rebuilt, path, 1);
   }
   timelines_.swap(rebuilt);
@@ -233,6 +233,10 @@ OccupancyIndex::begin_replacement(const std::span<const PathReplacementView> rep
     if (index != 0 && replacements[index - 1].label >= replacements[index].label) {
       throw std::invalid_argument("occupancy replacement labels must be sorted and unique");
     }
+    if (replacements[index].old_path.dimension() != layout_.dimension() ||
+        replacements[index].new_path.dimension() != layout_.dimension()) {
+      throw std::invalid_argument("occupancy replacement path dimension does not match the layout");
+    }
   }
 
   TimelineMap staged;
@@ -244,7 +248,7 @@ OccupancyIndex::begin_replacement(const std::span<const PathReplacementView> rep
   double removed = 0.0;
   for (const PathReplacementView &replacement : replacements) {
     removed +=
-        integrate_path_occupancy(staged, replacement.old_path) - replacement.old_path.duration;
+        integrate_path_occupancy(staged, replacement.old_path) - replacement.old_path.duration();
     adjust_path(staged, replacement.old_path, -1);
   }
 
@@ -282,6 +286,9 @@ bool OccupancyIndex::same_occupancies(const TimelineMap &left, const TimelineMap
 bool OccupancyIndex::represents(const std::span<const ContinuousPath> paths) const {
   TimelineMap expected;
   for (const ContinuousPath &path : paths) {
+    if (path.dimension() != layout_.dimension()) {
+      return false;
+    }
     adjust_path(expected, path, 1);
   }
   return same_occupancies(timelines_, expected);

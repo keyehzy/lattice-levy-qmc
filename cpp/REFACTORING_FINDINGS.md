@@ -69,7 +69,7 @@ type collects one invariant that is currently spread across several files.
 | P0 | Make occupancy replacement transactional (done 2026-07-19) | Correctness and simpler move code | Medium |
 | P0/P1 | Checked flat extents and `TorusLayout`/`SiteId` (done 2026-07-19); add grid provenance | Memory safety, shared geometry, and fewer allocations | Medium |
 | P0 | Bind model and canonical table (done 2026-07-19); add reusable free numerics | Correctness and large repeated-work reduction | Medium |
-| P0 | Make paths/configurations valid-by-construction | Ownership clarity and removal of nested validation | Large |
+| P0 | Make paths/configurations valid-by-construction (`ContinuousPath` done 2026-07-20) | Ownership clarity and removal of nested validation | Large |
 | P1 | Path cursor/slice migration (done 2026-07-20) | Simpler boundary semantics and faster path surgery | Medium |
 | P1 | Add a retained-measurement context and accumulators | Less repeated work and a smaller demo | Medium |
 | P1 | Collect reusable free-particle numerics | Numerical clarity and less repeated setup | Medium |
@@ -239,7 +239,19 @@ Verification:
 
 ### 3. P0: replace mutable record bags with valid-by-construction values
 
-Evidence:
+Status (2026-07-20): the `ContinuousPath` slice is complete. Construction now
+owns and validates duration, endpoint dimensions, sorted event times, axes,
+directions, coordinate range, and endpoint consistency. Path storage is private;
+callers receive read-only endpoint references and an event span, and structural
+equality is defined for paths and events. Trusted queries, cursor operations,
+interaction sweeps, and occupancy transactions no longer revalidate complete
+path storage. The configuration `validate()` path remains an explicit diagnostic
+audit and verifies model-dimension compatibility. Construction-failure tests and
+the existing boundary, surgery, sampling, topology, action, and cache tests cover
+the migration. `Model`, dense/ideal configurations, `ContinuousConfiguration`,
+and permutation ownership remain open.
+
+Pre-refactor evidence:
 
 - `Model` is documented as immutable but all fields are public and mutable
   (`include/qmc/model.hpp:21-32`).
@@ -952,8 +964,9 @@ visible at the assertion sites.
 4. Completed 2026-07-20: `PathCursor`/`PathSlice` migration for split,
    resample, stitch, and time-origin rotation, with exact traversal and boundary
    equivalence tests.
-5. Encapsulate `ContinuousPath`, `Permutation`, and configurations. Move full
-   validation to construction/import/debug audits.
+5. `ContinuousPath` encapsulation completed 2026-07-20; encapsulate
+   `Permutation` and configurations, then move their full validation to
+   construction/import/debug audits.
 6. Add retained measurement context and accumulators, then optimize direct
    correlation kernels from benchmark evidence.
 7. Consolidate canonical derivative/log-distribution numerics.
