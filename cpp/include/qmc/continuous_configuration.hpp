@@ -12,6 +12,10 @@
 
 namespace qmc {
 
+namespace detail {
+class AcceptedChainState;
+}
+
 // Canonical bosonic world-line state with one duration-beta path per label and
 // one authoritative, validated topology.
 class ContinuousConfiguration {
@@ -32,6 +36,7 @@ public:
 
 private:
   friend class InteractingSampler;
+  friend class detail::AcceptedChainState;
 
   void replace_topology(Permutation topology_value) noexcept;
 

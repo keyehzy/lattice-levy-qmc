@@ -21,7 +21,7 @@
 namespace qmc {
 
 namespace detail {
-class OccupancyIndex;
+class AcceptedChainState;
 struct InteractingSamplerTestAccess;
 } // namespace detail
 
@@ -137,9 +137,9 @@ public:
                                                         const RunOptions &options = RunOptions{});
 
   [[nodiscard]] const InteractingModel &model() const noexcept { return model_; }
-  [[nodiscard]] const ContinuousConfiguration &state() const noexcept { return state_; }
-  [[nodiscard]] double pair_overlap() const noexcept { return pair_overlap_; }
-  [[nodiscard]] double action() const noexcept { return action_; }
+  [[nodiscard]] const ContinuousConfiguration &state() const noexcept;
+  [[nodiscard]] double pair_overlap() const noexcept;
+  [[nodiscard]] double action() const noexcept;
   [[nodiscard]] const std::array<MoveStatistics, 5> &statistics() const noexcept {
     return statistics_;
   }
@@ -169,18 +169,14 @@ private:
   [[nodiscard]] bool try_stitch_strands(std::span<const ParticleId> strands, double tau0,
                                         double tau1);
   [[nodiscard]] bool metropolis_accept(double delta_action);
-  void rebuild_occupancy_index();
 
   InteractingModel model_;
   TorusLayout layout_;
   NumericalOptions numerical_;
   Random random_;
   CanonicalEnsemble free_ensemble_;
-  ContinuousConfiguration state_;
-  double pair_overlap_ = 0.0;
-  double action_ = 0.0;
+  std::unique_ptr<detail::AcceptedChainState> accepted_state_;
   std::array<MoveStatistics, 5> statistics_{};
-  std::unique_ptr<detail::OccupancyIndex> occupancy_index_;
 };
 
 } // namespace qmc

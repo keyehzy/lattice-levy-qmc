@@ -52,6 +52,7 @@ qmc_enable_sanitizers(qmc_ideal)
 
 add_library(
   qmc_interacting
+  src/accepted_chain_state.cpp
   src/continuous_configuration.cpp
   src/interacting_model.cpp
   src/interacting_sampler.cpp

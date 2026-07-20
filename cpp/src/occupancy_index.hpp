@@ -53,6 +53,10 @@ public:
     ~ReplacementTransaction() = default;
 
     [[nodiscard]] double proposed_overlap() const noexcept { return proposed_overlap_; }
+    // Recomputes the complete proposed overlap from accepted and staged
+    // timelines. This is a rare numerical rebase path, not the normal local
+    // delta calculation.
+    [[nodiscard]] double exact_proposed_overlap();
 
     // Publishes prepared timeline nodes without allocation. Destroying an
     // uncommitted transaction leaves the accepted index byte-for-byte intact.

@@ -40,11 +40,13 @@ TEST(OccupancyIndexTest, StagesAffectedTimelinesAndPublishesOnlyOnCommit) {
   };
   auto transaction = index.begin_replacement(replacements, 1.0);
   EXPECT_DOUBLE_EQ(transaction.proposed_overlap(), 0.0);
+  EXPECT_DOUBLE_EQ(transaction.exact_proposed_overlap(), 0.0);
   EXPECT_TRUE(index.represents(accepted));
   EXPECT_FALSE(index.represents(proposed));
   EXPECT_DOUBLE_EQ(index.pair_overlap(), 1.0);
 
   transaction.commit();
+  EXPECT_THROW(static_cast<void>(transaction.exact_proposed_overlap()), std::logic_error);
   EXPECT_FALSE(index.represents(accepted));
   EXPECT_TRUE(index.represents(proposed));
   EXPECT_DOUBLE_EQ(index.pair_overlap(), 0.0);

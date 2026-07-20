@@ -1,4 +1,4 @@
-#include "occupancy_index.hpp"
+#include "accepted_chain_state.hpp"
 #include "qmc/interacting_sampler.hpp"
 #include "qmc/interaction.hpp"
 #include "stitch_matching.hpp"
@@ -19,7 +19,11 @@ namespace detail {
 
 struct InteractingSamplerTestAccess {
   static bool occupancy_matches_state(const InteractingSampler &sampler) {
-    return sampler.occupancy_index_->represents(sampler.state_.worldlines);
+    return sampler.accepted_state_->occupancy_matches_configuration();
+  }
+
+  static double occupancy_overlap(InteractingSampler &sampler) {
+    return sampler.accepted_state_->occupancy_pair_overlap();
   }
 
   static void set_interaction(InteractingSampler &sampler, const double interaction) {
@@ -32,8 +36,8 @@ struct InteractingSamplerTestAccess {
 
   static bool try_invalid_topology_proposal(InteractingSampler &sampler) {
     std::vector<InteractingSampler::LabeledPath> replacements;
-    replacements.emplace_back(0, sampler.state_.worldlines[0]);
-    std::vector<ParticleId> invalid_permutation(sampler.state_.worldlines.size(), 0);
+    replacements.emplace_back(0, sampler.state().worldlines[0]);
+    std::vector<ParticleId> invalid_permutation(sampler.state().worldlines.size(), 0);
     return sampler.try_proposal(
         InteractingSampler::LocalProposal{
             .replacements = std::move(replacements),
@@ -176,6 +180,9 @@ TEST(InteractingSamplerTest, FiniteInteractionPreservesStateAndCacheInvariants) 
     EXPECT_NEAR(sampler.pair_overlap(), recomputed, 1e-12);
     EXPECT_NEAR(sampler.action(), sampler.model().interaction * recomputed, 1e-12);
     EXPECT_GE(sampler.pair_overlap(), 0.0);
+    EXPECT_TRUE(detail::InteractingSamplerTestAccess::occupancy_matches_state(sampler));
+    EXPECT_NEAR(detail::InteractingSamplerTestAccess::occupancy_overlap(sampler),
+                sampler.pair_overlap(), 1e-12);
   }
 
   const auto value = sampler.observables();
@@ -185,6 +192,50 @@ TEST(InteractingSamplerTest, FiniteInteractionPreservesStateAndCacheInvariants) 
   EXPECT_EQ(value.winding, sampler.state().total_winding(sampler.model().free));
   EXPECT_EQ(value.cycle_lengths, sampler.state().cycle_lengths());
   EXPECT_NEAR(value.total_energy, value.kinetic_energy + value.interaction_energy, 1e-14);
+}
+
+TEST(InteractingSamplerTest, ActionIsDerivedFromTheAcceptedOverlap) {
+  InteractingSampler sampler(sampler_model(1.0), 131);
+  const double overlap = sampler.pair_overlap();
+  detail::InteractingSamplerTestAccess::set_interaction(sampler, -3.5);
+  EXPECT_DOUBLE_EQ(sampler.action(), -3.5 * overlap);
+  EXPECT_DOUBLE_EQ(sampler.observables().action, -3.5 * overlap);
+  EXPECT_DOUBLE_EQ(sampler.pair_overlap(), overlap);
+  EXPECT_TRUE(detail::InteractingSamplerTestAccess::occupancy_matches_state(sampler));
+}
+
+TEST(InteractingSamplerTest, RebuiltStatesTakeTheirOverlapFromTheOccupancyLedger) {
+  InteractingSampler sampler(sampler_model(0.0), 1'311);
+  EXPECT_DOUBLE_EQ(sampler.pair_overlap(),
+                   detail::InteractingSamplerTestAccess::occupancy_overlap(sampler));
+
+  EXPECT_TRUE(sampler.global_update());
+  EXPECT_DOUBLE_EQ(sampler.pair_overlap(),
+                   detail::InteractingSamplerTestAccess::occupancy_overlap(sampler));
+  EXPECT_TRUE(detail::InteractingSamplerTestAccess::occupancy_matches_state(sampler));
+
+  EXPECT_TRUE(sampler.time_shift_update(0.37));
+  EXPECT_DOUBLE_EQ(sampler.pair_overlap(),
+                   detail::InteractingSamplerTestAccess::occupancy_overlap(sampler));
+  EXPECT_TRUE(detail::InteractingSamplerTestAccess::occupancy_matches_state(sampler));
+}
+
+TEST(InteractingSamplerTest, CopiesRetainAnAuthoritativeAcceptedState) {
+  InteractingSampler original(sampler_model(1.7), 132);
+  original.sweep(SweepOptions{.segment_updates = 4,
+                              .segment_fraction = 0.4,
+                              .cycle_updates = 1,
+                              .global_updates = 1,
+                              .stitch_updates = 2,
+                              .stitch_mixture = {}});
+
+  InteractingSampler copy(original);
+  EXPECT_TRUE(equal_state(copy.state(), original.state()));
+  EXPECT_DOUBLE_EQ(copy.pair_overlap(), original.pair_overlap());
+  EXPECT_DOUBLE_EQ(copy.action(), original.action());
+  EXPECT_TRUE(detail::InteractingSamplerTestAccess::occupancy_matches_state(copy));
+  EXPECT_NEAR(detail::InteractingSamplerTestAccess::occupancy_overlap(copy), copy.pair_overlap(),
+              1e-12);
 }
 
 TEST(InteractingSamplerTest, StitchUpdatesChangeTopologyAndKeepActionCacheExact) {
@@ -330,6 +381,7 @@ TEST(InteractingSamplerTest, ActionFailureAbandonsPreparedOccupancyReplacement) 
                                                         std::numeric_limits<double>::max());
 
   EXPECT_THROW(static_cast<void>(sampler.whole_worldline_update(0)), std::overflow_error);
+  detail::InteractingSamplerTestAccess::set_interaction(sampler, model.interaction);
   EXPECT_TRUE(equal_state(sampler.state(), before));
   EXPECT_DOUBLE_EQ(sampler.pair_overlap(), overlap_before);
   EXPECT_DOUBLE_EQ(sampler.action(), action_before);

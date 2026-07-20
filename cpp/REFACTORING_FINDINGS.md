@@ -74,7 +74,7 @@ type collects one invariant that is currently spread across several files.
 | P1 | Add a retained-measurement context (done 2026-07-20); add accumulators | Less repeated work and a smaller demo | Medium |
 | P1 | Collect reusable free-particle numerics | Numerical clarity and less repeated setup | Medium |
 | P1 | Unify discrete log-weight draws and bounded-tail sampling (done 2026-07-20) | One truncation policy and fewer allocations | Medium |
-| P1 | Unify full/incremental action around accepted state | One source of truth and faster full evaluation | Medium |
+| P1 | Unify full/incremental action around accepted state (ownership slice done 2026-07-20) | One source of truth and faster full evaluation | Medium |
 | P1 | Make permutation topology authoritative (continuous and retained ideal done 2026-07-20) | Remove duplicated state and synchronization code | Medium |
 | P1 | Separate stitch selection, proposal, and commit | Readability, testability, and API clarity | Medium |
 | P2 | Add streaming runs, checkpoints, and prepared options | Operational quality of life | Small/medium |
@@ -622,7 +622,39 @@ should remain visible and independently tested.
 
 ### 9. P1: use the same site/event abstractions in full and incremental action
 
-Evidence:
+Status (2026-07-20): the accepted-state ownership slice is complete. A private
+`AcceptedChainState` now owns the continuous configuration, occupancy index,
+and cached pair overlap. Initial, global-proposal, and time-rotated states build
+one occupancy ledger and take their overlap from that ledger instead of running
+the independent full sweep and then rebuilding the same state separately. Local
+paths, optional topology, affected timelines, and the proposed overlap are
+published together through one non-throwing accepted-state transaction; an
+abandoned transaction leaves the complete owner untouched. The action is now
+derived from immutable `U` and the accepted overlap rather than retained as a
+second scalar cache. If delta arithmetic crosses a few ulps below the physical
+zero boundary, the transaction rebases from its fully staged occupancy ledger
+before acceptance. Construction/global/time-shift ledger authority, derived
+action, copied-owner, rejection, counter, topology, and action-failure tests
+cover the boundary. The independent full event sweep remains the audit oracle.
+Its production k-way merge and a bundled public interaction measurement remain
+open.
+
+Numerical follow-up note (2026-07-20): the seeded finite-interaction invariant
+test exposed cancellation at the physical zero boundary. At sweep 11, segment
+update 2, the accepted overlap was `0.11278807006915575`; the incremental
+`current - removed + added` evaluation produced
+`-1.6653345369377348e-16`, while both the complete proposed occupancy-ledger
+evaluation and the independent full event sweep returned exactly zero. The
+current implementation responds to any finite negative delta result by
+recomputing from the complete staged ledger and then applying the ordinary
+finite/nonnegative validation. This is a defensive numerical rebase, not an
+exact proof that every negative candidate is roundoff. A stricter follow-up
+should prove zero structurally from integer occupancies on every
+positive-duration interval, canonicalize to zero only at that boundary, and
+treat a negative result for structurally nonzero occupancy as an invariant
+failure. Do not replace this with an unconditional tolerance clamp.
+
+Pre-slice evidence:
 
 - full overlap copies every event into `TimedEvent` and stable-sorts all events
   even though every path's events are already sorted
@@ -1041,8 +1073,10 @@ visible at the assertion sites.
    optimize direct correlation kernels from benchmark evidence.
 7. Log-weight categorical draws and adaptive-support numerics completed
    2026-07-20; consolidate canonical derivative recurrences.
-8. Split translation units and demos after responsibilities have stabilized.
-9. GoogleTest exclusion from clang-tidy completed 2026-07-19; add install, CI,
+8. Accepted-chain ownership completed 2026-07-20; add the production k-way
+   event merge and bundled interaction measurement separately.
+9. Split translation units and demos after responsibilities have stabilized.
+10. GoogleTest exclusion from clang-tidy completed 2026-07-19; add install, CI,
    benchmark support, and an external consumer test.
 
 Each step should keep the current deterministic, invariant, and statistical

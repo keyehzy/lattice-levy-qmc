@@ -1,18 +1,14 @@
 #include "qmc/interacting_sampler.hpp"
 
-#include "checked_math.hpp"
+#include "accepted_chain_state.hpp"
 #include "continuous_detail.hpp"
-#include "interaction_detail.hpp"
-#include "occupancy_index.hpp"
 #include "path_cursor.hpp"
-#include "qmc/interaction.hpp"
 #include "stitch_matching.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
-#include <type_traits>
 #include <unordered_map>
 #include <utility>
 
@@ -437,19 +433,18 @@ InteractingSampler::InteractingSampler(InteractingModel model, NumericalOptions 
       random_(seed), free_ensemble_(model_.free) {
   model_.validate();
   numerical_.validate();
-  state_ = sample_ideal_continuous_configuration(free_ensemble_, random_, numerical_);
-  pair_overlap_ = pair_overlap_time(state_, model_.free);
-  action_ = checked_action(model_.interaction, pair_overlap_);
-  rebuild_occupancy_index();
+  ContinuousConfiguration initial =
+      sample_ideal_continuous_configuration(free_ensemble_, random_, numerical_);
+  accepted_state_ = std::make_unique<detail::AcceptedChainState>(model_.free, std::move(initial));
+  static_cast<void>(checked_action(model_.interaction, pair_overlap()));
 }
 
 InteractingSampler::~InteractingSampler() = default;
 InteractingSampler::InteractingSampler(const InteractingSampler &other)
     : model_(other.model_), layout_(other.layout_), numerical_(other.numerical_),
-      random_(other.random_), free_ensemble_(other.free_ensemble_), state_(other.state_),
-      pair_overlap_(other.pair_overlap_), action_(other.action_), statistics_(other.statistics_) {
-  rebuild_occupancy_index();
-}
+      random_(other.random_), free_ensemble_(other.free_ensemble_),
+      accepted_state_(std::make_unique<detail::AcceptedChainState>(*other.accepted_state_)),
+      statistics_(other.statistics_) {}
 
 InteractingSampler &InteractingSampler::operator=(const InteractingSampler &other) {
   if (this != &other) {
@@ -462,11 +457,13 @@ InteractingSampler &InteractingSampler::operator=(const InteractingSampler &othe
 InteractingSampler::InteractingSampler(InteractingSampler &&) noexcept = default;
 InteractingSampler &InteractingSampler::operator=(InteractingSampler &&) noexcept = default;
 
-void InteractingSampler::rebuild_occupancy_index() {
-  auto rebuilt = std::make_unique<detail::OccupancyIndex>(model_.free);
-  rebuilt->rebuild(state_.worldlines);
-  occupancy_index_ = std::move(rebuilt);
+const ContinuousConfiguration &InteractingSampler::state() const noexcept {
+  return accepted_state_->configuration();
 }
+
+double InteractingSampler::pair_overlap() const noexcept { return accepted_state_->pair_overlap(); }
+
+double InteractingSampler::action() const noexcept { return model_.interaction * pair_overlap(); }
 
 const MoveStatistics &InteractingSampler::statistics(const MoveKind move) const {
   return statistics_[move_index(move)];
@@ -499,38 +496,23 @@ bool InteractingSampler::try_path_replacements(std::vector<LabeledPath> replacem
 }
 
 bool InteractingSampler::try_proposal(LocalProposal proposal, MoveStatistics &move_statistics) {
-  std::ranges::sort(proposal.replacements, {}, &LabeledPath::first);
-  std::vector<detail::PathReplacementView> replacement_views;
-  replacement_views.reserve(proposal.replacements.size());
-  for (std::size_t index = 0; index < proposal.replacements.size(); ++index) {
-    LabeledPath &replacement = proposal.replacements[index];
-    const auto label = static_cast<std::size_t>(replacement.first);
-    if (label >= state_.worldlines.size() ||
-        (index != 0 && proposal.replacements[index - 1].first == replacement.first)) {
-      throw std::logic_error("path replacements contain an invalid or duplicate label");
-    }
-    if (replacement.second.dimension() != model_.free.dimension) {
-      throw std::invalid_argument("replacement path dimension does not match the model");
-    }
-    replacement_views.push_back(detail::PathReplacementView{
-        .label = replacement.first,
-        .old_path = state_.worldlines[label],
-        .new_path = replacement.second,
-    });
-  }
-
-  auto occupancy_transaction =
-      occupancy_index_->begin_replacement(replacement_views, pair_overlap_);
-  std::optional<Permutation> proposed_topology;
-  if (proposal.successors.has_value()) {
-    proposed_topology.emplace(std::move(*proposal.successors));
-  } else if (proposal.successor_changes != 0) {
+  if (!proposal.successors.has_value() && proposal.successor_changes != 0) {
     throw std::logic_error("path-only proposal reports topology changes");
   }
+  std::vector<detail::AcceptedChainState::PathReplacement> replacements;
+  replacements.reserve(proposal.replacements.size());
+  for (LabeledPath &replacement : proposal.replacements) {
+    replacements.push_back(detail::AcceptedChainState::PathReplacement{
+        .label = replacement.first,
+        .path = std::move(replacement.second),
+    });
+  }
+  auto state_transaction =
+      accepted_state_->begin_replacement(std::move(replacements), std::move(proposal.successors));
 
-  const double new_overlap = occupancy_transaction.proposed_overlap();
+  const double new_overlap = state_transaction.proposed_overlap();
   const double new_action = checked_action(model_.interaction, new_overlap);
-  const bool accepted = metropolis_accept(new_action - action_);
+  const bool accepted = metropolis_accept(new_action - action());
   if (!accepted) {
     return false;
   }
@@ -541,17 +523,7 @@ bool InteractingSampler::try_proposal(LocalProposal proposal, MoveStatistics &mo
     ensure_counter_capacity(move_statistics.successor_changes, proposal.successor_changes);
   }
 
-  static_assert(std::is_nothrow_swappable_v<ContinuousPath>);
-  static_assert(std::is_nothrow_move_assignable_v<Permutation>);
-  for (LabeledPath &replacement : proposal.replacements) {
-    std::swap(state_.worldlines[replacement.first], replacement.second);
-  }
-  if (proposed_topology.has_value()) {
-    state_.replace_topology(std::move(*proposed_topology));
-  }
-  occupancy_transaction.commit();
-  pair_overlap_ = new_overlap;
-  action_ = new_action;
+  state_transaction.commit();
   increment_counter(move_statistics.accepts);
   if (proposal.successor_changes != 0) {
     increment_counter(move_statistics.topology_changes);
@@ -592,7 +564,7 @@ bool InteractingSampler::segment_update(const std::optional<ParticleId> particle
     tau1 = std::min(model_.free.beta, tau0 + duration);
   }
 
-  ContinuousPath proposal = resample_path_interval(state_.worldlines[label], tau0, tau1,
+  ContinuousPath proposal = resample_path_interval(state().worldlines[label], tau0, tau1,
                                                    model_.free.hopping, random_, numerical_);
   std::vector<LabeledPath> replacements;
   replacements.emplace_back(label, std::move(proposal));
@@ -605,7 +577,7 @@ bool InteractingSampler::whole_worldline_update(const std::optional<ParticleId> 
 }
 
 bool InteractingSampler::cycle_update(const std::optional<std::size_t> cycle_index) {
-  const std::span<const Cycle> cycles = state_.topology().cycles();
+  const std::span<const Cycle> cycles = state().topology().cycles();
   if (cycles.empty()) {
     return true;
   }
@@ -637,7 +609,7 @@ InteractingSampler::sample_stitch_proposal(const std::span<const ParticleId> str
   if (!std::isfinite(duration) || duration <= 0.0) {
     throw std::invalid_argument("stitch duration must be positive");
   }
-  std::vector<bool> selected(state_.worldlines.size(), false);
+  std::vector<bool> selected(state().worldlines.size(), false);
   std::vector<detail::PathSlice> path_slices;
   std::vector<Site> left;
   std::vector<Site> right;
@@ -645,11 +617,11 @@ InteractingSampler::sample_stitch_proposal(const std::span<const ParticleId> str
   left.reserve(strand_count);
   right.reserve(strand_count);
   for (const ParticleId label : strands) {
-    if (static_cast<std::size_t>(label) >= state_.worldlines.size() || selected[label]) {
+    if (static_cast<std::size_t>(label) >= state().worldlines.size() || selected[label]) {
       throw std::invalid_argument("stitch strands must be distinct valid labels");
     }
     selected[label] = true;
-    const ContinuousPath &path = state_.worldlines[label];
+    const ContinuousPath &path = state().worldlines[label];
     detail::PathCursor cursor(path);
     const detail::PathCut left_cut = cursor.cut(tau0);
     const detail::PathCut right_cut = cursor.cut(tau1);
@@ -675,12 +647,12 @@ InteractingSampler::sample_stitch_proposal(const std::span<const ParticleId> str
                                                             bridge, model_.free.linear_size));
   }
 
-  const std::span<const ParticleId> current_successors = state_.topology().successors();
+  const std::span<const ParticleId> current_successors = state().topology().successors();
   proposal.successors.assign(current_successors.begin(), current_successors.end());
   std::vector<ParticleId> old_successors;
   old_successors.reserve(strand_count);
   for (const ParticleId label : strands) {
-    old_successors.push_back(state_.topology().successor(label));
+    old_successors.push_back(state().topology().successor(label));
   }
   for (std::size_t row = 0; row < strand_count; ++row) {
     proposal.successors[strands[row]] = old_successors[matching[row]];
@@ -720,7 +692,7 @@ bool InteractingSampler::k_stitch_update(const std::size_t k,
 
   std::vector<ParticleId> strands;
   if (requested_strands.empty()) {
-    const std::vector<Site> positions = state_.positions_at(tau0, model_.free);
+    const std::vector<Site> positions = state().positions_at(tau0, model_.free);
     const std::vector<SiteId> site_ids = encode_positions(positions, layout_);
     const PartnerBuckets buckets = build_partner_buckets(site_ids);
     const auto anchor = static_cast<ParticleId>(
@@ -764,7 +736,7 @@ bool InteractingSampler::stitch_update(const std::optional<ParticleId> particle,
   if (partner.has_value()) {
     selected_partner = *partner;
   } else {
-    const std::vector<Site> positions = state_.positions_at(tau0, model_.free);
+    const std::vector<Site> positions = state().positions_at(tau0, model_.free);
     const std::vector<SiteId> site_ids = encode_positions(positions, layout_);
     const PartnerBuckets buckets = build_partner_buckets(site_ids);
     selected_partner = select_stitch_partner(selected, site_ids, buckets, layout_, model_.free,
@@ -811,7 +783,7 @@ void InteractingSampler::stitch_sweep(const std::optional<std::size_t> updates,
     throw std::invalid_argument("stitch window lies outside [0, beta]");
   }
 
-  const std::vector<Site> positions = state_.positions_at(tau0, model_.free);
+  const std::vector<Site> positions = state().positions_at(tau0, model_.free);
   const std::vector<SiteId> site_ids = encode_positions(positions, layout_);
   const PartnerBuckets buckets = build_partner_buckets(site_ids);
   const std::size_t update_count = updates.value_or(model_.free.particle_count);
@@ -834,12 +806,12 @@ bool InteractingSampler::time_shift_update(const std::optional<double> shift) {
   const double selected_shift =
       shift.has_value() ? *shift : random_.uniform_unit() * model_.free.beta;
   ContinuousConfiguration rotated =
-      rotate_configuration_time_origin(state_, model_.free, selected_shift);
-  auto rebuilt = std::make_unique<detail::OccupancyIndex>(model_.free);
-  rebuilt->rebuild(rotated.worldlines);
+      rotate_configuration_time_origin(state(), model_.free, selected_shift);
+  auto proposed_state =
+      std::make_unique<detail::AcceptedChainState>(model_.free, std::move(rotated));
+  static_cast<void>(checked_action(model_.interaction, proposed_state->pair_overlap()));
   ensure_counter_capacity(move_statistics.accepts);
-  state_ = std::move(rotated);
-  occupancy_index_ = std::move(rebuilt);
+  accepted_state_.swap(proposed_state);
   increment_counter(move_statistics.accepts);
   return true;
 }
@@ -857,21 +829,18 @@ void InteractingSampler::random_seam_stitch_sweep(const std::optional<std::size_
 bool InteractingSampler::global_update() {
   ContinuousConfiguration proposal =
       sample_ideal_continuous_configuration(free_ensemble_, random_, numerical_);
-  const double new_overlap = pair_overlap_time(proposal, model_.free);
+  auto proposed_state =
+      std::make_unique<detail::AcceptedChainState>(model_.free, std::move(proposal));
+  const double new_overlap = proposed_state->pair_overlap();
   const double new_action = checked_action(model_.interaction, new_overlap);
   MoveStatistics &move_statistics = statistics_[move_index(MoveKind::GlobalMove)];
   increment_counter(move_statistics.attempts);
-  const bool accepted = metropolis_accept(new_action - action_);
+  const bool accepted = metropolis_accept(new_action - action());
   if (!accepted) {
     return false;
   }
-  auto rebuilt = std::make_unique<detail::OccupancyIndex>(model_.free);
-  rebuilt->rebuild(proposal.worldlines);
   ensure_counter_capacity(move_statistics.accepts);
-  std::swap(state_, proposal);
-  occupancy_index_ = std::move(rebuilt);
-  pair_overlap_ = new_overlap;
-  action_ = new_action;
+  accepted_state_.swap(proposed_state);
   increment_counter(move_statistics.accepts);
   return true;
 }
@@ -898,20 +867,21 @@ void InteractingSampler::sweep(const SweepOptions &options) {
 }
 
 InteractingObservables InteractingSampler::observables() const {
-  const auto event_count = state_.event_count();
+  const auto event_count = state().event_count();
+  const double overlap = pair_overlap();
   const double kinetic = -static_cast<double>(event_count) / model_.free.beta;
-  const double interaction = model_.interaction * pair_overlap_ / model_.free.beta;
+  const double interaction = model_.interaction * overlap / model_.free.beta;
   return InteractingObservables{
-      .action = action_,
-      .pair_overlap_time = pair_overlap_,
+      .action = action(),
+      .pair_overlap_time = overlap,
       .double_occupancy_per_site =
-          pair_overlap_ / (model_.free.beta * static_cast<double>(model_.free.volume())),
+          overlap / (model_.free.beta * static_cast<double>(model_.free.volume())),
       .kinetic_energy = kinetic,
       .interaction_energy = interaction,
       .total_energy = kinetic + interaction,
       .event_count = event_count,
-      .winding = state_.total_winding(model_.free),
-      .cycle_lengths = state_.cycle_lengths(),
+      .winding = state().total_winding(model_.free),
+      .cycle_lengths = state().cycle_lengths(),
   };
 }
 

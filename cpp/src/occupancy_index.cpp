@@ -150,6 +150,26 @@ void OccupancyIndex::ReplacementTransaction::commit() noexcept {
   owner_ = nullptr;
 }
 
+double OccupancyIndex::ReplacementTransaction::exact_proposed_overlap() {
+  if (owner_ == nullptr) {
+    throw std::logic_error("cannot rebase a committed occupancy replacement");
+  }
+  double total = 0.0;
+  for (auto &[site, accepted] : owner_->timelines_) {
+    auto staged = staged_timelines_.find(site);
+    SiteTimeline &timeline = staged == staged_timelines_.end() ? accepted : staged->second;
+    if (!timeline.empty()) {
+      total += timeline.pair_integral(owner_->beta_);
+    }
+  }
+  for (auto &[site, staged] : staged_timelines_) {
+    if (!owner_->timelines_.contains(site) && !staged.empty()) {
+      total += staged.pair_integral(owner_->beta_);
+    }
+  }
+  return total;
+}
+
 OccupancyIndex::OccupancyIndex(const Model &model)
     : layout_(model.linear_size, model.dimension), beta_(model.beta) {
   model.validate();
@@ -257,7 +277,7 @@ OccupancyIndex::begin_replacement(const std::span<const PathReplacementView> rep
     added += integrate_path_occupancy(staged, replacement.new_path);
     adjust_path(staged, replacement.new_path, 1);
   }
-  return ReplacementTransaction(*this, current_overlap - removed + added, std::move(staged));
+  return {*this, current_overlap - removed + added, std::move(staged)};
 }
 
 bool OccupancyIndex::same_occupancies(const TimelineMap &left, const TimelineMap &right) noexcept {
