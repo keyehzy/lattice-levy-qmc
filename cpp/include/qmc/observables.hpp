@@ -4,6 +4,7 @@
 #include "qmc/configuration.hpp"
 #include "qmc/free_boson.hpp"
 #include "qmc/model.hpp"
+#include "qmc/torus_layout.hpp"
 
 #include <complex>
 #include <cstddef>
@@ -105,12 +106,48 @@ struct EqualTimeObservables {
 [[nodiscard]] EqualTimeObservables
 equal_time_observables(const IdealBosonConfiguration &configuration);
 
-struct ImaginaryTimeDensityCorrelations {
-  std::size_t time_points = 0;
-  std::size_t spatial_points = 0;
-  // Connected C_nn(delta, tau_j), indexed by j*spatial_points + flat(delta). The estimator
-  // averages all retained time origins and uses periodic time differences on the M-point grid.
-  std::vector<double> connected_density;
+// Immutable provenance for an exact retained-time grid on one torus. beta may
+// be zero, but transforms that divide by beta reject that boundary value.
+class RetainedGrid {
+public:
+  // Throws invalid_argument unless beta is finite/nonnegative and time_points is positive.
+  RetainedGrid(double beta, TorusLayout layout, std::size_t time_points);
+
+  [[nodiscard]] double beta() const noexcept { return beta_; }
+  [[nodiscard]] const TorusLayout &layout() const noexcept { return layout_; }
+  [[nodiscard]] std::size_t time_points() const noexcept { return time_points_; }
+
+  bool operator==(const RetainedGrid &) const = default;
+
+private:
+  double beta_;
+  TorusLayout layout_;
+  std::size_t time_points_;
+};
+
+// Shape-safe connected C_nn(delta, tau_j). The estimator averages all retained
+// time origins and uses periodic imaginary-time differences. Flat storage uses
+// time-major ordering followed by the grid layout's flat displacement.
+class ImaginaryTimeDensityCorrelations {
+public:
+  // Requires exactly grid.time_points()*grid.layout().volume() values. Throws
+  // overflow_error when that extent is not representable and invalid_argument
+  // when storage has the wrong size.
+  ImaginaryTimeDensityCorrelations(RetainedGrid grid, std::vector<double> connected_density);
+
+  [[nodiscard]] const RetainedGrid &grid() const noexcept { return grid_; }
+  [[nodiscard]] std::size_t time_points() const noexcept { return grid_.time_points(); }
+  [[nodiscard]] std::size_t spatial_points() const noexcept { return grid_.layout().volume(); }
+  [[nodiscard]] std::span<const double> connected_density() const noexcept {
+    return connected_density_;
+  }
+  [[nodiscard]] double at(std::size_t time_index, SiteId displacement) const;
+
+  bool operator==(const ImaginaryTimeDensityCorrelations &) const = default;
+
+private:
+  RetainedGrid grid_;
+  std::vector<double> connected_density_;
 };
 
 [[nodiscard]] ImaginaryTimeDensityCorrelations
@@ -124,9 +161,9 @@ struct MatsubaraDensityCorrelations {
   std::vector<std::complex<double>> values;
 };
 
+// Uses the input's retained-grid beta and torus layout. Requires beta > 0.
 [[nodiscard]] MatsubaraDensityCorrelations
-retained_grid_matsubara_transform(const Model &model,
-                                  const ImaginaryTimeDensityCorrelations &correlations);
+retained_grid_matsubara_transform(const ImaginaryTimeDensityCorrelations &correlations);
 
 struct RetainedGeometryObservables {
   std::size_t time_points = 0;

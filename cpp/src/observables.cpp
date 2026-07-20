@@ -93,11 +93,11 @@ double mode_energy(const std::vector<std::size_t> &indices, const Model &model) 
 }
 
 double phase_for_indices(std::span<const std::size_t> left, std::span<const std::size_t> right,
-                         const Model &model) {
+                         const TorusLayout &layout) {
   double phase = 0.0;
-  for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+  for (std::size_t axis = 0; axis < layout.dimension(); ++axis) {
     phase += 2.0 * std::numbers::pi * static_cast<double>(left[axis]) *
-             static_cast<double>(right[axis]) / static_cast<double>(model.linear_size);
+             static_cast<double>(right[axis]) / static_cast<double>(layout.linear_size());
   }
   return phase;
 }
@@ -174,7 +174,7 @@ void accumulate_structure_factor(const std::span<const SiteId> positions, const 
     std::complex<double> density_mode{0.0, 0.0};
     for (const SiteId site : positions) {
       layout.decode_into(site, site_components);
-      const double phase = phase_for_indices(momentum_components, site_components, model);
+      const double phase = phase_for_indices(momentum_components, site_components, layout);
       density_mode += std::polar(1.0, -phase);
     }
     structure_factor[momentum] +=
@@ -541,6 +541,34 @@ double twist_free_energy_curvature(const Model &model, const std::size_t axis) {
   return twist_free_energy_curvature(CanonicalEnsemble(model), axis);
 }
 
+RetainedGrid::RetainedGrid(const double beta, TorusLayout layout, const std::size_t time_points)
+    : beta_(beta), layout_(std::move(layout)), time_points_(time_points) {
+  if (!std::isfinite(beta_) || beta_ < 0.0) {
+    throw std::invalid_argument("retained-grid beta must be finite and nonnegative");
+  }
+  if (time_points_ == 0) {
+    throw std::invalid_argument("retained-grid time point count must be positive");
+  }
+}
+
+ImaginaryTimeDensityCorrelations::ImaginaryTimeDensityCorrelations(
+    RetainedGrid grid, std::vector<double> connected_density)
+    : grid_(std::move(grid)), connected_density_(std::move(connected_density)) {
+  const auto expected_size = detail::checked_product(time_points(), spatial_points(),
+                                                     "density-correlation grid exceeds size_t");
+  if (connected_density_.size() != expected_size) {
+    throw std::invalid_argument("density-correlation storage does not match its retained grid");
+  }
+}
+
+double ImaginaryTimeDensityCorrelations::at(const std::size_t time_index,
+                                            const SiteId displacement) const {
+  if (time_index >= time_points() || displacement.value() >= spatial_points()) {
+    throw std::out_of_range("density-correlation index is outside the retained grid");
+  }
+  return connected_density_[(time_index * spatial_points()) + displacement.value()];
+}
+
 EqualTimeObservables equal_time_observables(const IdealBosonConfiguration &configuration) {
   const Model &model = configuration.model();
   const TorusLayout layout(model.linear_size, model.dimension);
@@ -607,11 +635,7 @@ retained_density_correlations(const IdealBosonConfiguration &configuration) {
   const auto grid_size =
       detail::checked_product(time_points, volume, "density-correlation grid exceeds size_t");
   const auto positions = retained_positions(configuration, layout);
-  ImaginaryTimeDensityCorrelations result{
-      .time_points = time_points,
-      .spatial_points = volume,
-      .connected_density = std::vector<double>(grid_size),
-  };
+  std::vector<double> connected_density(grid_size);
 
   for (std::size_t lag = 0; lag < time_points; ++lag) {
     for (std::size_t origin_time = 0; origin_time < time_points; ++origin_time) {
@@ -619,7 +643,7 @@ retained_density_correlations(const IdealBosonConfiguration &configuration) {
       for (const SiteId origin : positions[origin_time]) {
         for (const SiteId target : positions[target_time]) {
           const auto displacement = layout.flat_displacement(origin, target);
-          ++result.connected_density[(lag * volume) + displacement.value()];
+          ++connected_density[(lag * volume) + displacement.value()];
         }
       }
     }
@@ -627,31 +651,23 @@ retained_density_correlations(const IdealBosonConfiguration &configuration) {
 
   const double normalization = static_cast<double>(time_points) * static_cast<double>(volume);
   const double density = static_cast<double>(model.particle_count) / static_cast<double>(volume);
-  for (double &correlation : result.connected_density) {
+  for (double &correlation : connected_density) {
     correlation = (correlation / normalization) - (density * density);
   }
-  return result;
+  return {RetainedGrid(model.beta, layout, time_points), std::move(connected_density)};
 }
 
 MatsubaraDensityCorrelations
-retained_grid_matsubara_transform(const Model &model,
-                                  const ImaginaryTimeDensityCorrelations &correlations) {
-  model.validate();
-  if (model.beta <= 0.0) {
+retained_grid_matsubara_transform(const ImaginaryTimeDensityCorrelations &correlations) {
+  const RetainedGrid &grid = correlations.grid();
+  if (grid.beta() <= 0.0) {
     throw std::invalid_argument("Matsubara transform requires beta > 0");
   }
-  const TorusLayout layout(model.linear_size, model.dimension);
+  const TorusLayout &layout = grid.layout();
   const auto volume = layout.volume();
-  if (correlations.time_points == 0 || correlations.spatial_points != volume) {
-    throw std::invalid_argument("density-correlation grid does not match the model");
-  }
-
-  const auto time_points = correlations.time_points;
-  const auto grid_size =
-      detail::checked_product(time_points, volume, "density-correlation grid exceeds size_t");
-  if (correlations.connected_density.size() != grid_size) {
-    throw std::invalid_argument("density-correlation grid does not match the model");
-  }
+  const auto time_points = grid.time_points();
+  const auto connected_density = correlations.connected_density();
+  const auto grid_size = connected_density.size();
   std::vector<std::complex<double>> spatial_transform(grid_size);
   std::vector<std::size_t> displacement_components(layout.dimension());
   for (std::size_t time = 0; time < time_points; ++time) {
@@ -660,9 +676,9 @@ retained_grid_matsubara_transform(const Model &model,
       std::complex<double> value{0.0, 0.0};
       for (std::size_t displacement = 0; displacement < volume; ++displacement) {
         layout.decode_into(SiteId(displacement), displacement_components);
-        const double phase = phase_for_indices(momentum_components, displacement_components, model);
-        value += correlations.connected_density[(time * volume) + displacement] *
-                 std::polar(1.0, -phase);
+        const double phase =
+            phase_for_indices(momentum_components, displacement_components, layout);
+        value += connected_density[(time * volume) + displacement] * std::polar(1.0, -phase);
       }
       spatial_transform[(time * volume) + momentum] = value;
     }
@@ -673,10 +689,10 @@ retained_grid_matsubara_transform(const Model &model,
       .momentum_points = volume,
       .values = std::vector<std::complex<double>>(grid_size),
   };
-  const double time_step = model.beta / static_cast<double>(time_points);
+  const double time_step = grid.beta() / static_cast<double>(time_points);
   for (std::size_t frequency = 0; frequency < time_points; ++frequency) {
     result.frequencies[frequency] =
-        2.0 * std::numbers::pi * static_cast<double>(frequency) / model.beta;
+        2.0 * std::numbers::pi * static_cast<double>(frequency) / grid.beta();
     for (std::size_t momentum = 0; momentum < volume; ++momentum) {
       std::complex<double> value{0.0, 0.0};
       for (std::size_t time = 0; time < time_points; ++time) {

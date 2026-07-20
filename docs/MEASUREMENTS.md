@@ -93,6 +93,12 @@ at every grid point are exact; replacing the continuous time integral with
 the displayed sum is a measurement-grid approximation, not a Trotter
 approximation to the path distribution.
 
+The correlation result owns its inverse temperature, retained point count, and
+torus layout as immutable grid provenance. The Matsubara transform consumes
+that provenance directly rather than accepting a separately supplied model;
+same-volume lattices with different dimensions and data with a different
+inverse temperature therefore cannot be paired accidentally.
+
 `retained_geometry_observables` additionally returns the same-label
 covering-space mean-square displacement, torus return probability, and full
 torus displacement distribution at each retained time. `retained_cycle_geometry`

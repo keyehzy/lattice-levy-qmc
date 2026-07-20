@@ -16,6 +16,7 @@
 #include <map>
 #include <numeric>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -100,7 +101,7 @@ std::ofstream output_file(const std::filesystem::path &path) {
   return output;
 }
 
-void add_values(std::vector<double> &destination, const std::vector<double> &source) {
+void add_values(std::vector<double> &destination, const std::span<const double> source) {
   if (destination.size() != source.size()) {
     throw std::logic_error("observable accumulator shape mismatch");
   }
@@ -310,7 +311,7 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
     averages.mean_factorial_occupation += equal_time.mean_factorial_occupation;
 
     const auto imaginary_time = qmc::retained_density_correlations(configuration);
-    add_values(averages.connected_density, imaginary_time.connected_density);
+    add_values(averages.connected_density, imaginary_time.connected_density());
     const auto retained_geometry = qmc::retained_geometry_observables(configuration);
     add_values(averages.mean_square_displacement, retained_geometry.mean_square_displacement);
     add_values(averages.return_probability, retained_geometry.return_probability);
@@ -813,15 +814,15 @@ int main(const int argc, char **argv) {
 
     qmc::Random random(command_line->seed);
     const auto sampled = sample_ensemble(*command_line, canonical, random);
-    const qmc::ImaginaryTimeDensityCorrelations averaged_correlations{
-        .time_points = command_line->time_links,
-        .spatial_points = command_line->model.volume(),
-        .connected_density = sampled.connected_density,
-    };
+    const qmc::ImaginaryTimeDensityCorrelations averaged_correlations(
+        qmc::RetainedGrid(
+            command_line->model.beta,
+            qmc::TorusLayout(command_line->model.linear_size, command_line->model.dimension),
+            command_line->time_links),
+        sampled.connected_density);
     std::optional<qmc::MatsubaraDensityCorrelations> matsubara;
     if (command_line->model.beta > 0.0) {
-      matsubara =
-          qmc::retained_grid_matsubara_transform(command_line->model, averaged_correlations);
+      matsubara = qmc::retained_grid_matsubara_transform(averaged_correlations);
     }
 
     write_thermodynamics(directory, command_line->model, thermodynamics);

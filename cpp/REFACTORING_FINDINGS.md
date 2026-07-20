@@ -67,7 +67,7 @@ type collects one invariant that is currently spread across several files.
 | Priority | Finding | Primary payoff | Estimated size |
 | --- | --- | --- | --- |
 | P0 | Make occupancy replacement transactional (done 2026-07-19) | Correctness and simpler move code | Medium |
-| P0/P1 | Checked flat extents and `TorusLayout`/`SiteId` (done 2026-07-19); add grid provenance | Memory safety, shared geometry, and fewer allocations | Medium |
+| P0/P1 | Checked flat extents and `TorusLayout`/`SiteId` (done 2026-07-19); retained-grid provenance (done 2026-07-20) | Memory safety, shared geometry, and fewer allocations | Medium |
 | P0 | Bind model and canonical table (done 2026-07-19); add reusable free numerics | Correctness and large repeated-work reduction | Medium |
 | P0 | Make paths/configurations valid-by-construction (`ContinuousPath` and retained ideal configuration done 2026-07-20) | Ownership clarity and removal of nested validation | Large |
 | P1 | Path cursor/slice migration (done 2026-07-20) | Simpler boundary semantics and faster path surgery | Medium |
@@ -300,7 +300,8 @@ make invalid intermediate states unrepresentable inside the library.
 
 ### 4. P0/P1: check flat extents, then centralize geometry in `TorusLayout`
 
-Status (2026-07-19): the checked-flat-extent and geometry slices are complete.
+Status (2026-07-20): the checked-flat-extent, geometry, and retained-grid
+provenance slices are complete.
 Density, Matsubara, and retained-geometry buffers derive their sizes with
 checked products. `TorusLayout` now owns checked volume/strides, strict and
 covering-space encoding, decoding, flat displacement, coordinate shifts, and
@@ -310,7 +311,12 @@ retained measurements, stitch buckets, and demo indexing use its strong
 physical sites. Round-trip, displacement, shift, neighborhood uniqueness,
 overflow, and equal-volume/different-layout tests cover the shared geometry;
 the existing action/cache and stitch tests cover its migrated consumers. A
-shape-aware lattice field and retained-grid provenance remain open.
+valid-by-construction `ImaginaryTimeDensityCorrelations` now owns its checked
+flat storage together with an immutable `RetainedGrid` containing beta, retained
+point count, and `TorusLayout`. The Matsubara transform consumes that provenance
+directly instead of accepting an unrelated `Model`; exact equal-volume 1D/2D
+transform and stored-beta regressions cover the mismatch boundary. A general
+shape-aware lattice-field abstraction remains a possible measurement follow-up.
 
 Evidence:
 
@@ -981,7 +987,8 @@ visible at the assertion sites.
    provenance, and routed the ideal demo and both samplers through it while
    retaining model-only convenience wrappers.
 3. `TorusLayout`/`SiteId` and checked-flat-shape portions completed 2026-07-19;
-   shared validation-helper cleanup and lattice-field/grid provenance remain.
+   retained-grid provenance completed 2026-07-20. Shared validation-helper
+   cleanup and a general lattice-field abstraction remain.
 4. Completed 2026-07-20: `PathCursor`/`PathSlice` migration for split,
    resample, stitch, and time-origin rotation, with exact traversal and boundary
    equivalence tests.

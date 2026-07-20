@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Make retained density-correlation results valid by construction and bind
+  their inverse temperature, time grid, and torus layout directly to the data;
+  Matsubara transforms no longer accept a separately supplied model.
 - Make `ContinuousPath` a valid-by-construction value with private storage,
   read-only endpoint/event views, and structural equality; malformed paths are
   now rejected at construction instead of remaining mutable public records.

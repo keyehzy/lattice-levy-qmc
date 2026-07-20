@@ -189,7 +189,7 @@ TEST(ConfigurationObservablesTest, ExactSampleInvariantsHoldOnRetainedGrid) {
   const auto winding = qmc::total_winding(configuration);
   const auto equal_time = qmc::equal_time_observables(configuration);
   const auto imaginary_time = qmc::retained_density_correlations(configuration);
-  const auto matsubara = qmc::retained_grid_matsubara_transform(model, imaginary_time);
+  const auto matsubara = qmc::retained_grid_matsubara_transform(imaginary_time);
   const auto retained_geometry = qmc::retained_geometry_observables(configuration);
   const auto cycle_geometry = qmc::retained_cycle_geometry(configuration);
 
@@ -222,19 +222,22 @@ TEST(ConfigurationObservablesTest, ExactSampleInvariantsHoldOnRetainedGrid) {
                   static_cast<double>(model.particle_count),
               2e-12);
 
-  ASSERT_EQ(imaginary_time.time_points, configuration.time_links_per_beta());
-  ASSERT_EQ(imaginary_time.spatial_points, model.volume());
+  ASSERT_EQ(imaginary_time.time_points(), configuration.time_links_per_beta());
+  ASSERT_EQ(imaginary_time.spatial_points(), model.volume());
+  EXPECT_DOUBLE_EQ(imaginary_time.grid().beta(), model.beta);
+  EXPECT_EQ(imaginary_time.grid().layout(), qmc::TorusLayout(model.linear_size, model.dimension));
   const double density =
       static_cast<double>(model.particle_count) / static_cast<double>(model.volume());
   for (std::size_t displacement = 0; displacement < model.volume(); ++displacement) {
     const double expected =
         (density * density * (equal_time.pair_correlation[displacement] - 1.0)) +
         (displacement == 0 ? density : 0.0);
-    EXPECT_NEAR(imaginary_time.connected_density[displacement], expected, 2e-13);
+    EXPECT_NEAR(imaginary_time.at(0, qmc::SiteId(displacement)), expected, 2e-13);
   }
-  for (std::size_t lag = 0; lag < imaginary_time.time_points; ++lag) {
-    const auto begin = imaginary_time.connected_density.begin() +
-                       static_cast<std::ptrdiff_t>(lag * model.volume());
+  const auto connected_density = imaginary_time.connected_density();
+  for (std::size_t lag = 0; lag < imaginary_time.time_points(); ++lag) {
+    const auto begin =
+        connected_density.begin() + static_cast<std::ptrdiff_t>(lag * model.volume());
     EXPECT_NEAR(std::accumulate(begin, begin + static_cast<std::ptrdiff_t>(model.volume()), 0.0),
                 0.0, 2e-13);
   }
@@ -264,21 +267,51 @@ TEST(ConfigurationObservablesTest, ExactSampleInvariantsHoldOnRetainedGrid) {
 }
 
 TEST(ConfigurationObservablesTest, RejectsWrappedMatsubaraGridExtent) {
-  const qmc::Model model{
-      .particle_count = 0,
-      .beta = 1.0,
-      .linear_size = 2,
-      .dimension = 1,
-      .hopping = 0.0,
-  };
-  const qmc::ImaginaryTimeDensityCorrelations correlations{
-      .time_points = (std::numeric_limits<std::size_t>::max() / model.volume()) + 1,
-      .spatial_points = model.volume(),
-      .connected_density = {},
-  };
+  const qmc::TorusLayout layout(2, 1);
+  const auto overflowing_time_points =
+      (std::numeric_limits<std::size_t>::max() / layout.volume()) + 1;
 
-  EXPECT_THROW(static_cast<void>(qmc::retained_grid_matsubara_transform(model, correlations)),
+  EXPECT_THROW(static_cast<void>(qmc::ImaginaryTimeDensityCorrelations(
+                   qmc::RetainedGrid(1.0, layout, overflowing_time_points), {})),
                std::overflow_error);
+}
+
+TEST(ConfigurationObservablesTest, MatsubaraTransformUsesRetainedGridProvenance) {
+  const std::vector<double> connected_density{0.0, 1.0, 2.0, 4.0};
+  const qmc::ImaginaryTimeDensityCorrelations line(
+      qmc::RetainedGrid(1.0, qmc::TorusLayout(4, 1), 1), connected_density);
+  const qmc::ImaginaryTimeDensityCorrelations square(
+      qmc::RetainedGrid(1.0, qmc::TorusLayout(2, 2), 1), connected_density);
+
+  const auto line_transform = qmc::retained_grid_matsubara_transform(line);
+  const auto square_transform = qmc::retained_grid_matsubara_transform(square);
+
+  EXPECT_NEAR(line_transform.values[1].real(), -2.0, 1e-14);
+  EXPECT_NEAR(line_transform.values[1].imag(), 3.0, 1e-14);
+  EXPECT_NEAR(square_transform.values[1].real(), -3.0, 1e-14);
+  EXPECT_NEAR(square_transform.values[1].imag(), 0.0, 1e-14);
+}
+
+TEST(ConfigurationObservablesTest, DensityCorrelationStorageIsValidByConstruction) {
+  const qmc::TorusLayout layout(3, 1);
+  EXPECT_THROW(static_cast<void>(qmc::RetainedGrid(-1.0, layout, 2)), std::invalid_argument);
+  EXPECT_THROW(
+      static_cast<void>(qmc::RetainedGrid(std::numeric_limits<double>::quiet_NaN(), layout, 2)),
+      std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(qmc::RetainedGrid(1.0, layout, 0)), std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(qmc::ImaginaryTimeDensityCorrelations(
+                   qmc::RetainedGrid(1.0, layout, 2), std::vector<double>(5))),
+               std::invalid_argument);
+
+  std::vector<double> connected_density(6);
+  connected_density.front() = 1.0;
+  const qmc::ImaginaryTimeDensityCorrelations correlations(qmc::RetainedGrid(2.0, layout, 2),
+                                                           connected_density);
+  EXPECT_THROW(static_cast<void>(correlations.at(2, qmc::SiteId(0))), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(correlations.at(0, qmc::SiteId(3))), std::out_of_range);
+  const auto transformed = qmc::retained_grid_matsubara_transform(correlations);
+  EXPECT_NEAR(transformed.frequencies[1], std::numbers::pi, 1e-14);
+  EXPECT_NEAR(transformed.values[0].real(), 1.0, 1e-14);
 }
 
 TEST(CanonicalObservablesTest, HandlesEmptySystemAndRejectsUndefinedTemperatureQuantities) {
