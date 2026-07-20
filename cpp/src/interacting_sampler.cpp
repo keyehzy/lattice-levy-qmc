@@ -498,7 +498,7 @@ bool InteractingSampler::try_path_replacements(std::vector<LabeledPath> replacem
   return try_proposal(
       LocalProposal{
           .replacements = std::move(replacements),
-          .permutation = std::nullopt,
+          .successors = std::nullopt,
           .successor_changes = 0,
       },
       move_statistics);
@@ -527,9 +527,9 @@ bool InteractingSampler::try_proposal(LocalProposal proposal, MoveStatistics &mo
 
   auto occupancy_transaction =
       occupancy_index_->begin_replacement(replacement_views, pair_overlap_);
-  std::vector<Cycle> proposed_cycles;
-  if (proposal.permutation.has_value()) {
-    proposed_cycles = cycles_from_permutation(*proposal.permutation);
+  std::optional<Permutation> proposed_topology;
+  if (proposal.successors.has_value()) {
+    proposed_topology.emplace(std::move(*proposal.successors));
   } else if (proposal.successor_changes != 0) {
     throw std::logic_error("path-only proposal reports topology changes");
   }
@@ -548,14 +548,12 @@ bool InteractingSampler::try_proposal(LocalProposal proposal, MoveStatistics &mo
   }
 
   static_assert(std::is_nothrow_swappable_v<ContinuousPath>);
-  static_assert(std::is_nothrow_move_assignable_v<std::vector<ParticleId>>);
-  static_assert(std::is_nothrow_move_assignable_v<std::vector<Cycle>>);
+  static_assert(std::is_nothrow_move_assignable_v<Permutation>);
   for (LabeledPath &replacement : proposal.replacements) {
     std::swap(state_.worldlines[replacement.first], replacement.second);
   }
-  if (proposal.permutation.has_value()) {
-    state_.permutation = std::move(*proposal.permutation);
-    state_.cycles = std::move(proposed_cycles);
+  if (proposed_topology.has_value()) {
+    state_.replace_topology(std::move(*proposed_topology));
   }
   occupancy_transaction.commit();
   pair_overlap_ = new_overlap;
@@ -613,17 +611,18 @@ bool InteractingSampler::whole_worldline_update(const std::optional<ParticleId> 
 }
 
 bool InteractingSampler::cycle_update(const std::optional<std::size_t> cycle_index) {
-  if (state_.cycles.empty()) {
+  const std::span<const Cycle> cycles = state_.topology().cycles();
+  if (cycles.empty()) {
     return true;
   }
   const std::size_t selected = cycle_index.has_value()
                                    ? *cycle_index
                                    : static_cast<std::size_t>(random_.uniform_index(
-                                         static_cast<std::uint64_t>(state_.cycles.size())));
-  if (selected >= state_.cycles.size()) {
+                                         static_cast<std::uint64_t>(cycles.size())));
+  if (selected >= cycles.size()) {
     throw std::invalid_argument("cycle index is out of range");
   }
-  const Cycle &cycle = state_.cycles[selected];
+  const Cycle &cycle = cycles[selected];
   auto proposed_paths = detail::sample_paths_for_cycle(cycle, model_.free, random_, numerical_);
   std::vector<LabeledPath> replacements;
   replacements.reserve(cycle.size());
@@ -682,14 +681,15 @@ InteractingSampler::sample_stitch_proposal(const std::span<const ParticleId> str
                                                             bridge, model_.free.linear_size));
   }
 
-  proposal.permutation = state_.permutation;
+  const std::span<const ParticleId> current_successors = state_.topology().successors();
+  proposal.successors.assign(current_successors.begin(), current_successors.end());
   std::vector<ParticleId> old_successors;
   old_successors.reserve(strand_count);
   for (const ParticleId label : strands) {
-    old_successors.push_back(state_.permutation[label]);
+    old_successors.push_back(state_.topology().successor(label));
   }
   for (std::size_t row = 0; row < strand_count; ++row) {
-    proposal.permutation[strands[row]] = old_successors[matching[row]];
+    proposal.successors[strands[row]] = old_successors[matching[row]];
     if (matching[row] != row) {
       ++proposal.successor_changes;
     }
@@ -705,7 +705,7 @@ bool InteractingSampler::try_stitch_strands(const std::span<const ParticleId> st
   return try_proposal(
       LocalProposal{
           .replacements = std::move(proposal.replacements),
-          .permutation = std::move(proposal.permutation),
+          .successors = std::move(proposal.successors),
           .successor_changes = proposal.successor_changes,
       },
       move_statistics);

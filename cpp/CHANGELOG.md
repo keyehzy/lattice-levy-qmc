@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lattice volume, encoding, displacement, shifts, and neighborhood traversal.
 - Add an immutable `CanonicalEnsemble` that binds a validated free model to its
   canonical recursion and supports explicit particle-number prefix reuse.
+- Add a validated `Permutation` value with authoritative successor storage and
+  a deterministic read-only cycle decomposition.
 - Add generated compile-time version metadata in `<qmc/version.hpp>`, sourced
   from the CMake project version.
 - Document the C++ refactoring audit, including correctness, performance,
@@ -23,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Make `ContinuousPath` a valid-by-construction value with private storage,
   read-only endpoint/event views, and structural equality; malformed paths are
   now rejected at construction instead of remaining mutable public records.
+- Store continuous-configuration topology as one `Permutation`; cycle views are
+  now derived by that owner and stitch acceptance publishes topology with one
+  non-throwing move instead of synchronizing two public vectors.
 - Use the shared torus layout for retained observables, full and incremental
   interaction occupancy, stitch locality buckets, and example flat indexing.
 - Route reusable ideal sampling and exact observables through

@@ -37,7 +37,7 @@ struct InteractingSamplerTestAccess {
     return sampler.try_proposal(
         InteractingSampler::LocalProposal{
             .replacements = std::move(replacements),
-            .permutation = std::move(invalid_permutation),
+            .successors = std::move(invalid_permutation),
             .successor_changes = 1,
         },
         sampler.statistics_[static_cast<std::size_t>(MoveKind::StitchMove)]);
@@ -58,8 +58,8 @@ InteractingModel sampler_model(const double interaction) {
 bool equal_path(const ContinuousPath &left, const ContinuousPath &right) { return left == right; }
 
 bool equal_state(const ContinuousConfiguration &left, const ContinuousConfiguration &right) {
-  if (left.cycles != right.cycles || left.permutation != right.permutation ||
-      left.worldlines.size() != right.worldlines.size() || left.log_Z0_N != right.log_Z0_N) {
+  if (left.topology() != right.topology() || left.worldlines.size() != right.worldlines.size() ||
+      left.log_Z0_N != right.log_Z0_N) {
     return false;
   }
   for (std::size_t index = 0; index < left.worldlines.size(); ++index) {

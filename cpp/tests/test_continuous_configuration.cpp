@@ -5,6 +5,8 @@
 #include <cstddef>
 #include <gtest/gtest.h>
 #include <numeric>
+#include <stdexcept>
+#include <vector>
 
 namespace qmc {
 namespace {
@@ -15,8 +17,8 @@ bool paths_are_equal(const ContinuousPath &left, const ContinuousPath &right) {
 
 bool configurations_are_equal(const ContinuousConfiguration &left,
                               const ContinuousConfiguration &right) {
-  if (left.cycles != right.cycles || left.permutation != right.permutation ||
-      left.worldlines.size() != right.worldlines.size() || left.log_Z0_N != right.log_Z0_N) {
+  if (left.topology() != right.topology() || left.worldlines.size() != right.worldlines.size() ||
+      left.log_Z0_N != right.log_Z0_N) {
     return false;
   }
   for (std::size_t index = 0; index < left.worldlines.size(); ++index) {
@@ -34,7 +36,8 @@ reference_rotate_configuration_time_origin(const ContinuousConfiguration &state,
   paths.reserve(state.worldlines.size());
   for (std::size_t particle = 0; particle < state.worldlines.size(); ++particle) {
     const ContinuousPath &path = state.worldlines[particle];
-    const ContinuousPath &successor = state.worldlines[state.permutation[particle]];
+    const ContinuousPath &successor =
+        state.worldlines[state.topology().successor(static_cast<ParticleId>(particle))];
     const auto path_cut = std::ranges::lower_bound(path.events(), shift, {}, &JumpEvent::time);
     const auto successor_cut =
         std::ranges::lower_bound(successor.events(), shift, {}, &JumpEvent::time);
@@ -69,12 +72,25 @@ reference_rotate_configuration_time_origin(const ContinuousConfiguration &state,
     }
     paths.emplace_back(model.beta, std::move(start), std::move(end), std::move(events));
   }
-  return ContinuousConfiguration{
-      .cycles = state.cycles,
-      .permutation = state.permutation,
-      .worldlines = std::move(paths),
-      .log_Z0_N = state.log_Z0_N,
-  };
+  return ContinuousConfiguration(state.topology(), std::move(paths), state.log_Z0_N);
+}
+
+TEST(PermutationTest, ValidatesSuccessorsAndCachesDeterministicCycles) {
+  const Permutation topology({2, 0, 1, 4, 3});
+  EXPECT_EQ(topology.size(), 5U);
+  EXPECT_EQ(topology.successor(0), 2U);
+  EXPECT_EQ(topology.successor(4), 3U);
+  EXPECT_TRUE(std::ranges::equal(topology.successors(), std::vector<ParticleId>{2, 0, 1, 4, 3}));
+  ASSERT_EQ(topology.cycles().size(), 2U);
+  EXPECT_EQ(topology.cycles()[0], (Cycle{0, 2, 1}));
+  EXPECT_EQ(topology.cycles()[1], (Cycle{3, 4}));
+}
+
+TEST(PermutationTest, RejectsMalformedSuccessorsAtConstruction) {
+  EXPECT_THROW(static_cast<void>(Permutation({0, 0})), std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(Permutation({1})), std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(Permutation({1, 2, 3})), std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(Permutation({0}).successor(1)), std::out_of_range);
 }
 
 TEST(ContinuousConfigurationTest, SamplesConsistentCanonicalState) {
@@ -88,7 +104,7 @@ TEST(ContinuousConfigurationTest, SamplesConsistentCanonicalState) {
   Random random(11);
   const auto state = sample_ideal_continuous_configuration(model, random);
   EXPECT_NO_THROW(state.validate(model));
-  EXPECT_EQ(state.permutation.size(), 8U);
+  EXPECT_EQ(state.topology().size(), 8U);
   EXPECT_EQ(state.worldlines.size(), 8U);
   const auto lengths = state.cycle_lengths();
   EXPECT_EQ(std::accumulate(lengths.begin(), lengths.end(), std::size_t{0}), 8U);
@@ -114,7 +130,7 @@ TEST(ContinuousConfigurationTest, SupportsEmptyCanonicalState) {
   Random random(3);
   const auto state = sample_ideal_continuous_configuration(model, random);
   EXPECT_NO_THROW(state.validate(model));
-  EXPECT_TRUE(state.cycles.empty());
+  EXPECT_TRUE(state.topology().cycles().empty());
   EXPECT_TRUE(state.worldlines.empty());
   EXPECT_EQ(state.event_count(), 0U);
   EXPECT_EQ(state.total_winding(model), Site({0, 0}));
@@ -138,7 +154,7 @@ TEST(ContinuousConfigurationTest, ReusableEnsembleMatchesOneOffWrapperForTheSame
   EXPECT_TRUE(configurations_are_equal(one_off, retained));
 }
 
-TEST(ContinuousConfigurationTest, ValidationDetectsTopologyAndEndpointCorruption) {
+TEST(ContinuousConfigurationTest, ValidationDetectsTopologySizeAndEndpointCorruption) {
   const Model model{
       .particle_count = 4,
       .beta = 1.0,
@@ -148,8 +164,8 @@ TEST(ContinuousConfigurationTest, ValidationDetectsTopologyAndEndpointCorruption
   };
   Random random(8);
   auto state = sample_ideal_continuous_configuration(model, random);
-  state.permutation[0] = state.permutation[1];
-  EXPECT_THROW(state.validate(model), std::logic_error);
+  const ContinuousConfiguration wrong_topology(Permutation({0}), state.worldlines, state.log_Z0_N);
+  EXPECT_THROW(wrong_topology.validate(model), std::logic_error);
 
   state = sample_ideal_continuous_configuration(model, random);
   const ContinuousPath &path = state.worldlines[0];
@@ -207,12 +223,7 @@ TEST(ContinuousConfigurationTest, TimeOriginRotationRetainsJumpAtNewSeam) {
   const ContinuousPath path(
       1.0, {0}, {0},
       {{.time = 0.25, .axis = 0, .direction = 1}, {.time = 0.75, .axis = 0, .direction = -1}});
-  const ContinuousConfiguration state{
-      .cycles = {{0}},
-      .permutation = {0},
-      .worldlines = {path},
-      .log_Z0_N = 0.0,
-  };
+  const ContinuousConfiguration state(Permutation({0}), {path}, 0.0);
   state.validate(model);
   const auto rotated = rotate_configuration_time_origin(state, model, 0.25);
   rotated.validate(model);
@@ -245,12 +256,7 @@ TEST(ContinuousConfigurationTest, CursorRotationMatchesCoincidentSeamTraversalEx
                                {.time = 0.75, .axis = 0, .direction = 1},
                                {.time = 1.0, .axis = 0, .direction = -1},
                                {.time = 1.0, .axis = 0, .direction = -1}});
-  const ContinuousConfiguration state{
-      .cycles = {{0, 1}},
-      .permutation = {1, 0},
-      .worldlines = {first, second},
-      .log_Z0_N = 0.0,
-  };
+  const ContinuousConfiguration state(Permutation({1, 0}), {first, second}, 0.0);
   state.validate(model);
 
   const ContinuousConfiguration expected =
@@ -274,14 +280,12 @@ TEST(ContinuousConfigurationTest, CursorRotationPreservesAllowedDurationDriftSem
   };
   const double one_ulp_below_beta = std::nextafter(model.beta, 0.0);
   const double duration = std::nextafter(one_ulp_below_beta, 0.0);
-  const ContinuousConfiguration state{
-      .cycles = {{0}},
-      .permutation = {0},
-      .worldlines = {ContinuousPath(duration, {0}, {0},
-                                    {{.time = duration, .axis = 0, .direction = 1},
-                                     {.time = duration, .axis = 0, .direction = -1}})},
-      .log_Z0_N = 0.0,
-  };
+  const ContinuousConfiguration state(
+      Permutation({0}),
+      {ContinuousPath(duration, {0}, {0},
+                      {{.time = duration, .axis = 0, .direction = 1},
+                       {.time = duration, .axis = 0, .direction = -1}})},
+      0.0);
   state.validate(model);
 
   const ContinuousConfiguration expected =

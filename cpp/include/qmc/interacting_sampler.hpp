@@ -152,13 +152,13 @@ private:
 
   struct StitchProposal {
     std::vector<LabeledPath> replacements;
-    std::vector<ParticleId> permutation;
+    std::vector<ParticleId> successors;
     std::size_t successor_changes = 0;
   };
 
   struct LocalProposal {
     std::vector<LabeledPath> replacements;
-    std::optional<std::vector<ParticleId>> permutation;
+    std::optional<std::vector<ParticleId>> successors;
     std::size_t successor_changes = 0;
   };
 

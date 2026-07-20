@@ -13,12 +13,7 @@ ContinuousPath static_path(const Coord site, const double beta = 1.0) {
 
 ContinuousConfiguration two_particle_state(const ContinuousPath &first,
                                            const ContinuousPath &second) {
-  return ContinuousConfiguration{
-      .cycles = {{0}, {1}},
-      .permutation = {0, 1},
-      .worldlines = {first, second},
-      .log_Z0_N = 0.0,
-  };
+  return ContinuousConfiguration(Permutation({0, 1}), {first, second}, 0.0);
 }
 
 TEST(InteractionTest, IntegratesPiecewisePairOverlapExactly) {
@@ -86,8 +81,7 @@ TEST(InteractionTest, HandlesEmptyAndSingleParticleStates) {
       .dimension = 1,
       .hopping = 1.0,
   };
-  const ContinuousConfiguration empty{
-      .cycles = {}, .permutation = {}, .worldlines = {}, .log_Z0_N = 0.0};
+  const ContinuousConfiguration empty(Permutation(), {}, 0.0);
   EXPECT_DOUBLE_EQ(pair_overlap_time(empty, empty_model), 0.0);
 
   const Model single_model{
@@ -97,12 +91,7 @@ TEST(InteractionTest, HandlesEmptyAndSingleParticleStates) {
       .dimension = 1,
       .hopping = 1.0,
   };
-  const ContinuousConfiguration single{
-      .cycles = {{0}},
-      .permutation = {0},
-      .worldlines = {static_path(0)},
-      .log_Z0_N = 0.0,
-  };
+  const ContinuousConfiguration single(Permutation({0}), {static_path(0)}, 0.0);
   EXPECT_DOUBLE_EQ(pair_overlap_time(single, single_model), 0.0);
 }
 

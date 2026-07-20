@@ -6,6 +6,7 @@
 #include "qmc/free_numerics.hpp"
 #include "qmc/model.hpp"
 #include "qmc/observables.hpp"
+#include "qmc/permutation.hpp"
 #include "qmc/random.hpp"
 #include "qmc/torus_layout.hpp"
 #include "qmc/version.hpp"

@@ -31,6 +31,7 @@ add_library(
   src/free_numerics.cpp
   src/model.cpp
   src/observables.cpp
+  src/permutation.cpp
   src/random.cpp
   src/torus_layout.cpp
 )

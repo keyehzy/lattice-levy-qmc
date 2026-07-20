@@ -3,6 +3,7 @@
 
 #include "qmc/free_numerics.hpp"
 #include "qmc/model.hpp"
+#include "qmc/permutation.hpp"
 #include "qmc/random.hpp"
 
 #include <cstddef>
@@ -10,8 +11,6 @@
 #include <vector>
 
 namespace qmc {
-
-using Cycle = std::vector<ParticleId>;
 
 // One validated free model and the canonical recursion derived from it. Prefix
 // queries through any particle count not exceeding model().particle_count reuse

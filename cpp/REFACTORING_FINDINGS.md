@@ -75,7 +75,7 @@ type collects one invariant that is currently spread across several files.
 | P1 | Collect reusable free-particle numerics | Numerical clarity and less repeated setup | Medium |
 | P1 | Unify discrete log-weight and bounded-tail sampling | One truncation policy and fewer allocations | Medium |
 | P1 | Unify full/incremental action around accepted state | One source of truth and faster full evaluation | Medium |
-| P1 | Make permutation topology authoritative | Remove duplicated state and synchronization code | Medium |
+| P1 | Make permutation topology authoritative (continuous done 2026-07-20) | Remove duplicated state and synchronization code | Medium |
 | P1 | Separate stitch selection, proposal, and commit | Readability, testability, and API clarity | Medium |
 | P2 | Add streaming runs, checkpoints, and prepared options | Operational quality of life | Small/medium |
 | P2 | Consolidate local helpers, names, and value equality | Less duplication and review noise | Small |
@@ -248,8 +248,9 @@ interaction sweeps, and occupancy transactions no longer revalidate complete
 path storage. The configuration `validate()` path remains an explicit diagnostic
 audit and verifies model-dimension compatibility. Construction-failure tests and
 the existing boundary, surgery, sampling, topology, action, and cache tests cover
-the migration. `Model`, dense/ideal configurations, `ContinuousConfiguration`,
-and permutation ownership remain open.
+the migration. `Model`, dense/ideal configurations, and the remaining
+`ContinuousConfiguration` storage remain open; its authoritative permutation
+topology is complete under finding 10.
 
 Pre-refactor evidence:
 
@@ -628,6 +629,18 @@ production evaluator while retaining the global sort as a reference oracle
 
 ### 10. P1: make permutation topology authoritative
 
+Status (2026-07-20): the continuous-configuration slice is complete. A validated
+`Permutation` now owns authoritative successors and a private deterministic
+cycle cache, exposing both only through read-only views. `ContinuousConfiguration`
+stores one private topology value instead of parallel public cycle and successor
+vectors. Sampling, time rotation, cycle updates, and stitch construction consume
+that value. Stitch preparation validates the complete proposed permutation while
+the occupancy replacement is staged, and acceptance publishes topology with one
+non-throwing move. Construction, deterministic decomposition, invalid-successor,
+endpoint-connectivity, accepted/rejected stitch, and transaction-failure tests
+cover the migration. The retained ideal configuration still duplicates topology
+and geometry representations and remains open.
+
 Evidence:
 
 - `ContinuousConfiguration` stores both `cycles` and `permutation`
@@ -964,8 +977,9 @@ visible at the assertion sites.
 4. Completed 2026-07-20: `PathCursor`/`PathSlice` migration for split,
    resample, stitch, and time-origin rotation, with exact traversal and boundary
    equivalence tests.
-5. `ContinuousPath` encapsulation completed 2026-07-20; encapsulate
-   `Permutation` and configurations, then move their full validation to
+5. `ContinuousPath` encapsulation and authoritative continuous `Permutation`
+   completed 2026-07-20; encapsulate the remaining configuration storage and
+   migrate retained ideal topology, then move full validation to
    construction/import/debug audits.
 6. Add retained measurement context and accumulators, then optimize direct
    correlation kernels from benchmark evidence.

@@ -152,6 +152,8 @@ ideal proposals remain available as a small-system cross-check. Interaction-
 corrected moves use only the action difference in their Metropolis ratio.
 `state()` exposes the accepted configuration read-only, while `statistics()`
 reports attempts, acceptances, stitch topology changes, and changed successors.
+The configuration's `topology()` view provides validated successors and a
+deterministic cycle decomposition from one authoritative value.
 
 See [`docs/MEASUREMENTS.md`](../docs/MEASUREMENTS.md) for estimator definitions,
 normalizations, exactness, and retained-grid conventions.
