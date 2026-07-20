@@ -38,6 +38,61 @@ bool configurations_are_equal(const ContinuousConfiguration &left,
   return true;
 }
 
+ContinuousConfiguration
+reference_rotate_configuration_time_origin(const ContinuousConfiguration &state, const Model &model,
+                                           const double shift) {
+  std::vector<ContinuousPath> paths;
+  paths.reserve(state.worldlines.size());
+  for (std::size_t particle = 0; particle < state.worldlines.size(); ++particle) {
+    const ContinuousPath &path = state.worldlines[particle];
+    const ContinuousPath &successor = state.worldlines[state.permutation[particle]];
+    const auto path_cut = std::ranges::lower_bound(path.events, shift, {}, &JumpEvent::time);
+    const auto successor_cut =
+        std::ranges::lower_bound(successor.events, shift, {}, &JumpEvent::time);
+
+    Site start = path.start;
+    for (auto event = path.events.begin(); event != path_cut; ++event) {
+      start[event->axis] += static_cast<Coord>(event->direction);
+    }
+
+    std::vector<JumpEvent> events;
+    for (auto event = path_cut; event != path.events.end(); ++event) {
+      events.push_back(JumpEvent{
+          .time = event->time - shift,
+          .axis = event->axis,
+          .direction = event->direction,
+      });
+    }
+    for (auto event = successor.events.begin(); event != successor_cut; ++event) {
+      events.push_back(JumpEvent{
+          .time = (model.beta - shift) + event->time,
+          .axis = event->axis,
+          .direction = event->direction,
+      });
+    }
+
+    Site end = successor.start;
+    for (auto event = successor.events.begin(); event != successor_cut; ++event) {
+      end[event->axis] += static_cast<Coord>(event->direction);
+    }
+    for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+      end[axis] += path.end[axis] - successor.start[axis];
+    }
+    paths.push_back(ContinuousPath{
+        .duration = model.beta,
+        .start = std::move(start),
+        .end = std::move(end),
+        .events = std::move(events),
+    });
+  }
+  return ContinuousConfiguration{
+      .cycles = state.cycles,
+      .permutation = state.permutation,
+      .worldlines = std::move(paths),
+      .log_Z0_N = state.log_Z0_N,
+  };
+}
+
 TEST(ContinuousConfigurationTest, SamplesConsistentCanonicalState) {
   const Model model{
       .particle_count = 8,
@@ -142,7 +197,9 @@ TEST(ContinuousConfigurationTest, TimeOriginRotationPreservesPhysicalInvariants)
   const auto state = sample_ideal_continuous_configuration(model, random);
   const double overlap = pair_overlap_time(state, model);
   const auto winding = state.total_winding(model);
+  const auto expected = reference_rotate_configuration_time_origin(state, model, 0.43);
   const auto rotated = rotate_configuration_time_origin(state, model, 0.43);
+  EXPECT_TRUE(configurations_are_equal(rotated, expected));
   EXPECT_NO_THROW(rotated.validate(model));
   EXPECT_EQ(rotated.event_count(), state.event_count());
   EXPECT_EQ(rotated.total_winding(model), winding);
@@ -178,6 +235,85 @@ TEST(ContinuousConfigurationTest, TimeOriginRotationRetainsJumpAtNewSeam) {
   EXPECT_EQ(rotated.worldlines[0].events[0].direction, 1);
   EXPECT_EQ(rotated.worldlines[0].position_at(0.0), Site({1}));
   EXPECT_EQ(rotated.total_winding(model), state.total_winding(model));
+}
+
+TEST(ContinuousConfigurationTest, CursorRotationMatchesCoincidentSeamTraversalExactly) {
+  const Model model{
+      .particle_count = 2,
+      .beta = 1.0,
+      .linear_size = 5,
+      .dimension = 1,
+      .hopping = 1.0,
+  };
+  const ContinuousPath first{
+      .duration = 1.0,
+      .start = {0},
+      .end = {1},
+      .events = {{.time = 0.0, .axis = 0, .direction = 1},
+                 {.time = 0.25, .axis = 0, .direction = 1},
+                 {.time = 0.25, .axis = 0, .direction = -1},
+                 {.time = 0.75, .axis = 0, .direction = 1},
+                 {.time = 1.0, .axis = 0, .direction = -1}},
+  };
+  const ContinuousPath second{
+      .duration = 1.0,
+      .start = {1},
+      .end = {0},
+      .events = {{.time = 0.0, .axis = 0, .direction = -1},
+                 {.time = 0.25, .axis = 0, .direction = 1},
+                 {.time = 0.5, .axis = 0, .direction = 1},
+                 {.time = 0.75, .axis = 0, .direction = -1},
+                 {.time = 0.75, .axis = 0, .direction = 1},
+                 {.time = 1.0, .axis = 0, .direction = -1},
+                 {.time = 1.0, .axis = 0, .direction = -1}},
+  };
+  const ContinuousConfiguration state{
+      .cycles = {{0, 1}},
+      .permutation = {1, 0},
+      .worldlines = {first, second},
+      .log_Z0_N = 0.0,
+  };
+  state.validate(model);
+
+  const ContinuousConfiguration expected =
+      reference_rotate_configuration_time_origin(state, model, 0.25);
+  const ContinuousConfiguration actual = rotate_configuration_time_origin(state, model, 0.25);
+  EXPECT_TRUE(configurations_are_equal(actual, expected));
+  EXPECT_NO_THROW(actual.validate(model));
+  EXPECT_EQ(actual.event_count(), state.event_count());
+  ASSERT_GE(actual.worldlines[0].events.size(), 2U);
+  EXPECT_DOUBLE_EQ(actual.worldlines[0].events[0].time, 0.0);
+  EXPECT_DOUBLE_EQ(actual.worldlines[0].events[1].time, 0.0);
+}
+
+TEST(ContinuousConfigurationTest, CursorRotationPreservesAllowedDurationDriftSemantics) {
+  const Model model{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 1.0,
+  };
+  const double one_ulp_below_beta = std::nextafter(model.beta, 0.0);
+  const double duration = std::nextafter(one_ulp_below_beta, 0.0);
+  const ContinuousConfiguration state{
+      .cycles = {{0}},
+      .permutation = {0},
+      .worldlines = {{.duration = duration,
+                      .start = {0},
+                      .end = {0},
+                      .events = {{.time = duration, .axis = 0, .direction = 1},
+                                 {.time = duration, .axis = 0, .direction = -1}}}},
+      .log_Z0_N = 0.0,
+  };
+  state.validate(model);
+
+  const ContinuousConfiguration expected =
+      reference_rotate_configuration_time_origin(state, model, one_ulp_below_beta);
+  const ContinuousConfiguration actual =
+      rotate_configuration_time_origin(state, model, one_ulp_below_beta);
+  EXPECT_TRUE(configurations_are_equal(actual, expected));
+  EXPECT_NO_THROW(actual.validate(model));
 }
 
 } // namespace

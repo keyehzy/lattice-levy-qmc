@@ -1,3 +1,4 @@
+#include "path_cursor.hpp"
 #include "qmc/path.hpp"
 
 #include <algorithm>
@@ -86,6 +87,42 @@ ContinuousPath reference_resample_path_interval(const ContinuousPath &path, cons
       .duration = path.duration,
       .start = path.start,
       .end = path.end,
+      .events = std::move(events),
+  };
+}
+
+ContinuousPath reference_splice_path_interval(const ContinuousPath &prefix_path,
+                                              const ContinuousPath &suffix_path,
+                                              const ContinuousPath &bridge, const double tau0,
+                                              const double tau1) {
+  const Site right = suffix_path.position_at(tau1);
+  std::vector<JumpEvent> events;
+  for (const JumpEvent &event : prefix_path.events) {
+    if (event.time <= tau0) {
+      events.push_back(event);
+    }
+  }
+  for (const JumpEvent &event : bridge.events) {
+    events.push_back(JumpEvent{
+        .time = tau0 + event.time,
+        .axis = event.axis,
+        .direction = event.direction,
+    });
+  }
+  for (const JumpEvent &event : suffix_path.events) {
+    if (event.time > tau1) {
+      events.push_back(event);
+    }
+  }
+
+  Site end(bridge.end.size());
+  for (std::size_t axis = 0; axis < end.size(); ++axis) {
+    end[axis] = bridge.end[axis] + (suffix_path.end[axis] - right[axis]);
+  }
+  return ContinuousPath{
+      .duration = prefix_path.duration,
+      .start = prefix_path.start,
+      .end = std::move(end),
       .events = std::move(events),
   };
 }
@@ -320,6 +357,62 @@ TEST(ContinuousPathTest, CursorResamplingMatchesPreviousTraversalAndRandomStream
       reference_resample_path_interval(path, 0.3, 1.1, 0.9, expected_random);
   expect_same_path(actual, expected);
   EXPECT_DOUBLE_EQ(actual_random.uniform_open(), expected_random.uniform_open());
+}
+
+TEST(ContinuousPathTest, CursorStitchSpliceMatchesPreviousTraversalAtCoincidentCuts) {
+  const ContinuousPath prefix{
+      .duration = 1.0,
+      .start = {0},
+      .end = {2},
+      .events = {{.time = 0.0, .axis = 0, .direction = 1},
+                 {.time = 0.25, .axis = 0, .direction = 1},
+                 {.time = 0.25, .axis = 0, .direction = -1},
+                 {.time = 0.5, .axis = 0, .direction = 1},
+                 {.time = 0.75, .axis = 0, .direction = -1},
+                 {.time = 1.0, .axis = 0, .direction = 1}},
+  };
+  const ContinuousPath suffix{
+      .duration = 1.0,
+      .start = {3},
+      .end = {5},
+      .events = {{.time = 0.0, .axis = 0, .direction = 1},
+                 {.time = 0.25, .axis = 0, .direction = -1},
+                 {.time = 0.5, .axis = 0, .direction = 1},
+                 {.time = 0.75, .axis = 0, .direction = 1},
+                 {.time = 0.75, .axis = 0, .direction = -1},
+                 {.time = 0.9, .axis = 0, .direction = 1}},
+  };
+  const ContinuousPath bridge{
+      .duration = 0.5,
+      .start = {1},
+      .end = {4},
+      .events = {{.time = 0.0, .axis = 0, .direction = 1},
+                 {.time = 0.25, .axis = 0, .direction = 1},
+                 {.time = 0.5, .axis = 0, .direction = 1}},
+  };
+  prefix.validate(1);
+  suffix.validate(1);
+  bridge.validate(1);
+
+  detail::PathCursor prefix_cursor(prefix);
+  const detail::PathCut prefix_left = prefix_cursor.cut(0.25);
+  const detail::PathCut prefix_right = prefix_cursor.cut(0.75);
+  const detail::PathSlice prefix_slice = prefix_cursor.slice(prefix_left, prefix_right);
+  detail::PathCursor suffix_cursor(suffix);
+  const detail::PathCut suffix_left = suffix_cursor.cut(0.25);
+  const detail::PathCut suffix_right = suffix_cursor.cut(0.75);
+  const detail::PathSlice suffix_slice = suffix_cursor.slice(suffix_left, suffix_right);
+
+  const ContinuousPath actual = detail::splice_path_slices(prefix_slice, suffix_slice, bridge);
+  const ContinuousPath expected =
+      reference_splice_path_interval(prefix, suffix, bridge, 0.25, 0.75);
+  expect_same_path(actual, expected);
+  ASSERT_EQ(actual.events.size(), 7U);
+  EXPECT_DOUBLE_EQ(actual.events[1].time, 0.25);
+  EXPECT_DOUBLE_EQ(actual.events[2].time, 0.25);
+  EXPECT_DOUBLE_EQ(actual.events[3].time, 0.25);
+  EXPECT_DOUBLE_EQ(actual.events[5].time, 0.75);
+  EXPECT_EQ(actual.end, Site({5}));
 }
 
 TEST(ContinuousPathTest, HandlesZeroWeightAndRejectsBadIntervals) {

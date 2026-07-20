@@ -4,6 +4,7 @@
 #include "continuous_detail.hpp"
 #include "interaction_detail.hpp"
 #include "occupancy_index.hpp"
+#include "path_cursor.hpp"
 #include "qmc/interaction.hpp"
 #include "stitch_matching.hpp"
 
@@ -384,60 +385,17 @@ std::vector<std::size_t> sample_stitch_matching(const std::span<const double> lo
   return exchanged ? std::vector<std::size_t>{1, 0} : std::vector<std::size_t>{0, 1};
 }
 
-ContinuousPath splice_path_interval(const ContinuousPath &prefix_path,
-                                    const ContinuousPath &suffix_path, const ContinuousPath &bridge,
-                                    const double tau0, const double tau1, const Coord linear_size) {
-  if (prefix_path.duration != suffix_path.duration || bridge.duration != tau1 - tau0) {
-    throw std::invalid_argument("stitch path durations do not match the splice window");
-  }
-  const Site left = prefix_path.position_at(tau0);
-  const Site right = suffix_path.position_at(tau1);
-  if (bridge.start != left || bridge.end.size() != right.size()) {
+ContinuousPath splice_path_interval(const detail::PathSlice &prefix_slice,
+                                    const detail::PathSlice &suffix_slice,
+                                    const ContinuousPath &bridge, const Coord linear_size) {
+  if (bridge.start != prefix_slice.start || bridge.end.size() != suffix_slice.end.size()) {
     throw std::invalid_argument("stitch bridge does not start at the prefix cut");
   }
-  const TorusLayout layout(linear_size, right.size());
-  if (layout.encode_covering(bridge.end) != layout.encode_covering(right)) {
+  const TorusLayout layout(linear_size, suffix_slice.end.size());
+  if (layout.encode_covering(bridge.end) != layout.encode_covering(suffix_slice.end)) {
     throw std::invalid_argument("stitch bridge does not end at the suffix torus site");
   }
-
-  std::vector<JumpEvent> events;
-  events.reserve(detail::checked_add_size(
-      detail::checked_add_size(prefix_path.events.size(), bridge.events.size(),
-                               "stitched event count exceeds size_t"),
-      suffix_path.events.size(), "stitched event count exceeds size_t"));
-  for (const JumpEvent &event : prefix_path.events) {
-    if (event.time <= tau0) {
-      events.push_back(event);
-    }
-  }
-  for (const JumpEvent &event : bridge.events) {
-    events.push_back(JumpEvent{
-        .time = tau0 + event.time,
-        .axis = event.axis,
-        .direction = event.direction,
-    });
-  }
-  for (const JumpEvent &event : suffix_path.events) {
-    if (event.time > tau1) {
-      events.push_back(event);
-    }
-  }
-
-  Site end(bridge.end.size());
-  for (std::size_t axis = 0; axis < end.size(); ++axis) {
-    const Coord suffix_displacement = detail::checked_subtract(
-        suffix_path.end[axis], right[axis], "stitch suffix displacement exceeds int64 range");
-    end[axis] = detail::checked_add(bridge.end[axis], suffix_displacement,
-                                    "stitched path endpoint exceeds int64 range");
-  }
-  ContinuousPath result{
-      .duration = prefix_path.duration,
-      .start = prefix_path.start,
-      .end = std::move(end),
-      .events = std::move(events),
-  };
-  result.validate(prefix_path.start.size());
-  return result;
+  return detail::splice_path_slices(prefix_slice, suffix_slice, bridge);
 }
 
 } // namespace
@@ -680,11 +638,15 @@ InteractingSampler::sample_stitch_proposal(const std::span<const ParticleId> str
   if (strand_count < 2 || strand_count > detail::kMaxStitchStrands) {
     throw std::invalid_argument("a stitch must contain between 2 and 8 strands");
   }
+  const double duration = tau1 - tau0;
+  if (!std::isfinite(duration) || duration <= 0.0) {
+    throw std::invalid_argument("stitch duration must be positive");
+  }
   std::vector<bool> selected(state_.worldlines.size(), false);
-  std::vector<const ContinuousPath *> old_paths;
+  std::vector<detail::PathSlice> path_slices;
   std::vector<Site> left;
   std::vector<Site> right;
-  old_paths.reserve(strand_count);
+  path_slices.reserve(strand_count);
   left.reserve(strand_count);
   right.reserve(strand_count);
   for (const ParticleId label : strands) {
@@ -693,13 +655,12 @@ InteractingSampler::sample_stitch_proposal(const std::span<const ParticleId> str
     }
     selected[label] = true;
     const ContinuousPath &path = state_.worldlines[label];
-    old_paths.push_back(&path);
-    left.push_back(path.position_at(tau0));
-    right.push_back(path.position_at(tau1));
-  }
-  const double duration = tau1 - tau0;
-  if (!std::isfinite(duration) || duration <= 0.0) {
-    throw std::invalid_argument("stitch duration must be positive");
+    detail::PathCursor cursor(path);
+    const detail::PathCut left_cut = cursor.cut(tau0);
+    const detail::PathCut right_cut = cursor.cut(tau1);
+    path_slices.push_back(cursor.slice(left_cut, right_cut));
+    left.push_back(path_slices.back().start);
+    right.push_back(path_slices.back().end);
   }
 
   const std::vector<double> log_weights =
@@ -714,9 +675,9 @@ InteractingSampler::sample_stitch_proposal(const std::span<const ParticleId> str
     const ContinuousPath bridge =
         sample_continuous_bridge_torus(left[row], right[column], duration, model_.free.linear_size,
                                        model_.free.hopping, random_, numerical_);
-    proposal.replacements.emplace_back(
-        strands[row], splice_path_interval(*old_paths[row], *old_paths[column], bridge, tau0, tau1,
-                                           model_.free.linear_size));
+    proposal.replacements.emplace_back(strands[row],
+                                       splice_path_interval(path_slices[row], path_slices[column],
+                                                            bridge, model_.free.linear_size));
   }
 
   proposal.permutation = state_.permutation;
