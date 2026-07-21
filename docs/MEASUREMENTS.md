@@ -113,6 +113,15 @@ returns the covering-space radius of gyration, maximum retained radius, cycle
 length, and winding for every permutation cycle. These records support direct
 cycle-length, winding, and geometry correlations.
 
+For independent-sample workflows, `EqualTimeAccumulator`,
+`RetainedDensityCorrelationAccumulator`, `RetainedGeometryAccumulator`,
+`CycleStatisticsAccumulator`, and `WindingAccumulator` bind one retained grid
+and particle count, reject incompatible samples before mutation, and own their
+sample normalization. Cycle geometry means are conditioned on occurrences of
+the corresponding cycle length. The cycle and winding accumulators return the
+raw geometry and total winding from `observe()`, respectively, so a caller can
+write per-sample traces without evaluating those quantities twice.
+
 ## Exactness and checks
 
 The canonical calculations are deterministic up to floating-point rounding.

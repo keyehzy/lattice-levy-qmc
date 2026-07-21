@@ -46,6 +46,18 @@ void expect_same_retained_geometry(const qmc::RetainedGeometryObservables &actua
   EXPECT_EQ(actual.displacement_probability, expected.displacement_probability);
 }
 
+void expect_same_cycle_geometry(const std::span<const qmc::RetainedCycleGeometry> actual,
+                                const std::span<const qmc::RetainedCycleGeometry> expected) {
+  ASSERT_EQ(actual.size(), expected.size());
+  for (std::size_t index = 0; index < actual.size(); ++index) {
+    EXPECT_EQ(actual[index].length, expected[index].length);
+    EXPECT_EQ(actual[index].winding, expected[index].winding);
+    EXPECT_DOUBLE_EQ(actual[index].radius_of_gyration_squared,
+                     expected[index].radius_of_gyration_squared);
+    EXPECT_DOUBLE_EQ(actual[index].maximum_radius_squared, expected[index].maximum_radius_squared);
+  }
+}
+
 BruteCanonicalResult enumerate_fock_states(const qmc::Model &model) {
   const auto volume = model.volume();
   std::vector<double> energies(volume);
@@ -670,6 +682,169 @@ TEST(ConfigurationObservablesTest, RetainedGeometryAccumulatorHandlesEmptySystem
                                   [](const double value) { return value == 0.0; }));
   EXPECT_TRUE(std::ranges::all_of(result.displacement_probability,
                                   [](const double value) { return value == 0.0; }));
+}
+
+TEST(ConfigurationObservablesTest, CycleAndWindingAccumulatorsPreserveSampleObservations) {
+  const qmc::Model model(qmc::ModelParameters{
+      .particle_count = 3,
+      .beta = 1.0,
+      .linear_size = 4,
+      .dimension = 1,
+      .hopping = 0.7,
+  });
+  qmc::DenseWorldlines first_worldlines(3, 2, 1);
+  first_worldlines.at(0, 0, 0) = 0;
+  first_worldlines.at(0, 1, 0) = 0;
+  first_worldlines.at(1, 0, 0) = 1;
+  first_worldlines.at(1, 1, 0) = 2;
+  first_worldlines.at(2, 0, 0) = 2;
+  first_worldlines.at(2, 1, 0) = 1;
+  const qmc::IdealBosonConfiguration first(model, 1, qmc::Permutation({0, 2, 1}),
+                                           std::move(first_worldlines));
+
+  qmc::DenseWorldlines second_worldlines(3, 2, 1);
+  second_worldlines.at(0, 0, 0) = 0;
+  second_worldlines.at(0, 1, 0) = 1;
+  second_worldlines.at(1, 0, 0) = 1;
+  second_worldlines.at(1, 1, 0) = 2;
+  second_worldlines.at(2, 0, 0) = 2;
+  second_worldlines.at(2, 1, 0) = 8;
+  const qmc::IdealBosonConfiguration second(model, 1, qmc::Permutation({1, 2, 0}),
+                                            std::move(second_worldlines));
+
+  const qmc::RetainedGrid grid(model.beta(),
+                               qmc::TorusLayout(model.linear_size(), model.dimension()), 1);
+  qmc::CycleStatisticsAccumulator cycles(grid, model.particle_count());
+  qmc::WindingAccumulator winding(grid, model.particle_count());
+  EXPECT_EQ(cycles.grid(), grid);
+  EXPECT_EQ(winding.grid(), grid);
+  EXPECT_EQ(cycles.particle_count(), model.particle_count());
+  EXPECT_EQ(winding.particle_count(), model.particle_count());
+  EXPECT_EQ(cycles.macroscopic_cycle_threshold(), 2U);
+  EXPECT_EQ(cycles.sample_count(), 0U);
+  EXPECT_EQ(winding.sample_count(), 0U);
+
+  const auto first_cycle_geometry = cycles.observe(first);
+  EXPECT_EQ(winding.observe(first), qmc::Site({0}));
+  expect_same_cycle_geometry(first_cycle_geometry, qmc::retained_cycle_geometry(first));
+  EXPECT_EQ(cycles.sample_count(), 1U);
+  EXPECT_EQ(winding.sample_count(), 1U);
+  const auto first_cycles = cycles.finish();
+  EXPECT_EQ(first_cycles.mean_cycle_count, (std::vector<double>{0.0, 1.0, 1.0, 0.0}));
+  EXPECT_EQ(first_cycles.mean_particles, (std::vector<double>{0.0, 1.0, 2.0, 0.0}));
+  EXPECT_EQ(first_cycles.mean_cycle_winding_squared, (std::vector<double>{0.0, 0.0, 0.0, 0.0}));
+  EXPECT_EQ(first_cycles.mean_radius_of_gyration_squared,
+            (std::vector<double>{0.0, 0.0, 0.25, 0.0}));
+  EXPECT_EQ(first_cycles.mean_maximum_radius_squared, (std::vector<double>{0.0, 0.0, 0.25, 0.0}));
+  EXPECT_EQ(first_cycles.longest_cycle_probability, (std::vector<double>{0.0, 0.0, 1.0, 0.0}));
+  EXPECT_DOUBLE_EQ(first_cycles.macroscopic_cycle_fraction, 2.0 / 3.0);
+  const auto first_winding = winding.finish();
+  EXPECT_EQ(first_winding.second_moment, (std::vector<double>{0.0}));
+  EXPECT_EQ(first_winding.fourth_moment, (std::vector<double>{0.0}));
+  EXPECT_DOUBLE_EQ(first_winding.nonzero_probability, 0.0);
+
+  const auto second_cycle_geometry = cycles.observe(second);
+  EXPECT_EQ(winding.observe(second), qmc::Site({2}));
+  expect_same_cycle_geometry(second_cycle_geometry, qmc::retained_cycle_geometry(second));
+  EXPECT_EQ(cycles.sample_count(), 2U);
+  EXPECT_EQ(winding.sample_count(), 2U);
+  const auto averaged_cycles = cycles.finish();
+  EXPECT_EQ(averaged_cycles.mean_cycle_count, (std::vector<double>{0.0, 0.5, 0.5, 0.5}));
+  EXPECT_EQ(averaged_cycles.mean_particles, (std::vector<double>{0.0, 0.5, 1.0, 1.5}));
+  EXPECT_EQ(averaged_cycles.mean_cycle_winding_squared, (std::vector<double>{0.0, 0.0, 0.0, 4.0}));
+  EXPECT_EQ(averaged_cycles.mean_radius_of_gyration_squared,
+            (std::vector<double>{0.0, 0.0, 0.25, 2.0 / 3.0}));
+  EXPECT_EQ(averaged_cycles.mean_maximum_radius_squared,
+            (std::vector<double>{0.0, 0.0, 0.25, 1.0}));
+  EXPECT_EQ(averaged_cycles.longest_cycle_probability, (std::vector<double>{0.0, 0.0, 0.5, 0.5}));
+  EXPECT_DOUBLE_EQ(averaged_cycles.macroscopic_cycle_fraction, 5.0 / 6.0);
+  const auto averaged_winding = winding.finish();
+  EXPECT_EQ(averaged_winding.second_moment, (std::vector<double>{2.0}));
+  EXPECT_EQ(averaged_winding.fourth_moment, (std::vector<double>{8.0}));
+  EXPECT_DOUBLE_EQ(averaged_winding.nonzero_probability, 0.5);
+}
+
+TEST(ConfigurationObservablesTest, CycleAndWindingAccumulatorsRejectEmptyAndMismatchedSamples) {
+  const auto make_configuration = [](const qmc::ModelParameters parameters,
+                                     const std::size_t time_points, const std::uint64_t seed) {
+    const qmc::Model model(parameters);
+    qmc::Random random(seed);
+    return qmc::sample_ideal_boson_configuration(model, time_points, random);
+  };
+  const qmc::ModelParameters base_parameters{
+      .particle_count = 2,
+      .beta = 1.0,
+      .linear_size = 4,
+      .dimension = 1,
+      .hopping = 0.7,
+  };
+  const auto base = make_configuration(base_parameters, 3, 1931);
+  const qmc::RetainedGrid grid(
+      base.model().beta(), qmc::TorusLayout(base.model().linear_size(), base.model().dimension()),
+      base.time_links_per_beta());
+  qmc::CycleStatisticsAccumulator cycles(grid, base.model().particle_count());
+  qmc::WindingAccumulator winding(grid, base.model().particle_count());
+
+  EXPECT_THROW(static_cast<void>(cycles.finish()), std::logic_error);
+  EXPECT_THROW(static_cast<void>(winding.finish()), std::logic_error);
+
+  auto expect_rejected = [&](const qmc::IdealBosonConfiguration &configuration) {
+    EXPECT_THROW(static_cast<void>(cycles.observe(configuration)), std::invalid_argument);
+    EXPECT_THROW(static_cast<void>(winding.observe(configuration)), std::invalid_argument);
+    EXPECT_EQ(cycles.sample_count(), 0U);
+    EXPECT_EQ(winding.sample_count(), 0U);
+  };
+  auto parameters = base_parameters;
+  parameters.particle_count = 3;
+  expect_rejected(make_configuration(parameters, 3, 1932));
+
+  parameters = base_parameters;
+  parameters.beta = 2.0;
+  expect_rejected(make_configuration(parameters, 3, 1933));
+
+  parameters = base_parameters;
+  parameters.linear_size = 2;
+  parameters.dimension = 2;
+  expect_rejected(make_configuration(parameters, 3, 1934));
+
+  expect_rejected(make_configuration(base_parameters, 4, 1935));
+
+  static_cast<void>(cycles.observe(base));
+  static_cast<void>(winding.observe(base));
+  EXPECT_EQ(cycles.sample_count(), 1U);
+  EXPECT_EQ(winding.sample_count(), 1U);
+}
+
+TEST(ConfigurationObservablesTest, CycleAndWindingAccumulatorsHandleEmptySystem) {
+  const qmc::Model model(qmc::ModelParameters{
+      .particle_count = 0,
+      .beta = 0.0,
+      .linear_size = 3,
+      .dimension = 2,
+      .hopping = 0.0,
+  });
+  qmc::Random random(1937);
+  const auto configuration = qmc::sample_ideal_boson_configuration(model, 4, random);
+  const qmc::RetainedGrid grid(model.beta(),
+                               qmc::TorusLayout(model.linear_size(), model.dimension()), 4);
+  qmc::CycleStatisticsAccumulator cycles(grid, model.particle_count());
+  qmc::WindingAccumulator winding(grid, model.particle_count());
+
+  EXPECT_TRUE(cycles.observe(configuration).empty());
+  EXPECT_EQ(winding.observe(configuration), qmc::Site({0, 0}));
+  EXPECT_EQ(cycles.macroscopic_cycle_threshold(), 1U);
+  const auto cycle_statistics = cycles.finish();
+  EXPECT_EQ(cycle_statistics.mean_cycle_count, (std::vector<double>{0.0}));
+  EXPECT_EQ(cycle_statistics.mean_particles, (std::vector<double>{0.0}));
+  EXPECT_EQ(cycle_statistics.mean_cycle_winding_squared, (std::vector<double>{0.0}));
+  EXPECT_EQ(cycle_statistics.mean_radius_of_gyration_squared, (std::vector<double>{0.0}));
+  EXPECT_EQ(cycle_statistics.mean_maximum_radius_squared, (std::vector<double>{0.0}));
+  EXPECT_EQ(cycle_statistics.longest_cycle_probability, (std::vector<double>{1.0}));
+  EXPECT_DOUBLE_EQ(cycle_statistics.macroscopic_cycle_fraction, 0.0);
+  const auto winding_statistics = winding.finish();
+  EXPECT_EQ(winding_statistics.second_moment, (std::vector<double>{0.0, 0.0}));
+  EXPECT_EQ(winding_statistics.fourth_moment, (std::vector<double>{0.0, 0.0}));
+  EXPECT_DOUBLE_EQ(winding_statistics.nonzero_probability, 0.0);
 }
 
 TEST(ConfigurationObservablesTest, RejectsWrappedMatsubaraGridExtent) {

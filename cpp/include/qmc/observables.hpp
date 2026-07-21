@@ -284,6 +284,80 @@ struct RetainedCycleGeometry {
 [[nodiscard]] std::vector<RetainedCycleGeometry>
 retained_cycle_geometry(const IdealBosonConfiguration &configuration);
 
+struct SampledCycleStatistics {
+  // All arrays are indexed by cycle length. Index zero is unused except that
+  // longest_cycle_probability[0] is one for an empty system.
+  std::vector<double> mean_cycle_count;
+  std::vector<double> mean_particles;
+  // Geometry means are conditioned on observing a cycle of the indexed length;
+  // a length that was never observed retains zero.
+  std::vector<double> mean_cycle_winding_squared;
+  std::vector<double> mean_radius_of_gyration_squared;
+  std::vector<double> mean_maximum_radius_squared;
+  std::vector<double> longest_cycle_probability;
+  // Mean particle fraction in cycles of length at least ceil(N/2).
+  double macroscopic_cycle_fraction = 0.0;
+};
+
+// Averages cycle counts and retained cycle geometry over compatible ideal
+// configurations. Each observed configuration must have the construction grid
+// and particle count.
+class CycleStatisticsAccumulator {
+public:
+  CycleStatisticsAccumulator(RetainedGrid grid, std::size_t particle_count);
+
+  [[nodiscard]] const RetainedGrid &grid() const noexcept { return grid_; }
+  [[nodiscard]] std::size_t particle_count() const noexcept { return particle_count_; }
+  [[nodiscard]] std::size_t macroscopic_cycle_threshold() const noexcept {
+    return macroscopic_cycle_threshold_;
+  }
+  [[nodiscard]] std::size_t sample_count() const noexcept { return sample_count_; }
+
+  // Returns the per-sample cycle geometry so callers can retain traces without
+  // evaluating the covering paths a second time.
+  std::vector<RetainedCycleGeometry> observe(const IdealBosonConfiguration &configuration);
+  // Throws logic_error when no sample has been observed.
+  [[nodiscard]] SampledCycleStatistics finish() const;
+
+private:
+  RetainedGrid grid_;
+  std::size_t particle_count_;
+  std::size_t macroscopic_cycle_threshold_;
+  std::size_t sample_count_ = 0;
+  SampledCycleStatistics sums_;
+  std::vector<double> cycle_occurrences_;
+};
+
+struct WindingStatistics {
+  std::vector<double> second_moment;
+  std::vector<double> fourth_moment;
+  double nonzero_probability = 0.0;
+};
+
+// Averages total covering-space winding over compatible ideal configurations.
+// Each observed configuration must have the construction grid and particle
+// count.
+class WindingAccumulator {
+public:
+  WindingAccumulator(RetainedGrid grid, std::size_t particle_count);
+
+  [[nodiscard]] const RetainedGrid &grid() const noexcept { return grid_; }
+  [[nodiscard]] std::size_t particle_count() const noexcept { return particle_count_; }
+  [[nodiscard]] std::size_t sample_count() const noexcept { return sample_count_; }
+
+  // Returns the per-sample total winding so callers can retain traces without
+  // deriving it a second time.
+  Site observe(const IdealBosonConfiguration &configuration);
+  // Throws logic_error when no sample has been observed.
+  [[nodiscard]] WindingStatistics finish() const;
+
+private:
+  RetainedGrid grid_;
+  std::size_t particle_count_;
+  std::size_t sample_count_ = 0;
+  WindingStatistics sums_;
+};
+
 } // namespace qmc
 
 #endif

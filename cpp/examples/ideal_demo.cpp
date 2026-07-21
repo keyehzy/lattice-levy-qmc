@@ -101,12 +101,6 @@ std::ofstream output_file(const std::filesystem::path &path) {
   return output;
 }
 
-void divide_values(std::vector<double> &values, const double divisor) {
-  for (double &value : values) {
-    value /= divisor;
-  }
-}
-
 double winding_squared(const qmc::Site &winding) {
   double result = 0.0;
   for (const qmc::Coord component : winding) {
@@ -177,13 +171,8 @@ struct CycleGeometrySample {
 };
 
 struct SampleAverages {
-  std::vector<double> cycle_count;
-  std::vector<double> cycle_particles;
-  std::vector<double> cycle_winding_squared;
-  std::vector<double> cycle_radius_of_gyration_squared;
-  std::vector<double> cycle_maximum_radius_squared;
-  std::vector<double> cycle_occurrences;
-  std::vector<double> longest_cycle_probability;
+  qmc::SampledCycleStatistics cycle_statistics;
+  qmc::WindingStatistics winding_statistics;
   std::vector<double> site_density;
   std::vector<double> pair_correlation;
   std::vector<double> structure_factor;
@@ -192,8 +181,6 @@ struct SampleAverages {
   std::vector<double> mean_square_displacement;
   std::vector<double> return_probability;
   std::vector<double> displacement_probability;
-  std::vector<double> winding_second_moment;
-  std::vector<double> winding_fourth_moment;
   std::vector<double> winding_squared_trace;
   std::map<qmc::Site, std::size_t> winding_histogram;
   std::map<double, std::size_t> winding_squared_histogram;
@@ -201,21 +188,14 @@ struct SampleAverages {
   std::vector<CycleGeometrySample> cycle_geometry_samples;
   double mean_occupation_squared = 0.0;
   double mean_factorial_occupation = 0.0;
-  double nonzero_winding_probability = 0.0;
-  double macroscopic_cycle_fraction = 0.0;
 };
 
 SampleAverages sample_ensemble(const CommandLine &command_line,
                                const qmc::CanonicalEnsemble &ensemble, qmc::Random &random) {
   const auto &model = command_line.model;
   SampleAverages averages{
-      .cycle_count = std::vector<double>(model.particle_count() + 1),
-      .cycle_particles = std::vector<double>(model.particle_count() + 1),
-      .cycle_winding_squared = std::vector<double>(model.particle_count() + 1),
-      .cycle_radius_of_gyration_squared = std::vector<double>(model.particle_count() + 1),
-      .cycle_maximum_radius_squared = std::vector<double>(model.particle_count() + 1),
-      .cycle_occurrences = std::vector<double>(model.particle_count() + 1),
-      .longest_cycle_probability = std::vector<double>(model.particle_count() + 1),
+      .cycle_statistics = {},
+      .winding_statistics = {},
       .site_density = {},
       .pair_correlation = {},
       .structure_factor = {},
@@ -224,8 +204,6 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
       .mean_square_displacement = {},
       .return_probability = {},
       .displacement_probability = {},
-      .winding_second_moment = std::vector<double>(model.dimension()),
-      .winding_fourth_moment = std::vector<double>(model.dimension()),
       .winding_squared_trace = {},
       .winding_histogram = {},
       .winding_squared_histogram = {},
@@ -233,12 +211,8 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
       .cycle_geometry_samples = {},
       .mean_occupation_squared = 0.0,
       .mean_factorial_occupation = 0.0,
-      .nonzero_winding_probability = 0.0,
-      .macroscopic_cycle_fraction = 0.0,
   };
   averages.winding_squared_trace.reserve(command_line.samples);
-  const std::size_t macroscopic_threshold =
-      model.particle_count() == 0 ? 1 : (model.particle_count() + 1) / 2;
   const qmc::RetainedGrid retained_grid(model.beta(),
                                         qmc::TorusLayout(model.linear_size(), model.dimension()),
                                         command_line.time_links);
@@ -246,40 +220,22 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
   qmc::RetainedDensityCorrelationAccumulator density_accumulator(retained_grid,
                                                                  model.particle_count());
   qmc::RetainedGeometryAccumulator geometry_accumulator(retained_grid, model.particle_count());
+  qmc::CycleStatisticsAccumulator cycle_accumulator(retained_grid, model.particle_count());
+  qmc::WindingAccumulator winding_accumulator(retained_grid, model.particle_count());
 
   for (std::size_t sample = 0; sample < command_line.samples; ++sample) {
     const auto configuration =
         qmc::sample_ideal_boson_configuration(ensemble, command_line.time_links, random);
-    const auto cycle_histogram = qmc::sampled_cycle_histogram(configuration);
-    for (std::size_t length = 1; length <= model.particle_count(); ++length) {
-      averages.cycle_count[length] += static_cast<double>(cycle_histogram[length]);
-      averages.cycle_particles[length] += static_cast<double>(length * cycle_histogram[length]);
-    }
-    ++averages.longest_cycle_probability[qmc::longest_cycle_length(configuration)];
-
-    const qmc::Site winding = qmc::total_winding(configuration);
+    const qmc::Site winding = winding_accumulator.observe(configuration);
     const double total_winding_squared = winding_squared(winding);
     averages.winding_squared_trace.push_back(total_winding_squared);
     ++averages.winding_histogram[winding];
     ++averages.winding_squared_histogram[total_winding_squared];
-    if (total_winding_squared > 0.0) {
-      averages.nonzero_winding_probability += 1.0;
-    }
-    for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
-      const auto component = static_cast<double>(winding[axis]);
-      averages.winding_second_moment[axis] += component * component;
-      averages.winding_fourth_moment[axis] += component * component * component * component;
-    }
 
-    const auto cycle_geometry = qmc::retained_cycle_geometry(configuration);
-    std::size_t macroscopic_particles = 0;
+    const auto cycle_geometry = cycle_accumulator.observe(configuration);
     for (const auto &geometry : cycle_geometry) {
       const auto length = geometry.length;
       const double cycle_winding_value = winding_squared(geometry.winding);
-      averages.cycle_winding_squared[length] += cycle_winding_value;
-      averages.cycle_radius_of_gyration_squared[length] += geometry.radius_of_gyration_squared;
-      averages.cycle_maximum_radius_squared[length] += geometry.maximum_radius_squared;
-      averages.cycle_occurrences[length] += 1.0;
       ++averages.winding_conditioned_cycles[{total_winding_squared, length}];
       averages.cycle_geometry_samples.push_back(CycleGeometrySample{
           .sample = sample,
@@ -290,13 +246,6 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
           .maximum_radius_squared = geometry.maximum_radius_squared,
           .cycle_winding = geometry.winding,
       });
-      if (length >= macroscopic_threshold) {
-        macroscopic_particles += length;
-      }
-    }
-    if (model.particle_count() > 0) {
-      averages.macroscopic_cycle_fraction +=
-          static_cast<double>(macroscopic_particles) / static_cast<double>(model.particle_count());
     }
 
     const qmc::RetainedMeasurementContext measurement_context(configuration);
@@ -319,22 +268,8 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
   averages.mean_square_displacement = std::move(retained_geometry.mean_square_displacement);
   averages.return_probability = std::move(retained_geometry.return_probability);
   averages.displacement_probability = std::move(retained_geometry.displacement_probability);
-
-  const auto sample_count = static_cast<double>(command_line.samples);
-  divide_values(averages.cycle_count, sample_count);
-  divide_values(averages.cycle_particles, sample_count);
-  divide_values(averages.longest_cycle_probability, sample_count);
-  divide_values(averages.winding_second_moment, sample_count);
-  divide_values(averages.winding_fourth_moment, sample_count);
-  averages.nonzero_winding_probability /= sample_count;
-  averages.macroscopic_cycle_fraction /= sample_count;
-  for (std::size_t length = 1; length <= model.particle_count(); ++length) {
-    if (averages.cycle_occurrences[length] > 0.0) {
-      averages.cycle_winding_squared[length] /= averages.cycle_occurrences[length];
-      averages.cycle_radius_of_gyration_squared[length] /= averages.cycle_occurrences[length];
-      averages.cycle_maximum_radius_squared[length] /= averages.cycle_occurrences[length];
-    }
-  }
+  averages.cycle_statistics = cycle_accumulator.finish();
+  averages.winding_statistics = winding_accumulator.finish();
   return averages;
 }
 
@@ -409,11 +344,12 @@ void write_cycles(const std::filesystem::path &directory, const qmc::Model &mode
   for (std::size_t length = 1; length <= model.particle_count(); ++length) {
     output << length << ' ' << exact.expected_cycle_count[length] << ' '
            << exact.expected_particles[length] << ' ' << exact.particle_probability[length] << ' '
-           << sampled.cycle_count[length] << ' ' << sampled.cycle_particles[length] << ' '
-           << sampled.cycle_winding_squared[length] << ' '
-           << sampled.longest_cycle_probability[length] << ' '
-           << sampled.cycle_radius_of_gyration_squared[length] << ' '
-           << sampled.cycle_maximum_radius_squared[length] << '\n';
+           << sampled.cycle_statistics.mean_cycle_count[length] << ' '
+           << sampled.cycle_statistics.mean_particles[length] << ' '
+           << sampled.cycle_statistics.mean_cycle_winding_squared[length] << ' '
+           << sampled.cycle_statistics.longest_cycle_probability[length] << ' '
+           << sampled.cycle_statistics.mean_radius_of_gyration_squared[length] << ' '
+           << sampled.cycle_statistics.mean_maximum_radius_squared[length] << '\n';
   }
 
   auto geometry = output_file(directory / "cycle_geometry_samples.dat");
@@ -466,16 +402,16 @@ void write_winding(const std::filesystem::path &directory, const CommandLine &co
              "exact_free_energy_curvature\n";
   const double nan = std::numeric_limits<double>::quiet_NaN();
   for (std::size_t axis = 0; axis < command_line.model.dimension(); ++axis) {
-    const double fourth_cumulant =
-        sampled.winding_fourth_moment[axis] -
-        (3.0 * sampled.winding_second_moment[axis] * sampled.winding_second_moment[axis]);
+    const double fourth_cumulant = sampled.winding_statistics.fourth_moment[axis] -
+                                   (3.0 * sampled.winding_statistics.second_moment[axis] *
+                                    sampled.winding_statistics.second_moment[axis]);
     const double sampled_curvature =
         command_line.model.beta() > 0.0
-            ? sampled.winding_second_moment[axis] / command_line.model.beta()
+            ? sampled.winding_statistics.second_moment[axis] / command_line.model.beta()
             : nan;
     const double exact_curvature = command_line.model.beta() > 0.0 ? twist_curvature[axis] : nan;
-    moments << axis << ' ' << sampled.winding_second_moment[axis] << ' ' << fourth_cumulant << ' '
-            << sampled_curvature << ' ' << exact_curvature << '\n';
+    moments << axis << ' ' << sampled.winding_statistics.second_moment[axis] << ' '
+            << fourth_cumulant << ' ' << sampled_curvature << ' ' << exact_curvature << '\n';
   }
 }
 
@@ -706,9 +642,11 @@ void print_summary(const CommandLine &command_line, const qmc::CanonicalEnsemble
   const double expected_cycle_count = std::accumulate(exact_cycles.expected_cycle_count.begin(),
                                                       exact_cycles.expected_cycle_count.end(), 0.0);
   const double sampled_cycle_count =
-      std::accumulate(sampled.cycle_count.begin(), sampled.cycle_count.end(), 0.0);
-  const double mean_winding_squared = std::accumulate(sampled.winding_second_moment.begin(),
-                                                      sampled.winding_second_moment.end(), 0.0);
+      std::accumulate(sampled.cycle_statistics.mean_cycle_count.begin(),
+                      sampled.cycle_statistics.mean_cycle_count.end(), 0.0);
+  const double mean_winding_squared =
+      std::accumulate(sampled.winding_statistics.second_moment.begin(),
+                      sampled.winding_statistics.second_moment.end(), 0.0);
   const double one_body_trace =
       density_matrix.empty() ? 0.0
                              : static_cast<double>(model.volume()) * density_matrix.front().value;
@@ -746,18 +684,18 @@ void print_summary(const CommandLine &command_line, const qmc::CanonicalEnsemble
             << " g1(max separation)=" << density_matrix[farthest_flat_index(model)].value
             << " condensate_density=" << momentum.condensate_density << '\n';
   std::cout << "cycles: exact <count>=" << expected_cycle_count
-            << " sampled <count>=" << sampled_cycle_count
-            << " macroscopic particle fraction=" << sampled.macroscopic_cycle_fraction << '\n';
+            << " sampled <count>=" << sampled_cycle_count << " macroscopic particle fraction="
+            << sampled.cycle_statistics.macroscopic_cycle_fraction << '\n';
   std::cout << "winding: <W^2>=" << mean_winding_squared
-            << " P(W!=0)=" << sampled.nonzero_winding_probability << '\n';
+            << " P(W!=0)=" << sampled.winding_statistics.nonzero_probability << '\n';
   for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
-    const double fourth_cumulant =
-        sampled.winding_fourth_moment[axis] -
-        (3.0 * sampled.winding_second_moment[axis] * sampled.winding_second_moment[axis]);
-    std::cout << "  axis " << axis << ": <W_a^2>=" << sampled.winding_second_moment[axis]
+    const double fourth_cumulant = sampled.winding_statistics.fourth_moment[axis] -
+                                   (3.0 * sampled.winding_statistics.second_moment[axis] *
+                                    sampled.winding_statistics.second_moment[axis]);
+    std::cout << "  axis " << axis << ": <W_a^2>=" << sampled.winding_statistics.second_moment[axis]
               << " kappa4=" << fourth_cumulant;
     if (model.beta() > 0.0) {
-      std::cout << " sampled F''=" << sampled.winding_second_moment[axis] / model.beta()
+      std::cout << " sampled F''=" << sampled.winding_statistics.second_moment[axis] / model.beta()
                 << " exact F''=" << twist_curvature[axis];
     }
     std::cout << '\n';

@@ -107,6 +107,15 @@ void divide_values(const std::span<double> values, const double divisor) noexcep
   }
 }
 
+double squared_norm(const std::span<const Coord> values) noexcept {
+  double result = 0.0;
+  for (const Coord component : values) {
+    const auto value = static_cast<double>(component);
+    result += value * value;
+  }
+  return result;
+}
+
 using SecondDerivativeFinalizer = double (*)(double value, double scale);
 
 double preserve_second_derivative(const double value, [[maybe_unused]] const double scale) {
@@ -951,6 +960,110 @@ retained_cycle_geometry(const IdealBosonConfiguration &configuration) {
     }
     result.push_back(std::move(geometry));
   }
+  return result;
+}
+
+CycleStatisticsAccumulator::CycleStatisticsAccumulator(RetainedGrid grid,
+                                                       const std::size_t particle_count)
+    : grid_(std::move(grid)), particle_count_(particle_count),
+      macroscopic_cycle_threshold_(
+          particle_count_ == 0 ? 1 : (particle_count_ / 2) + (particle_count_ % 2)) {
+  const auto extent =
+      detail::checked_add_size(particle_count_, 1, "cycle-statistics extent exceeds size_t");
+  sums_.mean_cycle_count.resize(extent);
+  sums_.mean_particles.resize(extent);
+  sums_.mean_cycle_winding_squared.resize(extent);
+  sums_.mean_radius_of_gyration_squared.resize(extent);
+  sums_.mean_maximum_radius_squared.resize(extent);
+  sums_.longest_cycle_probability.resize(extent);
+  cycle_occurrences_.resize(extent);
+}
+
+std::vector<RetainedCycleGeometry>
+CycleStatisticsAccumulator::observe(const IdealBosonConfiguration &configuration) {
+  require_matching_retained_configuration(grid_, particle_count_, configuration);
+  const auto updated_sample_count = next_observation_count(sample_count_);
+  auto geometry = retained_cycle_geometry(configuration);
+
+  std::size_t longest_cycle = 0;
+  std::size_t macroscopic_particles = 0;
+  for (const RetainedCycleGeometry &cycle : geometry) {
+    assert(cycle.length > 0 && cycle.length <= particle_count_);
+    sums_.mean_cycle_count[cycle.length] += 1.0;
+    sums_.mean_particles[cycle.length] += static_cast<double>(cycle.length);
+    sums_.mean_cycle_winding_squared[cycle.length] += squared_norm(cycle.winding);
+    sums_.mean_radius_of_gyration_squared[cycle.length] += cycle.radius_of_gyration_squared;
+    sums_.mean_maximum_radius_squared[cycle.length] += cycle.maximum_radius_squared;
+    cycle_occurrences_[cycle.length] += 1.0;
+    longest_cycle = std::max(longest_cycle, cycle.length);
+    if (cycle.length >= macroscopic_cycle_threshold_) {
+      macroscopic_particles += cycle.length;
+    }
+  }
+  sums_.longest_cycle_probability[longest_cycle] += 1.0;
+  if (particle_count_ > 0) {
+    sums_.macroscopic_cycle_fraction +=
+        static_cast<double>(macroscopic_particles) / static_cast<double>(particle_count_);
+  }
+  sample_count_ = updated_sample_count;
+  return geometry;
+}
+
+SampledCycleStatistics CycleStatisticsAccumulator::finish() const {
+  if (sample_count_ == 0) {
+    throw std::logic_error("cannot finish a cycle-statistics accumulator without samples");
+  }
+  SampledCycleStatistics result = sums_;
+  const auto sample_divisor = static_cast<double>(sample_count_);
+  divide_values(result.mean_cycle_count, sample_divisor);
+  divide_values(result.mean_particles, sample_divisor);
+  divide_values(result.longest_cycle_probability, sample_divisor);
+  result.macroscopic_cycle_fraction /= sample_divisor;
+  for (std::size_t length = 1; length <= particle_count_; ++length) {
+    if (cycle_occurrences_[length] > 0.0) {
+      result.mean_cycle_winding_squared[length] /= cycle_occurrences_[length];
+      result.mean_radius_of_gyration_squared[length] /= cycle_occurrences_[length];
+      result.mean_maximum_radius_squared[length] /= cycle_occurrences_[length];
+    }
+  }
+  return result;
+}
+
+WindingAccumulator::WindingAccumulator(RetainedGrid grid, const std::size_t particle_count)
+    : grid_(std::move(grid)), particle_count_(particle_count),
+      sums_{
+          .second_moment = std::vector<double>(grid_.layout().dimension()),
+          .fourth_moment = std::vector<double>(grid_.layout().dimension()),
+      } {}
+
+Site WindingAccumulator::observe(const IdealBosonConfiguration &configuration) {
+  require_matching_retained_configuration(grid_, particle_count_, configuration);
+  const auto updated_sample_count = next_observation_count(sample_count_);
+  Site winding = total_winding(configuration);
+  bool nonzero = false;
+  for (std::size_t axis = 0; axis < winding.size(); ++axis) {
+    const auto component = static_cast<double>(winding[axis]);
+    const double square = component * component;
+    sums_.second_moment[axis] += square;
+    sums_.fourth_moment[axis] += square * square;
+    nonzero = nonzero || winding[axis] != 0;
+  }
+  if (nonzero) {
+    sums_.nonzero_probability += 1.0;
+  }
+  sample_count_ = updated_sample_count;
+  return winding;
+}
+
+WindingStatistics WindingAccumulator::finish() const {
+  if (sample_count_ == 0) {
+    throw std::logic_error("cannot finish a winding accumulator without samples");
+  }
+  WindingStatistics result = sums_;
+  const auto divisor = static_cast<double>(sample_count_);
+  divide_values(result.second_moment, divisor);
+  divide_values(result.fourth_moment, divisor);
+  result.nonzero_probability /= divisor;
   return result;
 }
 
