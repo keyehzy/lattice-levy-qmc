@@ -63,6 +63,7 @@ add_library(
   src/path_cursor.cpp
   src/stitch_matching.cpp
   src/stitch_seam_context.cpp
+  src/stitch_selection.cpp
 )
 add_library(qmc::interacting ALIAS qmc_interacting)
 

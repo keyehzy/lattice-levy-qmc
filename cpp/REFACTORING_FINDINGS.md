@@ -935,6 +935,14 @@ trace remained byte-identical. The end-to-end timing is neutral because bridge
 construction, matching, and path replacement dominate this workload, but the
 selection bookkeeping allocations are removed structurally.
 
+The stitch-selection translation-unit slice is also complete as of 2026-07-21.
+Private candidate enumeration, neighborhood traversal, local/global fallback,
+and fixed-capacity strand selection now live in `stitch_selection.cpp` behind
+the existing private interface. The exact regression for legacy-selection
+equivalence and subsequent RNG position covers the moved boundary across every
+supported strand count and fallback probability. Extracting bridge matching and
+splicing into `stitch_proposal.cpp` remains open.
+
 Pre-slice evidence:
 
 - `interacting_sampler.cpp` is 1,036 lines. Its first 490 lines combine hashing,
@@ -964,9 +972,10 @@ Pre-slice evidence:
 
 Remaining recommendation:
 
-- Move pure topology/geometry selection into `stitch_selection.cpp` and bridge
-  matching/splicing into `stitch_proposal.cpp`; keep sampler orchestration and
-  commit in `interacting_sampler.cpp`.
+- Completed 2026-07-21: move pure topology/geometry selection into
+  `stitch_selection.cpp`. Moving bridge matching/splicing into
+  `stitch_proposal.cpp` remains open; keep sampler orchestration and commit in
+  `interacting_sampler.cpp`.
 - Completed 2026-07-21: add `StitchSeamContext` containing `tau0/tau1`, left
   positions, and partner buckets. Its invariance across accepted fixed-seam
   stitches is part of the type's documented contract.
@@ -1243,8 +1252,9 @@ visible at the assertion sites.
    merge was benchmarked and reverted 2026-07-21. Add the bundled interaction
    measurement separately.
 9. Segment/stitch option values, early compound-plan preparation, fixed-seam
-   bridge-distribution caching, and fixed-capacity strand selection completed
-   2026-07-21; split stitch selection/proposal code separately.
+   bridge-distribution caching, fixed-capacity strand selection, and the
+   stitch-selection translation-unit split completed 2026-07-21; split bridge
+   proposal code separately.
 10. Split translation units and demos after responsibilities have stabilized.
 11. GoogleTest exclusion from clang-tidy completed 2026-07-19; add install, CI,
    benchmark support, and an external consumer test.
