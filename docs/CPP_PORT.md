@@ -292,16 +292,30 @@ struct SweepOptions {
   std::size_t global_updates = 0;
 };
 
+struct SegmentUpdateOptions {
+  std::optional<ParticleId> particle;
+  std::optional<std::pair<double, double>> interval;
+  double fraction = 0.25;
+};
+
+struct StitchUpdateOptions {
+  std::size_t strand_count = 2;
+  std::optional<ParticleId> anchor;
+  std::vector<ParticleId> strands;
+  std::optional<std::pair<double, double>> interval;
+  double fraction = 0.25;
+  std::size_t locality_radius = 1;
+  double global_partner_probability = 0.05;
+};
+
 class InteractingSampler {
  public:
   InteractingSampler(InteractingModel, NumericalOptions, std::uint64_t seed);
 
-  bool segment_update(
-      std::optional<ParticleId> particle = {},
-      std::optional<std::pair<double, double>> interval = {},
-      double fraction = 0.25);
+  bool segment_update(const SegmentUpdateOptions& = {});
   bool whole_worldline_update(std::optional<ParticleId> particle = {});
   bool cycle_update(std::optional<std::size_t> cycle_index = {});
+  bool stitch_update(const StitchUpdateOptions& = {});
   bool global_update();
   void sweep(const SweepOptions& = {});
 

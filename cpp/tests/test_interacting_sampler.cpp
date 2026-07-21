@@ -61,6 +61,24 @@ InteractingModel sampler_model(const double interaction) {
   };
 }
 
+void expect_same_sampler(const InteractingSampler &actual, const InteractingSampler &expected) {
+  EXPECT_EQ(actual.state(), expected.state());
+  EXPECT_DOUBLE_EQ(actual.pair_overlap(), expected.pair_overlap());
+  EXPECT_DOUBLE_EQ(actual.action(), expected.action());
+  EXPECT_TRUE(detail::InteractingSamplerTestAccess::occupancy_matches_state(actual));
+  EXPECT_TRUE(detail::InteractingSamplerTestAccess::occupancy_matches_state(expected));
+  EXPECT_NEAR(pair_overlap_time(actual.state()), actual.pair_overlap(), 1e-12);
+  for (const MoveKind move : {MoveKind::SegmentMove, MoveKind::CycleMove, MoveKind::GlobalMove,
+                              MoveKind::StitchMove, MoveKind::TimeShiftMove}) {
+    const MoveStatistics &actual_statistics = actual.statistics(move);
+    const MoveStatistics &expected_statistics = expected.statistics(move);
+    EXPECT_EQ(actual_statistics.attempts, expected_statistics.attempts);
+    EXPECT_EQ(actual_statistics.accepts, expected_statistics.accepts);
+    EXPECT_EQ(actual_statistics.topology_changes, expected_statistics.topology_changes);
+    EXPECT_EQ(actual_statistics.successor_changes, expected_statistics.successor_changes);
+  }
+}
+
 struct BruteMatchingLaw {
   std::array<std::array<std::size_t, 3>, 6> matchings{};
   std::array<double, 6> weights{};
@@ -151,9 +169,21 @@ TEST(InteractingSamplerTest, PermanentMatchingSamplerMatchesBruteForceLaw) {
 TEST(InteractingSamplerTest, ZeroInteractionMovesAreRejectionFree) {
   InteractingSampler sampler(sampler_model(0.0), 12);
   for (int update = 0; update < 20; ++update) {
-    EXPECT_TRUE(sampler.segment_update(std::nullopt, std::nullopt, 0.4));
+    EXPECT_TRUE(sampler.segment_update(SegmentUpdateOptions{
+        .particle = std::nullopt,
+        .interval = std::nullopt,
+        .fraction = 0.4,
+    }));
     EXPECT_TRUE(sampler.cycle_update());
-    EXPECT_TRUE(sampler.stitch_update(std::nullopt, std::nullopt, std::nullopt, 0.3));
+    EXPECT_TRUE(sampler.stitch_update(StitchUpdateOptions{
+        .strand_count = 2,
+        .anchor = std::nullopt,
+        .strands = {},
+        .interval = std::nullopt,
+        .fraction = 0.3,
+        .locality_radius = 1,
+        .global_partner_probability = 0.05,
+    }));
     EXPECT_TRUE(sampler.time_shift_update());
     EXPECT_TRUE(sampler.global_update());
   }
@@ -248,8 +278,15 @@ TEST(InteractingSamplerTest, StitchUpdatesChangeTopologyAndKeepActionCacheExact)
   };
   InteractingSampler sampler(model, 121);
   for (int step = 0; step < 200; ++step) {
-    static_cast<void>(
-        sampler.stitch_update(std::nullopt, std::nullopt, std::nullopt, 0.25, 2, 0.1));
+    static_cast<void>(sampler.stitch_update(StitchUpdateOptions{
+        .strand_count = 2,
+        .anchor = std::nullopt,
+        .strands = {},
+        .interval = std::nullopt,
+        .fraction = 0.25,
+        .locality_radius = 2,
+        .global_partner_probability = 0.1,
+    }));
     if (step % 10 == 0) {
       EXPECT_NO_THROW(sampler.state().validate());
       const double recomputed = pair_overlap_time(sampler.state());
@@ -275,7 +312,14 @@ TEST(InteractingSamplerTest, CollectiveStitchMixtureKeepsActionCacheExact) {
       .strand_weights = {1.0, 1.0, 1.0},
   };
   for (int step = 0; step < 120; ++step) {
-    sampler.stitch_sweep(1, 0.55, std::nullopt, 2, 0.1, mixture);
+    sampler.stitch_sweep(StitchSweepOptions{
+        .updates = 1,
+        .fraction = 0.55,
+        .tau0 = std::nullopt,
+        .locality_radius = 2,
+        .global_partner_probability = 0.1,
+        .mixture = mixture,
+    });
     if (step % 9 == 0) {
       EXPECT_NO_THROW(sampler.state().validate());
       const double recomputed = pair_overlap_time(sampler.state());
@@ -291,20 +335,93 @@ TEST(InteractingSamplerTest, CollectiveStitchMixtureKeepsActionCacheExact) {
 TEST(InteractingSamplerTest, ExplicitCollectiveStitchValidatesStrands) {
   InteractingSampler sampler(sampler_model(0.0), 818);
   const std::array<ParticleId, 4> strands{0, 1, 2, 3};
-  EXPECT_TRUE(sampler.k_stitch_update(4, strands, std::pair<double, double>{0.1, 0.7}));
+  EXPECT_TRUE(sampler.stitch_update(StitchUpdateOptions{
+      .strand_count = 4,
+      .anchor = std::nullopt,
+      .strands = std::vector<ParticleId>(strands.begin(), strands.end()),
+      .interval = std::pair<double, double>{0.1, 0.7},
+      .fraction = 0.25,
+      .locality_radius = 1,
+      .global_partner_probability = 0.05,
+  }));
+  EXPECT_TRUE(sampler.stitch_update(StitchUpdateOptions{
+      .strand_count = 3,
+      .anchor = 0,
+      .strands = {},
+      .interval = std::pair<double, double>{0.2, 0.6},
+      .fraction = 0.25,
+      .locality_radius = 1,
+      .global_partner_probability = 0.05,
+  }));
   EXPECT_NO_THROW(sampler.state().validate());
-  EXPECT_THROW(static_cast<void>(sampler.k_stitch_update(1)), std::invalid_argument);
-  EXPECT_THROW(static_cast<void>(sampler.k_stitch_update(7)), std::invalid_argument);
-  EXPECT_THROW(static_cast<void>(sampler.k_stitch_update(3, strands)), std::invalid_argument);
-  const std::array<ParticleId, 3> duplicate{0, 1, 1};
-  EXPECT_THROW(static_cast<void>(sampler.k_stitch_update(3, duplicate)), std::invalid_argument);
-  EXPECT_THROW(sampler.stitch_sweep(1, 0.5, std::nullopt, 1, 0.05,
-                                    StitchMixture{.strand_counts = {2, 2}, .strand_weights = {}}),
+  EXPECT_THROW(static_cast<void>(sampler.stitch_update(StitchUpdateOptions{
+                   .strand_count = 1,
+                   .anchor = std::nullopt,
+                   .strands = {},
+                   .interval = std::nullopt,
+                   .fraction = 0.25,
+                   .locality_radius = 1,
+                   .global_partner_probability = 0.05,
+               })),
                std::invalid_argument);
-  EXPECT_THROW(
-      sampler.stitch_sweep(1, 0.5, std::nullopt, 1, 0.05,
-                           StitchMixture{.strand_counts = {2, 3}, .strand_weights = {1.0}}),
-      std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(sampler.stitch_update(StitchUpdateOptions{
+                   .strand_count = 7,
+                   .anchor = std::nullopt,
+                   .strands = {},
+                   .interval = std::nullopt,
+                   .fraction = 0.25,
+                   .locality_radius = 1,
+                   .global_partner_probability = 0.05,
+               })),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(sampler.stitch_update(StitchUpdateOptions{
+                   .strand_count = 3,
+                   .anchor = std::nullopt,
+                   .strands = std::vector<ParticleId>(strands.begin(), strands.end()),
+                   .interval = std::nullopt,
+                   .fraction = 0.25,
+                   .locality_radius = 1,
+                   .global_partner_probability = 0.05,
+               })),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(sampler.stitch_update(StitchUpdateOptions{
+                   .strand_count = 2,
+                   .anchor = 0,
+                   .strands = {0, 1},
+                   .interval = std::nullopt,
+                   .fraction = 0.25,
+                   .locality_radius = 1,
+                   .global_partner_probability = 0.05,
+               })),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(sampler.stitch_update(StitchUpdateOptions{
+                   .strand_count = 3,
+                   .anchor = std::nullopt,
+                   .strands = {0, 1, 1},
+                   .interval = std::nullopt,
+                   .fraction = 0.25,
+                   .locality_radius = 1,
+                   .global_partner_probability = 0.05,
+               })),
+               std::invalid_argument);
+  EXPECT_THROW(sampler.stitch_sweep(StitchSweepOptions{
+                   .updates = 1,
+                   .fraction = 0.5,
+                   .tau0 = std::nullopt,
+                   .locality_radius = 1,
+                   .global_partner_probability = 0.05,
+                   .mixture = {.strand_counts = {2, 2}, .strand_weights = {}},
+               }),
+               std::invalid_argument);
+  EXPECT_THROW(sampler.stitch_sweep(StitchSweepOptions{
+                   .updates = 1,
+                   .fraction = 0.5,
+                   .tau0 = std::nullopt,
+                   .locality_radius = 1,
+                   .global_partner_probability = 0.05,
+                   .mixture = {.strand_counts = {2, 3}, .strand_weights = {1.0}},
+               }),
+               std::invalid_argument);
 }
 
 TEST(InteractingSamplerTest, RejectedGlobalMoveLeavesAcceptedStateUntouched) {
@@ -364,12 +481,24 @@ TEST(InteractingSamplerTest, RejectedLocalMovesLeaveStateCachesAndCountersUntouc
 
   InteractingSampler segment_sampler(model, 1'927);
   expect_rejection(segment_sampler, MoveKind::SegmentMove, [&segment_sampler] {
-    return segment_sampler.segment_update(0, std::pair<double, double>{0.2, 1.7});
+    return segment_sampler.segment_update(SegmentUpdateOptions{
+        .particle = 0,
+        .interval = std::pair<double, double>{0.2, 1.7},
+        .fraction = 0.25,
+    });
   });
 
   InteractingSampler stitch_sampler(model, 2'927);
   expect_rejection(stitch_sampler, MoveKind::StitchMove, [&stitch_sampler] {
-    return stitch_sampler.stitch_update(0, 1, std::pair<double, double>{0.2, 1.7});
+    return stitch_sampler.stitch_update(StitchUpdateOptions{
+        .strand_count = 2,
+        .anchor = std::nullopt,
+        .strands = {0, 1},
+        .interval = std::pair<double, double>{0.2, 1.7},
+        .fraction = 0.25,
+        .locality_radius = 1,
+        .global_partner_probability = 0.05,
+    });
   });
 }
 
@@ -434,6 +563,117 @@ TEST(InteractingSamplerTest, AcceptedCounterOverflowCannotPublishPreparedReplace
             std::numeric_limits<std::uint64_t>::max());
 }
 
+TEST(InteractingSamplerTest, InvalidCompoundPlansPreserveStateStatisticsAndRandomStream) {
+  InteractingSampler sampler(sampler_model(0.0), 59);
+  InteractingSampler control(sampler);
+
+  const SweepOptions invalid_sweep{
+      .segment_updates = 3,
+      .segment_fraction = 0.4,
+      .cycle_updates = 2,
+      .global_updates = 0,
+      .stitch_updates = 1,
+      .stitch_fraction = 0.0,
+      .stitch_locality_radius = 1,
+      .stitch_global_partner_probability = 0.05,
+      .stitch_mixture = {},
+      .time_shift_updates = 0,
+  };
+  EXPECT_THROW(sampler.sweep(invalid_sweep), std::invalid_argument);
+  expect_same_sampler(sampler, control);
+
+  const SweepOptions valid_sweep{
+      .segment_updates = 2,
+      .segment_fraction = 0.4,
+      .cycle_updates = 1,
+      .global_updates = 0,
+      .stitch_updates = 2,
+      .stitch_fraction = 0.3,
+      .stitch_locality_radius = 1,
+      .stitch_global_partner_probability = 0.05,
+      .stitch_mixture = {},
+      .time_shift_updates = 1,
+  };
+  sampler.sweep(valid_sweep);
+  control.sweep(valid_sweep);
+  expect_same_sampler(sampler, control);
+
+  EXPECT_THROW(sampler.random_seam_stitch_sweep(RandomSeamStitchOptions{
+                   .updates = 2,
+                   .fraction = 0.35,
+                   .locality_radius = 1,
+                   .global_partner_probability = 2.0,
+                   .mixture = {},
+               }),
+               std::invalid_argument);
+  expect_same_sampler(sampler, control);
+
+  const RandomSeamStitchOptions valid_random_seam{
+      .updates = 2,
+      .fraction = 0.45,
+      .locality_radius = 2,
+      .global_partner_probability = 0.1,
+      .mixture = {},
+  };
+  sampler.random_seam_stitch_sweep(valid_random_seam);
+  control.random_seam_stitch_sweep(valid_random_seam);
+  expect_same_sampler(sampler, control);
+
+  const RunOptions invalid_run{
+      .burn_in = 2,
+      .thin = 1,
+      .sweep = {.segment_updates = 2,
+                .segment_fraction = 0.3,
+                .cycle_updates = 1,
+                .global_updates = 0,
+                .stitch_updates = 1,
+                .stitch_fraction = 0.25,
+                .stitch_locality_radius = 1,
+                .stitch_global_partner_probability = 0.05,
+                .stitch_mixture = {.strand_counts = {2, 2}, .strand_weights = {}},
+                .time_shift_updates = 0},
+  };
+  EXPECT_THROW(static_cast<void>(sampler.run(1, invalid_run)), std::invalid_argument);
+  expect_same_sampler(sampler, control);
+
+  sampler.sweep(valid_sweep);
+  control.sweep(valid_sweep);
+  expect_same_sampler(sampler, control);
+}
+
+TEST(InteractingSamplerTest, SweepValidatesInactiveMoveOptions) {
+  InteractingSampler sampler(sampler_model(1.0), 69);
+  InteractingSampler control(sampler);
+  EXPECT_THROW(sampler.sweep(SweepOptions{
+                   .segment_updates = 0,
+                   .segment_fraction = 0.0,
+                   .cycle_updates = 0,
+                   .global_updates = 0,
+                   .stitch_updates = 0,
+                   .stitch_fraction = 0.25,
+                   .stitch_locality_radius = 1,
+                   .stitch_global_partner_probability = 0.05,
+                   .stitch_mixture = {},
+                   .time_shift_updates = 0,
+               }),
+               std::invalid_argument);
+  expect_same_sampler(sampler, control);
+  EXPECT_THROW(sampler.sweep(SweepOptions{
+                   .segment_updates = 0,
+                   .segment_fraction = 0.25,
+                   .cycle_updates = 0,
+                   .global_updates = 0,
+                   .stitch_updates = 0,
+                   .stitch_fraction = 0.25,
+                   .stitch_locality_radius = 1,
+                   .stitch_global_partner_probability = 2.0,
+                   .stitch_mixture = {},
+                   .time_shift_updates = 0,
+               }),
+               std::invalid_argument);
+  expect_same_sampler(sampler, control);
+}
+
 TEST(InteractingSamplerTest, RunAppliesBurnInThinningAndReturnsTypedMeasurements) {
   InteractingSampler sampler(sampler_model(1.0), 77);
   const RunOptions options{
@@ -454,14 +694,40 @@ TEST(InteractingSamplerTest, RunAppliesBurnInThinningAndReturnsTypedMeasurements
                std::invalid_argument);
 }
 
-TEST(InteractingSamplerTest, EmptySystemLocalMovesAreNoOps) {
+TEST(InteractingSamplerTest, EmptySystemValidLocalMovesAreNoOpsAndInvalidOptionsFail) {
   const InteractingModel model{
       .free = qmc::Model(qmc::ModelParameters{
           .particle_count = 0, .beta = 1.0, .linear_size = 3, .dimension = 1, .hopping = 1.0}),
       .interaction = 2.0,
   };
   InteractingSampler sampler(model, 5);
-  EXPECT_TRUE(sampler.segment_update(99, std::nullopt, -1.0));
+  EXPECT_TRUE(sampler.segment_update());
+  EXPECT_TRUE(sampler.stitch_update());
+  EXPECT_THROW(static_cast<void>(sampler.segment_update(SegmentUpdateOptions{
+                   .particle = 99,
+                   .interval = std::nullopt,
+                   .fraction = -1.0,
+               })),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(sampler.stitch_update(StitchUpdateOptions{
+                   .strand_count = 2,
+                   .anchor = std::nullopt,
+                   .strands = {},
+                   .interval = std::nullopt,
+                   .fraction = 0.0,
+                   .locality_radius = 1,
+                   .global_partner_probability = 0.05,
+               })),
+               std::invalid_argument);
+  EXPECT_THROW(sampler.stitch_sweep(StitchSweepOptions{
+                   .updates = 0,
+                   .fraction = 0.0,
+                   .tau0 = std::nullopt,
+                   .locality_radius = 1,
+                   .global_partner_probability = 0.05,
+                   .mixture = {},
+               }),
+               std::invalid_argument);
   EXPECT_TRUE(sampler.cycle_update(99));
   EXPECT_EQ(sampler.statistics(MoveKind::SegmentMove).attempts, 0U);
   EXPECT_EQ(sampler.statistics(MoveKind::CycleMove).attempts, 0U);
@@ -472,16 +738,70 @@ TEST(InteractingSamplerTest, EmptySystemLocalMovesAreNoOps) {
 
 TEST(InteractingSamplerTest, ValidatesExplicitMoveArguments) {
   InteractingSampler sampler(sampler_model(1.0), 91);
-  EXPECT_THROW(static_cast<void>(sampler.segment_update(99)), std::invalid_argument);
-  EXPECT_THROW(static_cast<void>(sampler.segment_update(0, std::nullopt, 0.0)),
+  EXPECT_THROW(static_cast<void>(sampler.segment_update(SegmentUpdateOptions{
+                   .particle = 99,
+                   .interval = std::nullopt,
+                   .fraction = 0.25,
+               })),
                std::invalid_argument);
-  EXPECT_THROW(static_cast<void>(sampler.segment_update(0, std::pair<double, double>{0.8, 0.2})),
+  EXPECT_THROW(static_cast<void>(sampler.segment_update(SegmentUpdateOptions{
+                   .particle = 0,
+                   .interval = std::nullopt,
+                   .fraction = 0.0,
+               })),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(sampler.segment_update(SegmentUpdateOptions{
+                   .particle = 0,
+                   .interval = std::pair<double, double>{0.2, 0.8},
+                   .fraction = 0.0,
+               })),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(sampler.segment_update(SegmentUpdateOptions{
+                   .particle = 0,
+                   .interval = std::pair<double, double>{0.8, 0.2},
+                   .fraction = 0.25,
+               })),
                std::invalid_argument);
   EXPECT_THROW(static_cast<void>(sampler.cycle_update(99)), std::invalid_argument);
-  EXPECT_THROW(static_cast<void>(sampler.stitch_update(0, 0)), std::invalid_argument);
-  EXPECT_THROW(static_cast<void>(sampler.stitch_update(0, 1, std::nullopt, 0.0)),
+  EXPECT_THROW(static_cast<void>(sampler.stitch_update(StitchUpdateOptions{
+                   .strand_count = 2,
+                   .anchor = std::nullopt,
+                   .strands = {0, 0},
+                   .interval = std::nullopt,
+                   .fraction = 0.25,
+                   .locality_radius = 1,
+                   .global_partner_probability = 0.05,
+               })),
                std::invalid_argument);
-  EXPECT_THROW(static_cast<void>(sampler.stitch_update(0, 1, std::pair<double, double>{0.8, 0.2})),
+  EXPECT_THROW(static_cast<void>(sampler.stitch_update(StitchUpdateOptions{
+                   .strand_count = 2,
+                   .anchor = std::nullopt,
+                   .strands = {0, 1},
+                   .interval = std::nullopt,
+                   .fraction = 0.0,
+                   .locality_radius = 1,
+                   .global_partner_probability = 0.05,
+               })),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(sampler.stitch_update(StitchUpdateOptions{
+                   .strand_count = 2,
+                   .anchor = std::nullopt,
+                   .strands = {0, 1},
+                   .interval = std::pair<double, double>{0.2, 0.8},
+                   .fraction = 0.0,
+                   .locality_radius = 1,
+                   .global_partner_probability = 0.05,
+               })),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(sampler.stitch_update(StitchUpdateOptions{
+                   .strand_count = 2,
+                   .anchor = std::nullopt,
+                   .strands = {0, 1},
+                   .interval = std::pair<double, double>{0.8, 0.2},
+                   .fraction = 0.25,
+                   .locality_radius = 1,
+                   .global_partner_probability = 0.05,
+               })),
                std::invalid_argument);
   EXPECT_THROW(static_cast<void>(sampler.time_shift_update(1.1)), std::invalid_argument);
   EXPECT_THROW(static_cast<void>(sampler.statistics(static_cast<MoveKind>(99))),

@@ -53,6 +53,51 @@ struct StitchMixture {
   std::vector<double> strand_weights;
 };
 
+struct SegmentUpdateOptions {
+  // interval, when present, is an explicit [tau0, tau1] inside [0, beta].
+  // Otherwise fraction selects the interval duration and must lie in (0, 1].
+  // Every field is validated before random-number consumption, including
+  // fraction when interval is present.
+  std::optional<ParticleId> particle;
+  std::optional<std::pair<double, double>> interval;
+  double fraction = 0.25;
+};
+
+struct StitchUpdateOptions {
+  // Empty strands selects a reversible spatially local set. Otherwise strands
+  // must contain exactly strand_count distinct labels and anchor must be empty.
+  // anchor optionally fixes the first label of an automatically selected set.
+  // Every field is validated before random-number consumption.
+  std::size_t strand_count = 2;
+  std::optional<ParticleId> anchor;
+  std::vector<ParticleId> strands;
+  std::optional<std::pair<double, double>> interval;
+  double fraction = 0.25;
+  std::size_t locality_radius = 1;
+  double global_partner_probability = 0.05;
+};
+
+struct StitchSweepOptions {
+  // nullopt means one stitch attempt per particle.
+  // tau0 fixes the shared left seam; otherwise it is sampled uniformly.
+  std::optional<std::size_t> updates;
+  double fraction = 0.25;
+  std::optional<double> tau0;
+  std::size_t locality_radius = 1;
+  double global_partner_probability = 0.05;
+  StitchMixture mixture;
+};
+
+struct RandomSeamStitchOptions {
+  // nullopt means one stitch attempt per particle.
+  // Every field is validated before the first time-origin rotation.
+  std::optional<std::size_t> updates;
+  double fraction = 0.35;
+  std::size_t locality_radius = 1;
+  double global_partner_probability = 0.05;
+  StitchMixture mixture;
+};
+
 struct SweepOptions {
   // nullopt means one segment attempt per particle.
   std::optional<std::size_t> segment_updates;
@@ -96,39 +141,21 @@ public:
   InteractingSampler(InteractingSampler &&) noexcept;
   InteractingSampler &operator=(InteractingSampler &&) noexcept;
 
-  [[nodiscard]] bool
-  segment_update(std::optional<ParticleId> particle = std::nullopt,
-                 std::optional<std::pair<double, double>> interval = std::nullopt,
-                 double fraction = 0.25);
+  [[nodiscard]] bool segment_update(const SegmentUpdateOptions &options = SegmentUpdateOptions{});
   [[nodiscard]] bool whole_worldline_update(std::optional<ParticleId> particle = std::nullopt);
   [[nodiscard]] bool cycle_update(std::optional<std::size_t> cycle_index = std::nullopt);
-  // Redraws k paths inside a slab from the exact permanent-normalized ideal
-  // torus conditional. Empty strands selects a reversible spatially local set.
-  [[nodiscard]] bool
-  k_stitch_update(std::size_t k, std::span<const ParticleId> strands = {},
-                  std::optional<std::pair<double, double>> interval = std::nullopt,
-                  double fraction = 0.25, std::size_t locality_radius = 1,
-                  double global_partner_probability = 0.05);
-  // Backward-compatible two-strand wrapper.
-  [[nodiscard]] bool stitch_update(std::optional<ParticleId> particle = std::nullopt,
-                                   std::optional<ParticleId> partner = std::nullopt,
-                                   std::optional<std::pair<double, double>> interval = std::nullopt,
-                                   double fraction = 0.25, std::size_t locality_radius = 1,
-                                   double global_partner_probability = 0.05);
+  // Redraws 2 <= k <= 8 paths inside a slab from the exact
+  // permanent-normalized ideal torus conditional. A valid pair request is a
+  // no-op when the model contains fewer than two particles.
+  [[nodiscard]] bool stitch_update(const StitchUpdateOptions &options = StitchUpdateOptions{});
   // Performs several random-scan stitch attempts at one seam, amortizing the
-  // position bucket construction. nullopt means one attempt per particle.
-  void stitch_sweep(std::optional<std::size_t> updates = std::nullopt, double fraction = 0.25,
-                    std::optional<double> tau0 = std::nullopt, std::size_t locality_radius = 1,
-                    double global_partner_probability = 0.05,
-                    const StitchMixture &mixture = StitchMixture{});
+  // position bucket construction.
+  void stitch_sweep(const StitchSweepOptions &options = StitchSweepOptions{});
   // Rejection-free cyclic rotation of every closed permutation loop.
   [[nodiscard]] bool time_shift_update(std::optional<double> shift = std::nullopt);
   // Strictly reversible A B^m A macro-kernel: uniform time rotation, fixed-seam
   // stitch sweep, and a second independent uniform time rotation.
-  void random_seam_stitch_sweep(std::optional<std::size_t> updates = std::nullopt,
-                                double fraction = 0.35, std::size_t locality_radius = 1,
-                                double global_partner_probability = 0.05,
-                                const StitchMixture &mixture = StitchMixture{});
+  void random_seam_stitch_sweep(const RandomSeamStitchOptions &options = RandomSeamStitchOptions{});
   [[nodiscard]] bool global_update();
   void sweep(const SweepOptions &options = SweepOptions{});
 
@@ -162,6 +189,29 @@ private:
     std::size_t successor_changes = 0;
   };
 
+  struct PreparedStitchMixture {
+    std::vector<std::size_t> counts;
+    std::vector<double> weights;
+  };
+
+  struct PreparedStitchSweep {
+    std::size_t updates = 0;
+    double duration = 0.0;
+    std::optional<double> tau0;
+    std::size_t locality_radius = 0;
+    double global_partner_probability = 0.0;
+    PreparedStitchMixture mixture;
+  };
+
+  struct PreparedSweep {
+    std::size_t segment_updates = 0;
+    double segment_fraction = 0.0;
+    std::size_t cycle_updates = 0;
+    std::size_t global_updates = 0;
+    PreparedStitchSweep stitch;
+    std::size_t time_shift_updates = 0;
+  };
+
   bool try_path_replacements(std::vector<LabeledPath> replacements, MoveKind move);
   bool try_proposal(LocalProposal proposal, MoveStatistics &move_statistics);
   [[nodiscard]] StitchProposal sample_stitch_proposal(std::span<const ParticleId> strands,
@@ -169,6 +219,15 @@ private:
   [[nodiscard]] bool try_stitch_strands(std::span<const ParticleId> strands, double tau0,
                                         double tau1);
   [[nodiscard]] bool metropolis_accept(double delta_action);
+  void validate_segment_update_options(const SegmentUpdateOptions &options) const;
+  void validate_stitch_update_options(const StitchUpdateOptions &options) const;
+  [[nodiscard]] PreparedStitchMixture prepare_stitch_mixture(const StitchMixture &mixture) const;
+  [[nodiscard]] PreparedStitchSweep prepare_stitch_sweep(const StitchSweepOptions &options) const;
+  [[nodiscard]] PreparedSweep prepare_sweep(const SweepOptions &options) const;
+  [[nodiscard]] bool execute_segment_update(const SegmentUpdateOptions &options);
+  [[nodiscard]] bool execute_stitch_update(const StitchUpdateOptions &options);
+  void execute_stitch_sweep(const PreparedStitchSweep &options);
+  void execute_sweep(const PreparedSweep &options);
 
   InteractingModel model_;
   TorusLayout layout_;

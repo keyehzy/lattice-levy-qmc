@@ -279,12 +279,14 @@ successors at once while remaining entirely in the space of closed
 configurations. A small uniform-partner component prevents the locality
 heuristic from disconnecting the chain.
 
-`random_seam_stitch_sweep(m)` applies a palindromic kernel `A B**m A`, where
-`A` is the reversible uniform time-origin rotation and `B` is the fixed-seam
-random-scan stitch kernel. This macro-kernel satisfies detailed balance and
-amortizes one spatial bucket build over all stitch attempts. See
+`random_seam_stitch_sweep(options)` applies a palindromic kernel `A B**m A`,
+where `m` is the resolved update count (`options.updates`, or one attempt per
+particle), `A` is the reversible uniform time-origin rotation, and `B` is the
+fixed-seam random-scan stitch kernel. This macro-kernel satisfies detailed
+balance and amortizes one spatial bucket build over all stitch attempts. The
+complete option value is validated before the first rotation. See
 `RANDOM_SEAM_STITCH.md` for the derivation. `sweep()` remains a configurable
-low-level scheduler.
+low-level scheduler and validates its complete plan before the first move.
 
 ## 8. Observables
 

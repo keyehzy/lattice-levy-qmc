@@ -24,11 +24,7 @@ struct CommandLine {
   std::size_t burn_in;
   std::size_t thin;
   qmc::SweepOptions sweep;
-  std::size_t stitch_updates;
-  double stitch_fraction;
-  std::size_t stitch_locality_radius;
-  double stitch_global_partner_probability;
-  qmc::StitchMixture stitch_mixture;
+  qmc::RandomSeamStitchOptions random_seam_stitch;
   std::filesystem::path output;
 };
 
@@ -122,13 +118,17 @@ std::optional<CommandLine> parse_command_line(const int argc, char **argv) {
                 .cycle_updates = result["cycle-updates"].as<std::size_t>(),
                 .global_updates = result["global-updates"].as<std::size_t>(),
                 .stitch_mixture = {}},
-      .stitch_updates = stitch_updates,
-      .stitch_fraction = result["stitch-fraction"].as<double>(),
-      .stitch_locality_radius = result["stitch-locality-radius"].as<std::size_t>(),
-      .stitch_global_partner_probability = result["stitch-global-partner-probability"].as<double>(),
-      .stitch_mixture = {.strand_counts =
-                             result["stitch-strand-counts"].as<std::vector<std::size_t>>(),
-                         .strand_weights = std::move(stitch_strand_weights)},
+      .random_seam_stitch =
+          {
+              .updates = stitch_updates,
+              .fraction = result["stitch-fraction"].as<double>(),
+              .locality_radius = result["stitch-locality-radius"].as<std::size_t>(),
+              .global_partner_probability =
+                  result["stitch-global-partner-probability"].as<double>(),
+              .mixture = {.strand_counts =
+                              result["stitch-strand-counts"].as<std::vector<std::size_t>>(),
+                          .strand_weights = std::move(stitch_strand_weights)},
+          },
       .output = result["output"].as<std::string>(),
   };
 }
@@ -164,11 +164,8 @@ int main(const int argc, char **argv) {
     command_line->model.validate();
     qmc::InteractingSampler sampler(command_line->model, command_line->seed);
     const auto advance = [&sampler, &command_line] {
-      if (command_line->stitch_updates != 0) {
-        sampler.random_seam_stitch_sweep(
-            command_line->stitch_updates, command_line->stitch_fraction,
-            command_line->stitch_locality_radius, command_line->stitch_global_partner_probability,
-            command_line->stitch_mixture);
+      if (command_line->random_seam_stitch.updates.value_or(0) != 0) {
+        sampler.random_seam_stitch_sweep(command_line->random_seam_stitch);
       }
       sampler.sweep(command_line->sweep);
     };

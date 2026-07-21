@@ -76,7 +76,7 @@ type collects one invariant that is currently spread across several files.
 | P1 | Unify discrete log-weight draws and bounded-tail sampling (done 2026-07-20) | One truncation policy and fewer allocations | Medium |
 | P1 | Unify full/incremental action around accepted state (ownership slice done 2026-07-20) | One source of truth and faster full evaluation | Medium |
 | P1 | Make permutation topology authoritative (continuous and retained ideal done 2026-07-20) | Remove duplicated state and synchronization code | Medium |
-| P1 | Separate stitch selection, proposal, and commit | Readability, testability, and API clarity | Medium |
+| P1 | Separate stitch selection, proposal, and commit (option/prevalidation slice done 2026-07-21) | Readability, testability, and API clarity | Medium |
 | P2 | Add streaming runs, checkpoints, and prepared options | Operational quality of life | Small/medium |
 | P2 | Consolidate local helpers, names, and value equality | Less duplication and review noise | Small |
 | P2 | Split large translation units and demo output code | Navigation and reviewability | Small |
@@ -812,7 +812,25 @@ the existing exhaustive validation tests as equivalence tests during the move.
 
 ### 11. P1: split stitch mechanics and replace positional APIs with option values
 
-Evidence:
+Status (2026-07-21): the option-value and prevalidation slice is complete.
+`SegmentUpdateOptions`, `StitchUpdateOptions`, `StitchSweepOptions`, and
+`RandomSeamStitchOptions` replace the positional update signatures. Pair and
+collective proposals now enter through one `stitch_update()` selected by an
+explicit strand count, with an optional anchor or complete explicit strand set.
+All option fields are validated before randomness, including fields unused by
+an explicit interval or zero update count. `sweep()` builds one private prepared
+plan before its first move, and `run()` reuses that plan and its prepared stitch
+mixture across burn-in and sampling. The random-seam macro-kernel likewise
+prepares its fixed-seam request before the first rotation. Clone-based
+regressions prove invalid sweep, run, and random-seam requests preserve the
+configuration, occupancy-derived caches, statistics, and subsequent random
+stream. Valid default segment/stitch updates remain no-ops for undersized
+systems, while explicitly malformed segment/stitch options now fail
+consistently. Translation-unit splitting,
+seam/bridge-distribution caching, fixed-capacity strand selection, and removal
+of the legacy two-strand matching order remain open.
+
+Pre-slice evidence:
 
 - `interacting_sampler.cpp` is 1,036 lines. Its first 490 lines combine hashing,
   torus neighborhoods, partner selection, mixture preparation, interval
@@ -839,13 +857,11 @@ Evidence:
   That duplicates the general permanent path even though seeded stream identity
   is not a mathematical requirement.
 
-Recommendation:
+Remaining recommendation:
 
 - Move pure topology/geometry selection into `stitch_selection.cpp` and bridge
   matching/splicing into `stitch_proposal.cpp`; keep sampler orchestration and
   commit in `interacting_sampler.cpp`.
-- Replace long signatures with `SegmentUpdateOptions` and `StitchUpdateOptions`.
-  Prepare/validate `StitchMixture` once when a sweep plan is installed.
 - Add `StitchSeamContext` containing `tau0/tau1`, left positions, and partner
   buckets. Its invariance across accepted fixed-seam stitches is part of the
   type's documented contract.
@@ -856,8 +872,6 @@ Recommendation:
 - For at most eight strands, use a small fixed array of selected labels and scan
   candidate spans instead of allocating an `N`-bit vector and copied filtered
   vectors on each attempt.
-- Make the two-strand convenience wrapper construct k-stitch options and use the
-  same implementation.
 - Route `k == 2` through the same prepared-permanent evaluator and sampler as all
   other supported sizes. Preserve the pair-law test, but allow its seeded sample
   sequence to change.
@@ -871,7 +885,17 @@ workload for the proposed seam and bridge-distribution caches.
 
 ### 12. P2: improve sampling workflow APIs
 
-Evidence:
+Status (2026-07-21): the prepared-plan and early-validation slice is complete.
+`sweep()` validates every move option, including inactive branches, before the
+first move or random draw. `run()` prepares that same plan once before burn-in
+and reuses it for every sweep. Random-seam stitch options are validated before
+the first time rotation. Invalid-plan regressions compare a copied sampler
+before and after the failure and after a subsequent valid plan, covering state,
+caches, statistics, and RNG progression. Streaming observers, an integrated
+macro-kernel plan, statistics helpers, copy policy, checkpoints, and trace
+metadata remain open.
+
+Remaining evidence:
 
 - `run()` always materializes every `InteractingObservables` record in a vector
   (`src/interacting_sampler.cpp:1013-1033`). The interacting demo reimplements
@@ -889,18 +913,6 @@ Evidence:
   statistics array has a hard-coded length of five
   (`src/interacting_sampler.cpp:20-34`, `src/interacting_sampler.cpp:492-506`, and
   `include/qmc/interacting_sampler.hpp:141-170`).
-- options are validated only along the branch that happens to execute. Empty
-  systems return success before checking explicit invalid segment/stitch
-  arguments (`src/interacting_sampler.cpp:629-650` and
-  `src/interacting_sampler.cpp:843-891`), while a numerical failure is counted
-  as a stitch attempt but not as a segment attempt.
-  These behaviors are currently accidental API semantics rather than one stated
-  policy.
-- `sweep()` performs segment and cycle updates before a later stitch call
-  validates its options (`src/interacting_sampler.cpp:974-991`), and
-  `random_seam_stitch_sweep()` rotates once before validating the fixed-seam
-  request (`src/interacting_sampler.cpp:942-949`). Invalid plans can therefore
-  throw after partially advancing the chain.
 - the interacting trace header records column names but not the model, seed,
   sweep plan, burn-in, or thinning that produced it
   (`examples/interacting_demo.cpp:178-201`), making a detached output file hard
@@ -915,9 +927,6 @@ Recommendation:
 - Define a concrete `SweepPlan` that can include segment, cycle, global, time
   shift, and random-seam macro-kernels in documented order. Avoid a generic
   command framework.
-- Validate and prepare that plan once, before any RNG consumption, and define
-  whether invalid/no-op moves and proposal-generation failures count as
-  attempts. Apply that policy uniformly across system sizes and move kinds.
 - Add `reset_statistics()` and iteration over `{MoveKind, name, statistics}`.
 - Prefer a move-only sampler unless deterministic RNG-fork copy behavior is a
   deliberate documented feature. Provide an explicit `clone()` if it is.
@@ -1123,8 +1132,11 @@ visible at the assertion sites.
 8. Accepted-chain ownership completed 2026-07-20; a production k-way event
    merge was benchmarked and reverted 2026-07-21. Add the bundled interaction
    measurement separately.
-9. Split translation units and demos after responsibilities have stabilized.
-10. GoogleTest exclusion from clang-tidy completed 2026-07-19; add install, CI,
+9. Segment/stitch option values and early compound-plan preparation completed
+   2026-07-21; split stitch selection/proposal code and add seam caches
+   separately.
+10. Split translation units and demos after responsibilities have stabilized.
+11. GoogleTest exclusion from clang-tidy completed 2026-07-19; add install, CI,
    benchmark support, and an external consumer test.
 
 Each step should keep the current deterministic, invariant, and statistical

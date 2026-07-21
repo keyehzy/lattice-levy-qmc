@@ -6,6 +6,7 @@
 #include "stitch_matching.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -61,6 +62,20 @@ double checked_action(const double interaction, const double overlap) {
     throw std::overflow_error("interaction action overflowed");
   }
   return action;
+}
+
+void validate_unit_fraction(const double fraction, const char *const message) {
+  if (!std::isfinite(fraction) || fraction <= 0.0 || fraction > 1.0) {
+    throw std::invalid_argument(message);
+  }
+}
+
+void validate_stitch_controls(const double fraction, const double global_partner_probability) {
+  validate_unit_fraction(fraction, "stitch fraction must lie in (0, 1]");
+  if (!std::isfinite(global_partner_probability) || global_partner_probability < 0.0 ||
+      global_partner_probability > 1.0) {
+    throw std::invalid_argument("global partner probability must lie in [0, 1]");
+  }
 }
 
 using PartnerBuckets = std::unordered_map<SiteId, std::vector<ParticleId>, SiteIdHash>;
@@ -166,33 +181,6 @@ std::vector<ParticleId> local_stitch_candidates(const ParticleId particle,
   return candidates;
 }
 
-ParticleId select_stitch_partner(const ParticleId particle, const std::vector<SiteId> &positions,
-                                 const PartnerBuckets &buckets, const TorusLayout &layout,
-                                 const Model &model, const std::size_t locality_radius,
-                                 const double global_partner_probability, Random &random) {
-  if (!std::isfinite(global_partner_probability) || global_partner_probability < 0.0 ||
-      global_partner_probability > 1.0) {
-    throw std::invalid_argument("global partner probability must lie in [0, 1]");
-  }
-  if (model.particle_count() < 2 || static_cast<std::size_t>(particle) >= model.particle_count()) {
-    throw std::invalid_argument("cannot select a stitch partner for this particle");
-  }
-
-  const bool use_global = random.uniform_unit() < global_partner_probability;
-  std::vector<ParticleId> candidates;
-  if (!use_global) {
-    candidates = local_stitch_candidates(particle, positions, buckets, layout, locality_radius);
-  }
-  if (!candidates.empty()) {
-    return candidates[random.uniform_index(static_cast<std::uint64_t>(candidates.size()))];
-  }
-
-  const auto draw = static_cast<std::size_t>(
-      random.uniform_index(static_cast<std::uint64_t>(model.particle_count() - 1)));
-  const auto particle_index = static_cast<std::size_t>(particle);
-  return static_cast<ParticleId>(draw < particle_index ? draw : draw + 1);
-}
-
 std::vector<ParticleId> unselected_labels(const std::vector<ParticleId> &pool,
                                           const std::vector<bool> &selected) {
   std::vector<ParticleId> result;
@@ -225,17 +213,11 @@ std::vector<ParticleId> select_stitch_strands(
     const ParticleId anchor, const std::size_t strand_count, const std::vector<SiteId> &positions,
     const PartnerBuckets &buckets, const TorusLayout &layout, const Model &model,
     const std::size_t locality_radius, const double global_partner_probability, Random &random) {
-  if (!std::isfinite(global_partner_probability) || global_partner_probability < 0.0 ||
-      global_partner_probability > 1.0) {
-    throw std::invalid_argument("global partner probability must lie in [0, 1]");
-  }
-  if (strand_count < 2 || strand_count > detail::kMaxStitchStrands ||
-      strand_count > model.particle_count()) {
-    throw std::invalid_argument("stitch strand count must lie in [2, min(8, N)]");
-  }
-  if (static_cast<std::size_t>(anchor) >= model.particle_count()) {
-    throw std::invalid_argument("stitch anchor is out of range");
-  }
+  assert(std::isfinite(global_partner_probability) && global_partner_probability >= 0.0 &&
+         global_partner_probability <= 1.0);
+  assert(strand_count >= 2 && strand_count <= detail::kMaxStitchStrands &&
+         strand_count <= model.particle_count());
+  assert(static_cast<std::size_t>(anchor) < model.particle_count());
 
   const std::vector<ParticleId> local_pool =
       local_stitch_candidates(anchor, positions, buckets, layout, locality_radius);
@@ -262,74 +244,17 @@ std::vector<ParticleId> select_stitch_strands(
   return strands;
 }
 
-struct PreparedStitchMixture {
-  std::vector<std::size_t> counts;
-  std::vector<double> weights;
-};
-
-PreparedStitchMixture prepare_stitch_mixture(const StitchMixture &mixture,
-                                             const std::size_t particle_count) {
-  if (mixture.strand_counts.empty()) {
-    throw std::invalid_argument("stitch strand counts must not be empty");
-  }
-  if (!mixture.strand_weights.empty() &&
-      mixture.strand_weights.size() != mixture.strand_counts.size()) {
-    throw std::invalid_argument("stitch strand weights must match strand counts");
-  }
-
-  std::array<bool, detail::kMaxStitchStrands + 1> seen{};
-  PreparedStitchMixture prepared;
-  for (std::size_t index = 0; index < mixture.strand_counts.size(); ++index) {
-    const std::size_t count = mixture.strand_counts[index];
-    if (count < 2 || count > detail::kMaxStitchStrands) {
-      throw std::invalid_argument("every stitch strand count must lie in [2, 8]");
-    }
-    if (seen[count]) {
-      throw std::invalid_argument("stitch strand counts must not contain duplicates");
-    }
-    seen[count] = true;
-    const double weight = mixture.strand_weights.empty() ? 1.0 : mixture.strand_weights[index];
-    if (!std::isfinite(weight) || weight < 0.0) {
-      throw std::invalid_argument("stitch strand weights must be finite and nonnegative");
-    }
-    if (count <= particle_count) {
-      prepared.counts.push_back(count);
-      prepared.weights.push_back(weight);
-    }
-  }
-  if (prepared.counts.empty()) {
-    return prepared;
-  }
-  double total = 0.0;
-  for (const double weight : prepared.weights) {
-    total += weight;
-  }
-  if (!std::isfinite(total) || total <= 0.0) {
-    throw std::invalid_argument("valid stitch strand counts must have positive total weight");
-  }
-  return prepared;
-}
-
-std::pair<double, double> stitch_window(const Model &model, Random &random,
-                                        const std::optional<std::pair<double, double>> interval,
-                                        const double fraction) {
-  double tau0 = 0.0;
-  double tau1 = 0.0;
+std::pair<double, double>
+sample_stitch_window(const Model &model, Random &random,
+                     const std::optional<std::pair<double, double>> interval,
+                     const double fraction) {
   if (interval.has_value()) {
-    tau0 = interval->first;
-    tau1 = interval->second;
-  } else {
-    if (!std::isfinite(fraction) || fraction <= 0.0 || fraction > 1.0) {
-      throw std::invalid_argument("stitch fraction must lie in (0, 1]");
-    }
-    const double duration = fraction * model.beta();
-    tau0 = duration == model.beta() ? 0.0 : random.uniform_unit() * (model.beta() - duration);
-    tau1 = std::min(model.beta(), tau0 + duration);
+    return *interval;
   }
-  if (!std::isfinite(tau0) || !std::isfinite(tau1) || tau0 < 0.0 || tau1 > model.beta() ||
-      tau1 <= tau0) {
-    throw std::invalid_argument("require 0 <= stitch tau0 < tau1 <= beta");
-  }
+  const double duration = fraction * model.beta();
+  const double tau0 =
+      duration == model.beta() ? 0.0 : random.uniform_unit() * (model.beta() - duration);
+  const double tau1 = std::min(model.beta(), tau0 + duration);
   return {tau0, tau1};
 }
 
@@ -427,6 +352,161 @@ std::optional<double> MoveStatistics::successor_changes_per_attempt() const noex
     return std::nullopt;
   }
   return static_cast<double>(successor_changes) / static_cast<double>(attempts);
+}
+
+void InteractingSampler::validate_segment_update_options(
+    const SegmentUpdateOptions &options) const {
+  validate_unit_fraction(options.fraction, "segment fraction must lie in (0, 1]");
+  if (options.particle.has_value() &&
+      static_cast<std::size_t>(*options.particle) >= model_.free.particle_count()) {
+    throw std::invalid_argument("particle label is out of range");
+  }
+  if (options.interval.has_value()) {
+    const auto [tau0, tau1] = *options.interval;
+    if (!std::isfinite(tau0) || !std::isfinite(tau1) || tau0 < 0.0 || tau1 > model_.free.beta() ||
+        tau1 <= tau0) {
+      throw std::invalid_argument("require 0 <= segment tau0 < tau1 <= beta");
+    }
+  }
+}
+
+void InteractingSampler::validate_stitch_update_options(const StitchUpdateOptions &options) const {
+  validate_stitch_controls(options.fraction, options.global_partner_probability);
+  if (options.strand_count < 2 || options.strand_count > detail::kMaxStitchStrands) {
+    throw std::invalid_argument("stitch strand count must lie in [2, 8]");
+  }
+  if (options.interval.has_value()) {
+    const auto [tau0, tau1] = *options.interval;
+    if (!std::isfinite(tau0) || !std::isfinite(tau1) || tau0 < 0.0 || tau1 > model_.free.beta() ||
+        tau1 <= tau0) {
+      throw std::invalid_argument("require 0 <= stitch tau0 < tau1 <= beta");
+    }
+  }
+  if (!options.strands.empty() && options.anchor.has_value()) {
+    throw std::invalid_argument("explicit stitch strands cannot be combined with an anchor");
+  }
+  if (!options.strands.empty() && options.strands.size() != options.strand_count) {
+    throw std::invalid_argument("explicit stitch strands must contain strand_count labels");
+  }
+
+  const std::size_t particle_count = model_.free.particle_count();
+  if (options.anchor.has_value() && static_cast<std::size_t>(*options.anchor) >= particle_count) {
+    throw std::invalid_argument("stitch anchor is out of range");
+  }
+  for (std::size_t index = 0; index < options.strands.size(); ++index) {
+    const ParticleId label = options.strands[index];
+    if (static_cast<std::size_t>(label) >= particle_count) {
+      throw std::invalid_argument("stitch strands must be distinct valid labels");
+    }
+    for (std::size_t previous = 0; previous < index; ++previous) {
+      if (options.strands[previous] == label) {
+        throw std::invalid_argument("stitch strands must be distinct valid labels");
+      }
+    }
+  }
+
+  // A valid pair request is a documented no-op when fewer than two particles
+  // exist. Larger collective requests still report their impossible size.
+  if (particle_count < 2) {
+    if (options.strand_count != 2) {
+      throw std::invalid_argument("stitch strand count cannot exceed the particle count");
+    }
+    return;
+  }
+  if (options.strand_count > particle_count) {
+    throw std::invalid_argument("stitch strand count cannot exceed the particle count");
+  }
+}
+
+InteractingSampler::PreparedStitchMixture
+InteractingSampler::prepare_stitch_mixture(const StitchMixture &mixture) const {
+  if (mixture.strand_counts.empty()) {
+    throw std::invalid_argument("stitch strand counts must not be empty");
+  }
+  if (!mixture.strand_weights.empty() &&
+      mixture.strand_weights.size() != mixture.strand_counts.size()) {
+    throw std::invalid_argument("stitch strand weights must match strand counts");
+  }
+
+  std::array<bool, detail::kMaxStitchStrands + 1> seen{};
+  PreparedStitchMixture prepared;
+  for (std::size_t index = 0; index < mixture.strand_counts.size(); ++index) {
+    const std::size_t count = mixture.strand_counts[index];
+    if (count < 2 || count > detail::kMaxStitchStrands) {
+      throw std::invalid_argument("every stitch strand count must lie in [2, 8]");
+    }
+    if (seen[count]) {
+      throw std::invalid_argument("stitch strand counts must not contain duplicates");
+    }
+    seen[count] = true;
+    const double weight = mixture.strand_weights.empty() ? 1.0 : mixture.strand_weights[index];
+    if (!std::isfinite(weight) || weight < 0.0) {
+      throw std::invalid_argument("stitch strand weights must be finite and nonnegative");
+    }
+    if (count <= model_.free.particle_count()) {
+      prepared.counts.push_back(count);
+      prepared.weights.push_back(weight);
+    }
+  }
+  if (prepared.counts.empty()) {
+    return prepared;
+  }
+  double total = 0.0;
+  for (const double weight : prepared.weights) {
+    total += weight;
+  }
+  if (!std::isfinite(total) || total <= 0.0) {
+    throw std::invalid_argument("valid stitch strand counts must have positive total weight");
+  }
+  return prepared;
+}
+
+InteractingSampler::PreparedStitchSweep
+InteractingSampler::prepare_stitch_sweep(const StitchSweepOptions &options) const {
+  validate_stitch_controls(options.fraction, options.global_partner_probability);
+
+  const double duration = options.fraction * model_.free.beta();
+  if (options.tau0.has_value()) {
+    const double tau0 = *options.tau0;
+    const double tau1 = std::min(model_.free.beta(), tau0 + duration);
+    if (!std::isfinite(tau0) || tau0 < 0.0 || tau1 > model_.free.beta() || tau1 <= tau0) {
+      throw std::invalid_argument("stitch window lies outside [0, beta]");
+    }
+  }
+
+  return PreparedStitchSweep{
+      .updates = options.updates.value_or(model_.free.particle_count()),
+      .duration = duration,
+      .tau0 = options.tau0,
+      .locality_radius = options.locality_radius,
+      .global_partner_probability = options.global_partner_probability,
+      .mixture = prepare_stitch_mixture(options.mixture),
+  };
+}
+
+InteractingSampler::PreparedSweep
+InteractingSampler::prepare_sweep(const SweepOptions &options) const {
+  validate_segment_update_options(SegmentUpdateOptions{
+      .particle = std::nullopt,
+      .interval = std::nullopt,
+      .fraction = options.segment_fraction,
+  });
+  PreparedStitchSweep stitch = prepare_stitch_sweep(StitchSweepOptions{
+      .updates = options.stitch_updates,
+      .fraction = options.stitch_fraction,
+      .tau0 = std::nullopt,
+      .locality_radius = options.stitch_locality_radius,
+      .global_partner_probability = options.stitch_global_partner_probability,
+      .mixture = options.stitch_mixture,
+  });
+  return PreparedSweep{
+      .segment_updates = options.segment_updates.value_or(model_.free.particle_count()),
+      .segment_fraction = options.segment_fraction,
+      .cycle_updates = options.cycle_updates,
+      .global_updates = options.global_updates,
+      .stitch = std::move(stitch),
+      .time_shift_updates = options.time_shift_updates,
+  };
 }
 
 InteractingSampler::InteractingSampler(InteractingModel model, NumericalOptions numerical,
@@ -534,30 +614,27 @@ bool InteractingSampler::try_proposal(LocalProposal proposal, MoveStatistics &mo
   return true;
 }
 
-bool InteractingSampler::segment_update(const std::optional<ParticleId> particle,
-                                        const std::optional<std::pair<double, double>> interval,
-                                        const double fraction) {
+bool InteractingSampler::segment_update(const SegmentUpdateOptions &options) {
+  validate_segment_update_options(options);
+  return execute_segment_update(options);
+}
+
+bool InteractingSampler::execute_segment_update(const SegmentUpdateOptions &options) {
   if (model_.free.particle_count() == 0) {
     return true;
   }
-  const ParticleId label = particle.has_value()
-                               ? *particle
+  const ParticleId label = options.particle.has_value()
+                               ? *options.particle
                                : static_cast<ParticleId>(random_.uniform_index(
                                      static_cast<std::uint64_t>(model_.free.particle_count())));
-  if (static_cast<std::size_t>(label) >= model_.free.particle_count()) {
-    throw std::invalid_argument("particle label is out of range");
-  }
 
   double tau0 = 0.0;
   double tau1 = 0.0;
-  if (interval.has_value()) {
-    tau0 = interval->first;
-    tau1 = interval->second;
+  if (options.interval.has_value()) {
+    tau0 = options.interval->first;
+    tau1 = options.interval->second;
   } else {
-    if (!std::isfinite(fraction) || fraction <= 0.0 || fraction > 1.0) {
-      throw std::invalid_argument("segment fraction must lie in (0, 1]");
-    }
-    const double duration = fraction * model_.free.beta();
+    const double duration = options.fraction * model_.free.beta();
     if (duration == model_.free.beta()) {
       tau0 = 0.0;
     } else {
@@ -574,8 +651,10 @@ bool InteractingSampler::segment_update(const std::optional<ParticleId> particle
 }
 
 bool InteractingSampler::whole_worldline_update(const std::optional<ParticleId> particle) {
-  return segment_update(particle,
-                        std::optional<std::pair<double, double>>{{0.0, model_.free.beta()}});
+  return segment_update(SegmentUpdateOptions{
+      .particle = particle,
+      .interval = std::pair<double, double>{0.0, model_.free.beta()},
+  });
 }
 
 bool InteractingSampler::cycle_update(const std::optional<std::size_t> cycle_index) {
@@ -679,125 +758,64 @@ bool InteractingSampler::try_stitch_strands(const std::span<const ParticleId> st
       move_statistics);
 }
 
-bool InteractingSampler::k_stitch_update(const std::size_t k,
-                                         const std::span<const ParticleId> requested_strands,
-                                         const std::optional<std::pair<double, double>> interval,
-                                         const double fraction, const std::size_t locality_radius,
-                                         const double global_partner_probability) {
-  if (k < 2 || k > detail::kMaxStitchStrands) {
-    throw std::invalid_argument("k must lie in [2, 8]");
-  }
-  if (k > model_.free.particle_count()) {
-    throw std::invalid_argument("k cannot exceed the particle count");
-  }
-  const auto [tau0, tau1] = stitch_window(model_.free, random_, interval, fraction);
-
-  std::vector<ParticleId> strands;
-  if (requested_strands.empty()) {
-    const std::vector<Site> positions = state().positions_at(tau0);
-    const std::vector<SiteId> site_ids = encode_positions(positions, layout_);
-    const PartnerBuckets buckets = build_partner_buckets(site_ids);
-    const auto anchor = static_cast<ParticleId>(
-        random_.uniform_index(static_cast<std::uint64_t>(model_.free.particle_count())));
-    strands = select_stitch_strands(anchor, k, site_ids, buckets, layout_, model_.free,
-                                    locality_radius, global_partner_probability, random_);
-  } else {
-    if (requested_strands.size() != k) {
-      throw std::invalid_argument("explicit stitch strands must contain exactly k labels");
-    }
-    std::vector<bool> selected(model_.free.particle_count(), false);
-    for (const ParticleId label : requested_strands) {
-      if (static_cast<std::size_t>(label) >= model_.free.particle_count() || selected[label]) {
-        throw std::invalid_argument("stitch strands must be distinct valid labels");
-      }
-      selected[label] = true;
-    }
-    strands.assign(requested_strands.begin(), requested_strands.end());
-  }
-  return try_stitch_strands(strands, tau0, tau1);
+bool InteractingSampler::stitch_update(const StitchUpdateOptions &options) {
+  validate_stitch_update_options(options);
+  return execute_stitch_update(options);
 }
 
-bool InteractingSampler::stitch_update(const std::optional<ParticleId> particle,
-                                       const std::optional<ParticleId> partner,
-                                       const std::optional<std::pair<double, double>> interval,
-                                       const double fraction, const std::size_t locality_radius,
-                                       const double global_partner_probability) {
+bool InteractingSampler::execute_stitch_update(const StitchUpdateOptions &options) {
   if (model_.free.particle_count() < 2) {
     return true;
   }
-  const ParticleId selected = particle.has_value()
-                                  ? *particle
-                                  : static_cast<ParticleId>(random_.uniform_index(
-                                        static_cast<std::uint64_t>(model_.free.particle_count())));
-  if (static_cast<std::size_t>(selected) >= model_.free.particle_count()) {
-    throw std::invalid_argument("particle label is out of range");
-  }
-  const auto [tau0, tau1] = stitch_window(model_.free, random_, interval, fraction);
+  const auto [tau0, tau1] =
+      sample_stitch_window(model_.free, random_, options.interval, options.fraction);
 
-  ParticleId selected_partner = 0;
-  if (partner.has_value()) {
-    selected_partner = *partner;
-  } else {
+  std::vector<ParticleId> strands;
+  if (options.strands.empty()) {
     const std::vector<Site> positions = state().positions_at(tau0);
     const std::vector<SiteId> site_ids = encode_positions(positions, layout_);
     const PartnerBuckets buckets = build_partner_buckets(site_ids);
-    selected_partner = select_stitch_partner(selected, site_ids, buckets, layout_, model_.free,
-                                             locality_radius, global_partner_probability, random_);
+    const ParticleId anchor = options.anchor.has_value()
+                                  ? *options.anchor
+                                  : static_cast<ParticleId>(random_.uniform_index(
+                                        static_cast<std::uint64_t>(model_.free.particle_count())));
+    strands =
+        select_stitch_strands(anchor, options.strand_count, site_ids, buckets, layout_, model_.free,
+                              options.locality_radius, options.global_partner_probability, random_);
+  } else {
+    strands = options.strands;
   }
-  if (static_cast<std::size_t>(selected_partner) >= model_.free.particle_count() ||
-      selected_partner == selected) {
-    throw std::invalid_argument("partner must be a distinct valid particle label");
-  }
-  const std::array<ParticleId, 2> strands{selected, selected_partner};
   return try_stitch_strands(strands, tau0, tau1);
 }
 
-void InteractingSampler::stitch_sweep(const std::optional<std::size_t> updates,
-                                      const double fraction,
-                                      const std::optional<double> requested_tau0,
-                                      const std::size_t locality_radius,
-                                      const double global_partner_probability,
-                                      const StitchMixture &mixture) {
-  if (model_.free.particle_count() < 2) {
+void InteractingSampler::stitch_sweep(const StitchSweepOptions &options) {
+  execute_stitch_sweep(prepare_stitch_sweep(options));
+}
+
+void InteractingSampler::execute_stitch_sweep(const PreparedStitchSweep &options) {
+  if (options.updates == 0 || options.mixture.counts.empty()) {
     return;
   }
-  if (!std::isfinite(fraction) || fraction <= 0.0 || fraction > 1.0) {
-    throw std::invalid_argument("stitch fraction must lie in (0, 1]");
-  }
-  if (!std::isfinite(global_partner_probability) || global_partner_probability < 0.0 ||
-      global_partner_probability > 1.0) {
-    throw std::invalid_argument("global partner probability must lie in [0, 1]");
-  }
-  const PreparedStitchMixture prepared =
-      prepare_stitch_mixture(mixture, model_.free.particle_count());
-  if (prepared.counts.empty()) {
-    return;
-  }
-  const double duration = fraction * model_.free.beta();
   double tau0 = 0.0;
-  if (requested_tau0.has_value()) {
-    tau0 = *requested_tau0;
-  } else if (duration != model_.free.beta()) {
-    tau0 = random_.uniform_unit() * (model_.free.beta() - duration);
+  if (options.tau0.has_value()) {
+    tau0 = *options.tau0;
+  } else if (options.duration != model_.free.beta()) {
+    tau0 = random_.uniform_unit() * (model_.free.beta() - options.duration);
   }
-  const double tau1 = std::min(model_.free.beta(), tau0 + duration);
-  if (!std::isfinite(tau0) || tau0 < 0.0 || tau1 > model_.free.beta() || tau1 <= tau0) {
-    throw std::invalid_argument("stitch window lies outside [0, beta]");
-  }
+  const double tau1 = std::min(model_.free.beta(), tau0 + options.duration);
 
   const std::vector<Site> positions = state().positions_at(tau0);
   const std::vector<SiteId> site_ids = encode_positions(positions, layout_);
   const PartnerBuckets buckets = build_partner_buckets(site_ids);
-  const std::size_t update_count = updates.value_or(model_.free.particle_count());
-  for (std::size_t update = 0; update < update_count; ++update) {
+  for (std::size_t update = 0; update < options.updates; ++update) {
     const std::size_t mixture_index =
-        prepared.counts.size() == 1 ? 0 : random_.discrete_index(prepared.weights);
-    const std::size_t strand_count = prepared.counts[mixture_index];
+        options.mixture.counts.size() == 1 ? 0 : random_.discrete_index(options.mixture.weights);
+    const std::size_t strand_count = options.mixture.counts[mixture_index];
     const auto anchor = static_cast<ParticleId>(
         random_.uniform_index(static_cast<std::uint64_t>(model_.free.particle_count())));
     const std::vector<ParticleId> strands =
         select_stitch_strands(anchor, strand_count, site_ids, buckets, layout_, model_.free,
-                              locality_radius, global_partner_probability, random_);
+                              options.locality_radius, options.global_partner_probability, random_);
     static_cast<void>(try_stitch_strands(strands, tau0, tau1));
   }
 }
@@ -816,13 +834,17 @@ bool InteractingSampler::time_shift_update(const std::optional<double> shift) {
   return true;
 }
 
-void InteractingSampler::random_seam_stitch_sweep(const std::optional<std::size_t> updates,
-                                                  const double fraction,
-                                                  const std::size_t locality_radius,
-                                                  const double global_partner_probability,
-                                                  const StitchMixture &mixture) {
+void InteractingSampler::random_seam_stitch_sweep(const RandomSeamStitchOptions &options) {
+  const PreparedStitchSweep prepared = prepare_stitch_sweep(StitchSweepOptions{
+      .updates = options.updates,
+      .fraction = options.fraction,
+      .tau0 = 0.0,
+      .locality_radius = options.locality_radius,
+      .global_partner_probability = options.global_partner_probability,
+      .mixture = options.mixture,
+  });
   static_cast<void>(time_shift_update());
-  stitch_sweep(updates, fraction, 0.0, locality_radius, global_partner_probability, mixture);
+  execute_stitch_sweep(prepared);
   static_cast<void>(time_shift_update());
 }
 
@@ -845,18 +867,22 @@ bool InteractingSampler::global_update() {
 }
 
 void InteractingSampler::sweep(const SweepOptions &options) {
-  const std::size_t segment_count = options.segment_updates.value_or(model_.free.particle_count());
-  for (std::size_t update = 0; update < segment_count; ++update) {
-    static_cast<void>(segment_update(std::nullopt, std::nullopt, options.segment_fraction));
+  execute_sweep(prepare_sweep(options));
+}
+
+void InteractingSampler::execute_sweep(const PreparedSweep &options) {
+  const SegmentUpdateOptions segment_options{
+      .particle = std::nullopt,
+      .interval = std::nullopt,
+      .fraction = options.segment_fraction,
+  };
+  for (std::size_t update = 0; update < options.segment_updates; ++update) {
+    static_cast<void>(execute_segment_update(segment_options));
   }
   for (std::size_t update = 0; update < options.cycle_updates; ++update) {
     static_cast<void>(cycle_update());
   }
-  if (options.stitch_updates != 0) {
-    stitch_sweep(options.stitch_updates, options.stitch_fraction, std::nullopt,
-                 options.stitch_locality_radius, options.stitch_global_partner_probability,
-                 options.stitch_mixture);
-  }
+  execute_stitch_sweep(options.stitch);
   for (std::size_t update = 0; update < options.time_shift_updates; ++update) {
     static_cast<void>(time_shift_update());
   }
@@ -889,18 +915,19 @@ std::vector<InteractingObservables> InteractingSampler::run(const std::size_t sa
   if (options.thin == 0) {
     throw std::invalid_argument("run thinning interval must be positive");
   }
-  for (std::size_t sweep_index = 0; sweep_index < options.burn_in; ++sweep_index) {
-    sweep(options.sweep);
-  }
-
+  const PreparedSweep prepared = prepare_sweep(options.sweep);
   std::vector<InteractingObservables> output;
   if (sample_count > output.max_size()) {
     throw std::length_error("sample count exceeds vector capacity");
   }
+  for (std::size_t sweep_index = 0; sweep_index < options.burn_in; ++sweep_index) {
+    execute_sweep(prepared);
+  }
+
   output.reserve(sample_count);
   for (std::size_t sample = 0; sample < sample_count; ++sample) {
     for (std::size_t thin_index = 0; thin_index < options.thin; ++thin_index) {
-      sweep(options.sweep);
+      execute_sweep(prepared);
     }
     output.push_back(observables());
   }

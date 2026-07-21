@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a deterministic read-only cycle decomposition.
 - Add an owning `RetainedMeasurementContext` so equal-time and retained-density
   estimators can share one physical-site traversal and retained-grid provenance.
+- Add self-describing segment, stitch, fixed-seam stitch-sweep, and random-seam
+  stitch option values.
 - Add generated compile-time version metadata in `<qmc/version.hpp>`, sourced
   from the CMake project version.
 - Document the C++ refactoring audit, including correctness, performance,
@@ -60,6 +62,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   supplied table.
 - Exclude GoogleTest translation units from clang-tidy analysis while retaining
   the existing project check profile for library and example targets.
+- Prepare and validate complete sweep, run, and random-seam plans before their
+  first update or random draw; repeated runs reuse one prepared stitch mixture.
+- Route pair and collective stitch requests through one `stitch_update()` API
+  selected by `StitchUpdateOptions::strand_count`; seeded stitch sequences may
+  change, but the proposal and acceptance laws are unchanged.
 
 ### Removed
 
@@ -69,6 +76,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `log_ZN`; canonical normalization remains owned by `CanonicalEnsemble`.
 - Remove continuous samples' copied `log_Z0_N`; canonical normalization remains
   owned by `CanonicalEnsemble` rather than each sampled configuration.
+- Remove the positional segment/stitch update overloads and the separate
+  `k_stitch_update()` entry point in favor of named option values.
 
 ### Fixed
 

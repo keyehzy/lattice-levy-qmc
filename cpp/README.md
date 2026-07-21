@@ -146,7 +146,12 @@ qmc::SweepOptions sweep{
     .global_updates = 1,
     .stitch_mixture = {},
 };
+qmc::RandomSeamStitchOptions stitches{
+    .updates = model.free.particle_count(),
+    .fraction = 0.75,
+};
 for (std::size_t index = 0; index < 500; ++index) {
+  sampler.random_seam_stitch_sweep(stitches);
   sampler.sweep(sweep);
 }
 const auto samples = sampler.run(
@@ -161,6 +166,10 @@ the recommended `random_seam_stitch_sweep()` wraps fixed-seam attempts in two
 uniform time-origin rotations to give the reversible `A B^m A` kernel. Global
 ideal proposals remain available as a small-system cross-check. Interaction-
 corrected moves use only the action difference in their Metropolis ratio.
+`SegmentUpdateOptions`, `StitchUpdateOptions`, `StitchSweepOptions`, and
+`RandomSeamStitchOptions` name move parameters and validate the complete request
+before the sampler consumes randomness. Compound sweep and run plans likewise
+validate once before their first update.
 `state()` exposes the accepted configuration read-only, while `statistics()`
 reports attempts, acceptances, stitch topology changes, and changed successors.
 The configuration's `topology()` view provides validated successors and a
