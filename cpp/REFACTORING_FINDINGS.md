@@ -79,7 +79,7 @@ type collects one invariant that is currently spread across several files.
 | P1 | Separate stitch selection, proposal, and commit (done 2026-07-21) | Readability, testability, and API clarity | Medium |
 | P2 | Add streaming runs, checkpoints, and prepared options | Operational quality of life | Small/medium |
 | P2 | Consolidate local helpers, names, and value equality | Less duplication and review noise | Small |
-| P2 | Split large translation units and demo output code | Navigation and reviewability | Small |
+| P2 | Split large translation units (measurement implementation done 2026-07-21) and demo output code | Navigation and reviewability | Small |
 | P2 | Exclude GoogleTest from tidy (done 2026-07-19); finish packaging, CI, and benchmarks | Consumer and maintainer quality of life | Medium |
 | P2 | Isolate the GSL/process-global error policy | Safer library embedding | Small/medium |
 | P2 | Add invariant builders and fault-boundary tests | Safer migration of owning abstractions | Small |
@@ -1101,11 +1101,16 @@ them first would create churn in code that is likely to move.
 
 ### 14. P2: split measurement implementation and examples by responsibility
 
-Evidence:
+Status (2026-07-21): the measurement-implementation slice is complete.
+The former `observables.cpp` is split into `canonical_observables.cpp`,
+`retained_observables.cpp`, and `lattice_transforms.cpp`, with the genuinely
+shared lattice-phase helper kept in one private header. The public
+`observables.hpp` API is unchanged, and the existing exact, invariant, demo,
+and statistical observable tests cover the moved definitions. Splitting the
+ideal demo and improving generated-output placement remain open.
 
-- `observables.cpp` is 807 lines and mixes exact canonical thermodynamics,
-  spectra, one-body response, topology statistics, retained estimators, and
-  discrete Fourier transforms.
+Remaining evidence:
+
 - `ideal_demo.cpp` is 858 lines and combines CLI parsing, ensemble accumulation,
   table serialization, gnuplot program generation, process launching, and
   console summaries.
@@ -1119,9 +1124,9 @@ Evidence:
 
 Recommendation:
 
-- split implementation into `canonical_observables.cpp`,
+- Completed 2026-07-21: split implementation into `canonical_observables.cpp`,
   `retained_observables.cpp`, and `lattice_transforms.cpp` while keeping the
-  public header stable initially;
+  public header stable;
 - split the ideal tool into a thin `main`, `IdealEnsembleAccumulator`, table
   writers, and plot-script writer;
 - share only genuinely common example helpers (model CLI options, checked output
@@ -1265,7 +1270,8 @@ visible at the assertion sites.
 9. Completed 2026-07-21: segment/stitch option values, early compound-plan
    preparation, fixed-seam bridge-distribution caching, fixed-capacity strand
    selection, and the stitch selection/proposal translation-unit splits.
-10. Split translation units and demos after responsibilities have stabilized.
+10. Measurement implementation split completed 2026-07-21; split demos after
+    their responsibilities have stabilized.
 11. GoogleTest exclusion from clang-tidy completed 2026-07-19; add install, CI,
    benchmark support, and an external consumer test.
 

@@ -31,7 +31,9 @@ add_library(
   src/free_boson.cpp
   src/free_numerics.cpp
   src/model.cpp
-  src/observables.cpp
+  src/canonical_observables.cpp
+  src/lattice_transforms.cpp
+  src/retained_observables.cpp
   src/permutation.cpp
   src/random.cpp
   src/torus_layout.cpp
