@@ -74,4 +74,71 @@ TEST(InteractingDistributionTest, MatchesSmallSystemExactDiagonalizationReferenc
   EXPECT_LT(*acceptance, 0.90);
 }
 
+TEST(InteractingDistributionTest, StrongCouplingStitchKernelMatchesExactDiagonalization) {
+  constexpr std::size_t burn_in = 5'000;
+  constexpr std::size_t sample_count = 30'000;
+  constexpr double beta = 2.0;
+  constexpr double interaction = 16.0;
+  const qmc::InteractingModel model{
+      .free = qmc::Model(qmc::ModelParameters{
+          .particle_count = 4,
+          .beta = beta,
+          .linear_size = 4,
+          .dimension = 1,
+          .hopping = 1.0,
+      }),
+      .interaction = interaction,
+  };
+  qmc::InteractingSampler sampler(model, 10101);
+  const qmc::RandomSeamStitchOptions stitches{
+      .updates = model.free.particle_count(),
+      // Strong-coupling calibration: redraw a slab of duration 5/U.
+      .fraction = 5.0 / (interaction * beta),
+  };
+  const qmc::SweepOptions local_geometry{
+      .segment_updates = model.free.particle_count(),
+      .segment_fraction = 0.35,
+      .cycle_updates = 1,
+      .global_updates = 0,
+  };
+  const auto advance = [&sampler, &stitches, &local_geometry] {
+    sampler.random_seam_stitch_sweep(stitches);
+    sampler.sweep(local_geometry);
+  };
+
+  for (std::size_t update = 0; update < burn_in; ++update) {
+    advance();
+  }
+
+  double total_energy = 0.0;
+  double kinetic_energy = 0.0;
+  double interaction_energy = 0.0;
+  double double_occupancy = 0.0;
+  for (std::size_t sample = 0; sample < sample_count; ++sample) {
+    advance();
+    const auto value = sampler.observables();
+    total_energy += value.total_energy;
+    kinetic_energy += value.kinetic_energy;
+    interaction_energy += value.interaction_energy;
+    double_occupancy += value.double_occupancy_per_site;
+  }
+
+  const double denominator = static_cast<double>(sample_count);
+  // Independent Fock-space diagonalization values from python/validate_interacting_ed.py.
+  EXPECT_NEAR(total_energy / denominator, -1.0339175138, 0.075);
+  EXPECT_NEAR(kinetic_energy / denominator, -2.1253604095, 0.14);
+  EXPECT_NEAR(interaction_energy / denominator, 1.0914428957, 0.09);
+  EXPECT_NEAR(double_occupancy / denominator, 0.0170537952, 0.0015);
+
+  const qmc::MoveStatistics &stitch = sampler.statistics(qmc::MoveKind::StitchMove);
+  const auto stitch_acceptance = stitch.acceptance();
+  const auto topology_rate = stitch.topology_change_rate();
+  ASSERT_TRUE(stitch_acceptance.has_value());
+  ASSERT_TRUE(topology_rate.has_value());
+  EXPECT_GT(*stitch_acceptance, 0.6);
+  EXPECT_LT(*stitch_acceptance, 0.95);
+  EXPECT_GT(*topology_rate, 0.03);
+  EXPECT_EQ(sampler.statistics(qmc::MoveKind::GlobalMove).attempts, 0U);
+}
+
 } // namespace
