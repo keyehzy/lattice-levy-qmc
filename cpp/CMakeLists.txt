@@ -62,6 +62,7 @@ add_library(
   src/path.cpp
   src/path_cursor.cpp
   src/stitch_matching.cpp
+  src/stitch_proposal.cpp
   src/stitch_seam_context.cpp
   src/stitch_selection.cpp
 )

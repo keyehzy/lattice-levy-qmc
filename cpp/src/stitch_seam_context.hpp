@@ -27,6 +27,8 @@ public:
   [[nodiscard]] double tau0() const noexcept { return tau0_; }
   [[nodiscard]] double tau1() const noexcept { return tau1_; }
   [[nodiscard]] double duration() const noexcept { return tau1_ - tau0_; }
+  [[nodiscard]] const TorusLayout &layout() const noexcept { return layout_; }
+  [[nodiscard]] const FreePathKernels &kernels() const noexcept { return kernels_; }
   [[nodiscard]] std::span<const SiteId> left_site_ids() const noexcept { return left_site_ids_; }
   [[nodiscard]] const StitchPartnerBuckets &partner_buckets() const noexcept {
     return partner_buckets_;

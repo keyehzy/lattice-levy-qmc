@@ -44,6 +44,7 @@ add_executable(
   test_interaction.cpp
   test_occupancy_index.cpp
   test_path.cpp
+  test_stitch_proposal.cpp
 )
 target_link_libraries(qmc_interacting_unit_tests PRIVATE qmc::interacting GTest::gtest_main)
 target_include_directories(qmc_interacting_unit_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")

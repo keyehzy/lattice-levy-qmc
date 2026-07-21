@@ -76,7 +76,7 @@ type collects one invariant that is currently spread across several files.
 | P1 | Unify discrete log-weight draws and bounded-tail sampling (done 2026-07-20) | One truncation policy and fewer allocations | Medium |
 | P1 | Unify full/incremental action around accepted state (ownership slice done 2026-07-20) | One source of truth and faster full evaluation | Medium |
 | P1 | Make permutation topology authoritative (continuous and retained ideal done 2026-07-20) | Remove duplicated state and synchronization code | Medium |
-| P1 | Separate stitch selection, proposal, and commit (option/prevalidation, seam-cache, and fixed-capacity selection slices done 2026-07-21) | Readability, testability, and API clarity | Medium |
+| P1 | Separate stitch selection, proposal, and commit (done 2026-07-21) | Readability, testability, and API clarity | Medium |
 | P2 | Add streaming runs, checkpoints, and prepared options | Operational quality of life | Small/medium |
 | P2 | Consolidate local helpers, names, and value equality | Less duplication and review noise | Small |
 | P2 | Split large translation units and demo output code | Navigation and reviewability | Small |
@@ -940,8 +940,19 @@ Private candidate enumeration, neighborhood traversal, local/global fallback,
 and fixed-capacity strand selection now live in `stitch_selection.cpp` behind
 the existing private interface. The exact regression for legacy-selection
 equivalence and subsequent RNG position covers the moved boundary across every
-supported strand count and fallback probability. Extracting bridge matching and
-splicing into `stitch_proposal.cpp` remains open.
+supported strand count and fallback probability. The stitch-proposal
+translation-unit slice is also complete as of 2026-07-21. A private proposal
+value and generator in `stitch_proposal.cpp` now own path cuts, bridge-weight
+matrix construction, the permanent draw, cached bridge sampling, path splicing,
+and successor construction. `InteractingSampler` retains move statistics,
+Metropolis evaluation, and transactional publication. Direct proposal tests
+prove that the generated paths/topology form a valid continuous configuration,
+preserve the fixed-seam left positions, leave unselected successors unchanged,
+report the exact successor-change count, and reject invalid strands before
+consuming randomness. Matching seeds produce structurally identical proposals
+and the same subsequent RNG position. The existing stitch, cache, and rejection
+tests continue to cover the integrated sampler path, and all project
+statistical tests remain green.
 
 Pre-slice evidence:
 
@@ -973,8 +984,8 @@ Pre-slice evidence:
 Remaining recommendation:
 
 - Completed 2026-07-21: move pure topology/geometry selection into
-  `stitch_selection.cpp`. Moving bridge matching/splicing into
-  `stitch_proposal.cpp` remains open; keep sampler orchestration and commit in
+  `stitch_selection.cpp` and bridge matching/splicing into
+  `stitch_proposal.cpp`, while keeping sampler orchestration and commit in
   `interacting_sampler.cpp`.
 - Completed 2026-07-21: add `StitchSeamContext` containing `tau0/tau1`, left
   positions, and partner buckets. Its invariance across accepted fixed-seam
@@ -1251,10 +1262,9 @@ visible at the assertion sites.
 8. Accepted-chain ownership completed 2026-07-20; a production k-way event
    merge was benchmarked and reverted 2026-07-21. Add the bundled interaction
    measurement separately.
-9. Segment/stitch option values, early compound-plan preparation, fixed-seam
-   bridge-distribution caching, fixed-capacity strand selection, and the
-   stitch-selection translation-unit split completed 2026-07-21; split bridge
-   proposal code separately.
+9. Completed 2026-07-21: segment/stitch option values, early compound-plan
+   preparation, fixed-seam bridge-distribution caching, fixed-capacity strand
+   selection, and the stitch selection/proposal translation-unit splits.
 10. Split translation units and demos after responsibilities have stabilized.
 11. GoogleTest exclusion from clang-tidy completed 2026-07-19; add install, CI,
    benchmark support, and an external consumer test.
