@@ -244,12 +244,20 @@ TEST(InteractingSamplerTest, FiniteInteractionPreservesStateAndCacheInvariants) 
   }
 
   const auto value = sampler.observables();
+  const auto reference = measure_interaction(sampler.state(), sampler.model());
   EXPECT_DOUBLE_EQ(value.action, sampler.action());
   EXPECT_DOUBLE_EQ(value.pair_overlap_time, sampler.pair_overlap());
   EXPECT_EQ(value.event_count, sampler.state().event_count());
   EXPECT_EQ(value.winding, sampler.state().total_winding());
   EXPECT_EQ(value.cycle_lengths, sampler.state().cycle_lengths());
   EXPECT_NEAR(value.total_energy, value.kinetic_energy + value.interaction_energy, 1e-14);
+  EXPECT_NEAR(value.action, reference.action, 1e-12);
+  EXPECT_NEAR(value.pair_overlap_time, reference.pair_overlap_time, 1e-12);
+  EXPECT_NEAR(value.double_occupancy_per_site, reference.double_occupancy_per_site, 1e-12);
+  EXPECT_DOUBLE_EQ(value.kinetic_energy, reference.kinetic_energy);
+  EXPECT_NEAR(value.interaction_energy, reference.interaction_energy, 1e-12);
+  EXPECT_NEAR(value.total_energy, reference.total_energy, 1e-12);
+  EXPECT_EQ(value.event_count, reference.event_count);
 }
 
 TEST(InteractingSamplerTest, ActionIsDerivedFromTheAcceptedOverlap) {

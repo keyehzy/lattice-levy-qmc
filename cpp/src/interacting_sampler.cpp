@@ -2,6 +2,7 @@
 
 #include "accepted_chain_state.hpp"
 #include "continuous_detail.hpp"
+#include "interaction_detail.hpp"
 #include "path_cursor.hpp"
 #include "stitch_matching.hpp"
 
@@ -864,19 +865,17 @@ void InteractingSampler::execute_sweep(const PreparedSweep &options) {
 }
 
 InteractingObservables InteractingSampler::observables() const {
-  const auto event_count = state().event_count();
   const double overlap = pair_overlap();
-  const double kinetic = -static_cast<double>(event_count) / model_.free.beta();
-  const double interaction = model_.interaction * overlap / model_.free.beta();
+  const InteractionMeasurement interaction =
+      detail::interaction_measurement_from_validated_overlap(state(), model_, overlap);
   return InteractingObservables{
-      .action = action(),
-      .pair_overlap_time = overlap,
-      .double_occupancy_per_site =
-          overlap / (model_.free.beta() * static_cast<double>(model_.free.volume())),
-      .kinetic_energy = kinetic,
-      .interaction_energy = interaction,
-      .total_energy = kinetic + interaction,
-      .event_count = event_count,
+      .action = interaction.action,
+      .pair_overlap_time = interaction.pair_overlap_time,
+      .double_occupancy_per_site = interaction.double_occupancy_per_site,
+      .kinetic_energy = interaction.kinetic_energy,
+      .interaction_energy = interaction.interaction_energy,
+      .total_energy = interaction.total_energy,
+      .event_count = interaction.event_count,
       .winding = state().total_winding(),
       .cycle_lengths = state().cycle_lengths(),
   };

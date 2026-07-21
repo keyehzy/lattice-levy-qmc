@@ -19,25 +19,33 @@ ContinuousConfiguration two_particle_state(const Model &model, const ContinuousP
 TEST(InteractionTest, IntegratesPiecewisePairOverlapExactly) {
   const Model free(qmc::ModelParameters{
       .particle_count = 2,
-      .beta = 1.0,
+      .beta = 2.0,
       .linear_size = 3,
       .dimension = 1,
       .hopping = 1.0,
   });
   const InteractingModel model{.free = free, .interaction = 3.0};
   const ContinuousPath moving(
-      1.0, {0}, {0},
-      {{.time = 0.25, .axis = 0, .direction = 1}, {.time = 0.75, .axis = 0, .direction = -1}});
-  const auto state = two_particle_state(free, static_path(0), moving);
+      2.0, {0}, {0},
+      {{.time = 0.5, .axis = 0, .direction = 1}, {.time = 1.5, .axis = 0, .direction = -1}});
+  const auto state = two_particle_state(free, static_path(0, 2.0), moving);
   state.validate();
 
-  EXPECT_DOUBLE_EQ(pair_overlap_time(state), 0.5);
-  EXPECT_DOUBLE_EQ(interaction_action(state, model), 1.5);
-  EXPECT_DOUBLE_EQ(kinetic_energy_estimator(state), -2.0);
+  const InteractionMeasurement measurement = measure_interaction(state, model);
+  EXPECT_DOUBLE_EQ(measurement.action, 3.0);
+  EXPECT_DOUBLE_EQ(measurement.pair_overlap_time, 1.0);
+  EXPECT_NEAR(measurement.double_occupancy_per_site, 1.0 / 6.0, 1e-15);
+  EXPECT_DOUBLE_EQ(measurement.kinetic_energy, -1.0);
+  EXPECT_DOUBLE_EQ(measurement.interaction_energy, 1.5);
+  EXPECT_DOUBLE_EQ(measurement.total_energy, 0.5);
+  EXPECT_EQ(measurement.event_count, 2U);
+  EXPECT_DOUBLE_EQ(pair_overlap_time(state), 1.0);
+  EXPECT_DOUBLE_EQ(interaction_action(state, model), 3.0);
+  EXPECT_DOUBLE_EQ(kinetic_energy_estimator(state), -1.0);
   EXPECT_DOUBLE_EQ(interaction_energy_estimator(state, model), 1.5);
-  EXPECT_DOUBLE_EQ(total_energy_estimator(state, model), -0.5);
+  EXPECT_DOUBLE_EQ(total_energy_estimator(state, model), 0.5);
   EXPECT_NEAR(double_occupancy_per_site(state), 1.0 / 6.0, 1e-15);
-  EXPECT_DOUBLE_EQ(interaction_action(state, model, 0.2), 1.1);
+  EXPECT_DOUBLE_EQ(interaction_action(state, model, 0.2), 2.2);
 }
 
 TEST(InteractionTest, RejectsInteractingModelWithDifferentConfigurationProvenance) {
@@ -60,6 +68,7 @@ TEST(InteractionTest, RejectsInteractingModelWithDifferentConfigurationProvenanc
       .interaction = 2.0,
   };
 
+  EXPECT_THROW(static_cast<void>(measure_interaction(state, mismatched)), std::invalid_argument);
   EXPECT_THROW(static_cast<void>(interaction_action(state, mismatched)), std::invalid_argument);
   EXPECT_THROW(static_cast<void>(interaction_energy_estimator(state, mismatched)),
                std::invalid_argument);
@@ -107,7 +116,16 @@ TEST(InteractionTest, HandlesEmptyAndSingleParticleStates) {
       .hopping = 1.0,
   });
   const ContinuousConfiguration empty(empty_model, Permutation(), {});
+  const auto empty_measurement =
+      measure_interaction(empty, InteractingModel{.free = empty_model, .interaction = 2.0});
   EXPECT_DOUBLE_EQ(pair_overlap_time(empty), 0.0);
+  EXPECT_DOUBLE_EQ(empty_measurement.action, 0.0);
+  EXPECT_DOUBLE_EQ(empty_measurement.pair_overlap_time, 0.0);
+  EXPECT_DOUBLE_EQ(empty_measurement.double_occupancy_per_site, 0.0);
+  EXPECT_DOUBLE_EQ(empty_measurement.kinetic_energy, 0.0);
+  EXPECT_DOUBLE_EQ(empty_measurement.interaction_energy, 0.0);
+  EXPECT_DOUBLE_EQ(empty_measurement.total_energy, 0.0);
+  EXPECT_EQ(empty_measurement.event_count, 0U);
 
   const Model single_model(qmc::ModelParameters{
       .particle_count = 1,
@@ -117,7 +135,16 @@ TEST(InteractionTest, HandlesEmptyAndSingleParticleStates) {
       .hopping = 1.0,
   });
   const ContinuousConfiguration single(single_model, Permutation({0}), {static_path(0)});
+  const auto single_measurement =
+      measure_interaction(single, InteractingModel{.free = single_model, .interaction = -2.0});
   EXPECT_DOUBLE_EQ(pair_overlap_time(single), 0.0);
+  EXPECT_DOUBLE_EQ(single_measurement.action, 0.0);
+  EXPECT_DOUBLE_EQ(single_measurement.pair_overlap_time, 0.0);
+  EXPECT_DOUBLE_EQ(single_measurement.double_occupancy_per_site, 0.0);
+  EXPECT_DOUBLE_EQ(single_measurement.kinetic_energy, 0.0);
+  EXPECT_DOUBLE_EQ(single_measurement.interaction_energy, 0.0);
+  EXPECT_DOUBLE_EQ(single_measurement.total_energy, 0.0);
+  EXPECT_EQ(single_measurement.event_count, 0U);
 }
 
 TEST(InteractingModelTest, SeparatesFreeAndInteractingValidation) {

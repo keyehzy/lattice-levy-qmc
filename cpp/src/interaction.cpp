@@ -40,15 +40,6 @@ void ensure_finite_result(const double value, const char *description) {
   }
 }
 
-void validate_configuration_model(const ContinuousConfiguration &configuration,
-                                  const InteractingModel &model) {
-  model.validate();
-  if (configuration.model() != model.free) {
-    throw std::invalid_argument(
-        "continuous configuration provenance does not match the interacting model");
-  }
-}
-
 using OccupancyMap = std::unordered_map<SiteId, std::uint64_t, SiteIdHash>;
 
 struct OverlapWorkspace {
@@ -136,6 +127,15 @@ void apply_event(const TimedEvent &event, const TorusLayout &layout, OverlapWork
 
 namespace detail {
 
+void validate_interaction_model_provenance(const ContinuousConfiguration &configuration,
+                                           const InteractingModel &model) {
+  model.validate();
+  if (configuration.model() != model.free) {
+    throw std::invalid_argument(
+        "continuous configuration provenance does not match the interacting model");
+  }
+}
+
 double pair_overlap_time_for_paths(const Model &model,
                                    const std::span<const ContinuousPath *const> worldlines) {
   if (model.beta() <= 0.0) {
@@ -178,6 +178,38 @@ double pair_overlap_time_for_paths(const Model &model,
   return overlap;
 }
 
+InteractionMeasurement
+interaction_measurement_from_validated_overlap(const ContinuousConfiguration &configuration,
+                                               const InteractingModel &model,
+                                               const double pair_overlap) {
+  if (!std::isfinite(pair_overlap) || pair_overlap < 0.0) {
+    throw std::logic_error("interaction measurement requires a finite nonnegative pair overlap");
+  }
+
+  const auto event_count = configuration.event_count();
+  const double beta = model.free.beta();
+  const double action = model.interaction * pair_overlap;
+  const double kinetic_energy = -static_cast<double>(event_count) / beta;
+  const double interaction_energy = action / beta;
+  const double total_energy = kinetic_energy + interaction_energy;
+  const double double_occupancy = pair_overlap / (beta * static_cast<double>(model.free.volume()));
+  ensure_finite_result(action, "interaction action overflowed");
+  ensure_finite_result(kinetic_energy, "kinetic energy estimator overflowed");
+  ensure_finite_result(interaction_energy, "interaction energy estimator overflowed");
+  ensure_finite_result(total_energy, "total energy estimator overflowed");
+  ensure_finite_result(double_occupancy, "double occupancy estimator overflowed");
+
+  return InteractionMeasurement{
+      .action = action,
+      .pair_overlap_time = pair_overlap,
+      .double_occupancy_per_site = double_occupancy,
+      .kinetic_energy = kinetic_energy,
+      .interaction_energy = interaction_energy,
+      .total_energy = total_energy,
+      .event_count = event_count,
+  };
+}
+
 } // namespace detail
 
 double pair_overlap_time(const ContinuousConfiguration &configuration) {
@@ -189,9 +221,16 @@ double pair_overlap_time(const ContinuousConfiguration &configuration) {
   return detail::pair_overlap_time_for_paths(configuration.model(), paths);
 }
 
+InteractionMeasurement measure_interaction(const ContinuousConfiguration &configuration,
+                                           const InteractingModel &model) {
+  detail::validate_interaction_model_provenance(configuration, model);
+  return detail::interaction_measurement_from_validated_overlap(configuration, model,
+                                                                pair_overlap_time(configuration));
+}
+
 double interaction_action(const ContinuousConfiguration &configuration,
                           const InteractingModel &model, const double chemical_potential) {
-  validate_configuration_model(configuration, model);
+  detail::validate_interaction_model_provenance(configuration, model);
   if (!std::isfinite(chemical_potential)) {
     throw std::invalid_argument("chemical potential must be finite");
   }
@@ -208,7 +247,7 @@ double kinetic_energy_estimator(const ContinuousConfiguration &configuration) {
 
 double interaction_energy_estimator(const ContinuousConfiguration &configuration,
                                     const InteractingModel &model) {
-  validate_configuration_model(configuration, model);
+  detail::validate_interaction_model_provenance(configuration, model);
   const double energy = model.interaction * pair_overlap_time(configuration) / model.free.beta();
   ensure_finite_result(energy, "interaction energy estimator overflowed");
   return energy;

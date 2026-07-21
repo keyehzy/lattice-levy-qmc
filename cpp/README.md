@@ -181,6 +181,11 @@ validate once before their first update.
 reports attempts, acceptances, stitch topology changes, and changed successors.
 The configuration's `topology()` view provides validated successors and a
 deterministic cycle decomposition from one authoritative value.
+`measure_interaction(configuration, model)` returns action, pair overlap,
+double occupancy, kinetic/interaction/total energy, and event count from one
+independent full overlap sweep. Use it for arbitrary configurations and audit
+checks; `sampler.observables()` derives the same scalar bundle from the
+accepted-state overlap cache.
 
 See [`docs/MEASUREMENTS.md`](../docs/MEASUREMENTS.md) for estimator definitions,
 normalizations, exactness, and retained-grid conventions.

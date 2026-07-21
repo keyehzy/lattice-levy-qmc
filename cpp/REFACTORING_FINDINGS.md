@@ -712,7 +712,13 @@ zero boundary, the transaction rebases from its fully staged occupancy ledger
 before acceptance. Construction/global/time-shift ledger authority, derived
 action, copied-owner, rejection, counter, topology, and action-failure tests
 cover the boundary. The independent full event sweep remains the audit oracle.
-A bundled public interaction measurement remains open.
+The bundled public interaction-measurement slice is also complete as of
+2026-07-21. `InteractionMeasurement` returns action, pair overlap, double
+occupancy, kinetic/interaction/total energy, and event count from one full
+overlap sweep. The sampler routes its accepted-state overlap cache through the
+same scalar calculation without invoking that sweep. Exact piecewise,
+model-provenance, empty/single-particle, and sampler-cache equivalence tests
+cover the public and cached paths.
 
 K-way event-merge experiment (2026-07-21): reverted. The implementation kept
 one event per path in a deterministic heap instead of flattening and
@@ -787,9 +793,10 @@ Recommendation:
   immutable `U` on access. Use compensated delta accumulation or a configurable
   periodic rebase from the ledger for long chains, with the full evaluator as an
   independent drift check.
-- Add a pure `measure_interaction(configuration, model)` bundle (or an overload
-  accepting a previously computed overlap summary) so non-sampler callers can
-  obtain all interaction observables with one full sweep.
+- Completed 2026-07-21: add a pure
+  `measure_interaction(configuration, model)` bundle so non-sampler callers can
+  obtain all interaction observables with one full sweep, while the sampler
+  uses the same calculation with its accepted-state overlap cache.
 - Prune empty timelines or use a flat hash map keyed by `SiteId`.
 - Either keep the arbitrary-path full evaluator private as an explicitly named
   test oracle or exercise it as a real production fallback; remove the unused
