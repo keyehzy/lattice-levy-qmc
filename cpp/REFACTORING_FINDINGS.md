@@ -84,6 +84,32 @@ type collects one invariant that is currently spread across several files.
 | P2 | Isolate the GSL/process-global error policy | Safer library embedding | Small/medium |
 | P2 | Add invariant builders and fault-boundary tests | Safer migration of owning abstractions | Small |
 
+## Follow-up tracking
+
+The remaining actionable work is tracked in GitHub rather than extending this
+implementation branch:
+
+- [#2: retained-observable shapes and reusable transform planning](https://github.com/keyehzy/lattice-levy-qmc/issues/2)
+  covers the open lattice-field, measurement-context, shape-accessor, and
+  transform-plan work from findings 4 and 6;
+- [#3: shared free-particle numerical utilities](https://github.com/keyehzy/lattice-levy-qmc/issues/3)
+  covers the remaining twist-curvature, log-add, and typed-request cleanup from
+  findings 7 and 8;
+- [#4: accepted-overlap drift and occupancy-ledger invariants](https://github.com/keyehzy/lattice-levy-qmc/issues/4)
+  covers the numerical and ledger follow-ups from finding 9;
+- [#5: streaming runs and a first-class interacting sweep workflow](https://github.com/keyehzy/lattice-levy-qmc/issues/5)
+  covers finding 12;
+- [#6: local validation helpers, names, and value semantics](https://github.com/keyehzy/lattice-levy-qmc/issues/6)
+  covers finding 13 and the remaining shared-helper cleanup;
+- [#7: ideal-demo responsibilities and generated-output placement](https://github.com/keyehzy/lattice-levy-qmc/issues/7)
+  covers the open portion of finding 14;
+- [#8: installable packaging, dependency policy, CI, and benchmarks](https://github.com/keyehzy/lattice-levy-qmc/issues/8)
+  covers the open portion of finding 15;
+- [#9: GSL process-global error-policy isolation](https://github.com/keyehzy/lattice-levy-qmc/issues/9)
+  covers finding 16; and
+- [#10: focused test builders and fault-boundary coverage](https://github.com/keyehzy/lattice-levy-qmc/issues/10)
+  covers the remaining work from finding 17.
+
 ## Detailed findings
 
 ### 1. P0: make local action replacement a real transaction
