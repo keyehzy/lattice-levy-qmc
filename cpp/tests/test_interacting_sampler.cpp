@@ -3,11 +3,13 @@
 #include "qmc/interaction.hpp"
 #include "stitch_matching.hpp"
 #include "stitch_seam_context.hpp"
+#include "stitch_selection.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <gtest/gtest.h>
 #include <limits>
 #include <optional>
@@ -114,6 +116,52 @@ std::size_t matching_rank(const std::span<const std::size_t> matching,
   throw std::logic_error("sampled matching is not a permutation");
 }
 
+std::vector<ParticleId> legacy_select_stitch_strands(const ParticleId anchor,
+                                                     const std::size_t strand_count,
+                                                     const std::size_t particle_count,
+                                                     const std::span<const ParticleId> local_pool,
+                                                     const double global_partner_probability,
+                                                     Random &random) {
+  std::vector<bool> selected(particle_count, false);
+  selected[anchor] = true;
+  std::vector<ParticleId> strands{anchor};
+  strands.reserve(strand_count);
+
+  while (strands.size() < strand_count) {
+    const bool use_global = random.uniform_unit() < global_partner_probability;
+    std::vector<ParticleId> local_candidates;
+    if (!use_global) {
+      for (const ParticleId label : local_pool) {
+        if (!selected[label]) {
+          local_candidates.push_back(label);
+        }
+      }
+    }
+
+    ParticleId next = 0;
+    if (!local_candidates.empty()) {
+      next = local_candidates[random.uniform_index(
+          static_cast<std::uint64_t>(local_candidates.size()))];
+    } else {
+      auto draw = static_cast<std::size_t>(
+          random.uniform_index(static_cast<std::uint64_t>(particle_count - strands.size())));
+      for (std::size_t label = 0; label < particle_count; ++label) {
+        if (selected[label]) {
+          continue;
+        }
+        if (draw == 0) {
+          next = static_cast<ParticleId>(label);
+          break;
+        }
+        --draw;
+      }
+    }
+    selected[next] = true;
+    strands.push_back(next);
+  }
+  return strands;
+}
+
 TEST(InteractingSamplerTest, PermanentRecursionMatchesBruteForceAndLimits) {
   const std::array<double, 9> weights{1.0, 2.0, 0.4, 0.7, 1.5, 3.0, 2.2, 0.8, 1.1};
   std::array<double, 9> log_weights{};
@@ -194,6 +242,35 @@ TEST(InteractingSamplerTest, PermanentMatchingSamplerMatchesBruteForceLaw) {
   for (std::size_t index = 0; index < law.weights.size(); ++index) {
     EXPECT_NEAR(static_cast<double>(counts[index]) / 30'000.0, law.weights[index] / law.permanent,
                 0.012);
+  }
+}
+
+TEST(InteractingSamplerTest, FixedCapacityStrandSelectionMatchesLegacyDraws) {
+  const TorusLayout layout(11, 1);
+  const std::vector<SiteId> positions{SiteId(0), SiteId(0), SiteId(0), SiteId(0),
+                                      SiteId(4), SiteId(5), SiteId(6), SiteId(7)};
+  detail::StitchPartnerBuckets buckets;
+  buckets[SiteId(0)] = {0, 2, 1, 3};
+  buckets[SiteId(4)] = {4};
+  buckets[SiteId(5)] = {5};
+  buckets[SiteId(6)] = {6};
+  buckets[SiteId(7)] = {7};
+  const std::array<ParticleId, 3> local_pool{0, 1, 3};
+
+  for (const double global_probability : {0.0, 0.35, 1.0}) {
+    for (std::size_t strand_count = 2; strand_count <= detail::kMaxStitchStrands; ++strand_count) {
+      for (std::uint64_t seed = 0; seed < 64; ++seed) {
+        Random legacy_random(seed);
+        Random fixed_random(seed);
+        const std::vector<ParticleId> expected = legacy_select_stitch_strands(
+            2, strand_count, positions.size(), local_pool, global_probability, legacy_random);
+        const detail::SelectedStitchStrands selected = detail::select_stitch_strands(
+            2, strand_count, positions, buckets, layout, 0, global_probability, fixed_random);
+
+        EXPECT_TRUE(std::ranges::equal(selected.strands(), expected));
+        EXPECT_DOUBLE_EQ(fixed_random.uniform_unit(), legacy_random.uniform_unit());
+      }
+    }
   }
 }
 

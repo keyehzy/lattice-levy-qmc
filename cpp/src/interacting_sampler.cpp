@@ -6,6 +6,7 @@
 #include "path_cursor.hpp"
 #include "stitch_matching.hpp"
 #include "stitch_seam_context.hpp"
+#include "stitch_selection.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -161,69 +162,52 @@ std::vector<ParticleId> local_stitch_candidates(const ParticleId particle,
   return candidates;
 }
 
-std::vector<ParticleId> unselected_labels(const std::vector<ParticleId> &pool,
-                                          const std::vector<bool> &selected) {
-  std::vector<ParticleId> result;
-  result.reserve(pool.size());
-  for (const ParticleId label : pool) {
-    if (!selected[label]) {
-      result.push_back(label);
-    }
-  }
-  return result;
+bool is_selected(const std::span<const ParticleId> selected, const ParticleId candidate) {
+  return std::ranges::find(selected, candidate) != selected.end();
 }
 
-ParticleId draw_uniform_unselected(const std::vector<bool> &selected,
-                                   const std::size_t selected_count, Random &random) {
-  auto draw = static_cast<std::size_t>(
-      random.uniform_index(static_cast<std::uint64_t>(selected.size() - selected_count)));
-  for (std::size_t label = 0; label < selected.size(); ++label) {
-    if (selected[label]) {
+std::optional<ParticleId> draw_uniform_unselected(const std::span<const ParticleId> pool,
+                                                  const std::span<const ParticleId> selected,
+                                                  Random &random) {
+  std::size_t candidate_count = 0;
+  for (const ParticleId label : pool) {
+    if (!is_selected(selected, label)) {
+      ++candidate_count;
+    }
+  }
+  if (candidate_count == 0) {
+    return std::nullopt;
+  }
+
+  auto draw =
+      static_cast<std::size_t>(random.uniform_index(static_cast<std::uint64_t>(candidate_count)));
+  for (const ParticleId label : pool) {
+    if (is_selected(selected, label)) {
       continue;
     }
     if (draw == 0) {
-      return static_cast<ParticleId>(label);
+      return label;
+    }
+    --draw;
+  }
+  throw std::logic_error("failed to draw a local stitch strand");
+}
+
+ParticleId draw_uniform_unselected(const std::size_t particle_count,
+                                   const std::span<const ParticleId> selected, Random &random) {
+  auto draw = static_cast<std::size_t>(
+      random.uniform_index(static_cast<std::uint64_t>(particle_count - selected.size())));
+  for (std::size_t label = 0; label < particle_count; ++label) {
+    const auto candidate = static_cast<ParticleId>(label);
+    if (is_selected(selected, candidate)) {
+      continue;
+    }
+    if (draw == 0) {
+      return candidate;
     }
     --draw;
   }
   throw std::logic_error("failed to draw an unselected stitch strand");
-}
-
-std::vector<ParticleId>
-select_stitch_strands(const ParticleId anchor, const std::size_t strand_count,
-                      const std::span<const SiteId> positions,
-                      const detail::StitchPartnerBuckets &buckets, const TorusLayout &layout,
-                      const Model &model, const std::size_t locality_radius,
-                      const double global_partner_probability, Random &random) {
-  assert(std::isfinite(global_partner_probability) && global_partner_probability >= 0.0 &&
-         global_partner_probability <= 1.0);
-  assert(strand_count >= 2 && strand_count <= detail::kMaxStitchStrands &&
-         strand_count <= model.particle_count());
-  assert(static_cast<std::size_t>(anchor) < model.particle_count());
-
-  const std::vector<ParticleId> local_pool =
-      local_stitch_candidates(anchor, positions, buckets, layout, locality_radius);
-  std::vector<bool> selected(model.particle_count(), false);
-  selected[anchor] = true;
-  std::vector<ParticleId> strands{anchor};
-  strands.reserve(strand_count);
-
-  while (strands.size() < strand_count) {
-    const bool use_global = random.uniform_unit() < global_partner_probability;
-    const std::vector<ParticleId> local_candidates =
-        use_global ? std::vector<ParticleId>{} : unselected_labels(local_pool, selected);
-
-    ParticleId next = 0;
-    if (!local_candidates.empty()) {
-      next = local_candidates[random.uniform_index(
-          static_cast<std::uint64_t>(local_candidates.size()))];
-    } else {
-      next = draw_uniform_unselected(selected, strands.size(), random);
-    }
-    selected[next] = true;
-    strands.push_back(next);
-  }
-  return strands;
 }
 
 std::pair<double, double>
@@ -259,6 +243,40 @@ ContinuousPath splice_path_interval(const detail::PathSlice &prefix_slice,
 }
 
 } // namespace
+
+namespace detail {
+
+SelectedStitchStrands
+select_stitch_strands(const ParticleId anchor, const std::size_t strand_count,
+                      const std::span<const SiteId> positions, const StitchPartnerBuckets &buckets,
+                      const TorusLayout &layout, const std::size_t locality_radius,
+                      const double global_partner_probability, Random &random) {
+  assert(std::isfinite(global_partner_probability) && global_partner_probability >= 0.0 &&
+         global_partner_probability <= 1.0);
+  assert(strand_count >= 2 && strand_count <= kMaxStitchStrands &&
+         strand_count <= positions.size());
+  assert(static_cast<std::size_t>(anchor) < positions.size());
+
+  const std::vector<ParticleId> local_pool =
+      local_stitch_candidates(anchor, positions, buckets, layout, locality_radius);
+  SelectedStitchStrands selected;
+  selected.labels_[0] = anchor;
+  selected.size_ = 1;
+
+  while (selected.size_ < strand_count) {
+    const bool use_global = random.uniform_unit() < global_partner_probability;
+    const std::optional<ParticleId> local =
+        use_global ? std::nullopt : draw_uniform_unselected(local_pool, selected.strands(), random);
+    const ParticleId next =
+        local.has_value() ? *local
+                          : draw_uniform_unselected(positions.size(), selected.strands(), random);
+    selected.labels_[selected.size_] = next;
+    ++selected.size_;
+  }
+  return selected;
+}
+
+} // namespace detail
 
 std::string_view move_name(const MoveKind move) noexcept {
   switch (move) {
@@ -628,18 +646,19 @@ InteractingSampler::sample_stitch_proposal(const std::span<const ParticleId> str
   if (strand_count < 2 || strand_count > detail::kMaxStitchStrands) {
     throw std::invalid_argument("a stitch must contain between 2 and 8 strands");
   }
-  std::vector<bool> selected(state().worldlines().size(), false);
   std::vector<detail::PathSlice> path_slices;
   std::vector<Site> left;
   std::vector<Site> right;
   path_slices.reserve(strand_count);
   left.reserve(strand_count);
   right.reserve(strand_count);
-  for (const ParticleId label : strands) {
-    if (static_cast<std::size_t>(label) >= state().worldlines().size() || selected[label]) {
+  for (std::size_t index = 0; index < strand_count; ++index) {
+    const ParticleId label = strands[index];
+    const std::span<const ParticleId> previous = strands.first(index);
+    if (static_cast<std::size_t>(label) >= state().worldlines().size() ||
+        std::ranges::find(previous, label) != previous.end()) {
       throw std::invalid_argument("stitch strands must be distinct valid labels");
     }
-    selected[label] = true;
     const ContinuousPath &path = state().path(label);
     detail::PathCursor cursor(path);
     const detail::PathCut left_cut = cursor.cut(seam.tau0());
@@ -716,19 +735,17 @@ bool InteractingSampler::execute_stitch_update(const StitchUpdateOptions &option
       sample_stitch_window(model_.free, random_, options.interval, options.fraction);
   detail::StitchSeamContext seam(state(), tau0, tau1, layout_, free_ensemble_.free_path_kernels());
 
-  std::vector<ParticleId> strands;
   if (options.strands.empty()) {
     const ParticleId anchor = options.anchor.has_value()
                                   ? *options.anchor
                                   : static_cast<ParticleId>(random_.uniform_index(
                                         static_cast<std::uint64_t>(model_.free.particle_count())));
-    strands = select_stitch_strands(
+    const detail::SelectedStitchStrands strands = detail::select_stitch_strands(
         anchor, options.strand_count, seam.left_site_ids(), seam.partner_buckets(), layout_,
-        model_.free, options.locality_radius, options.global_partner_probability, random_);
-  } else {
-    strands = options.strands;
+        options.locality_radius, options.global_partner_probability, random_);
+    return try_stitch_strands(strands.strands(), seam);
   }
-  return try_stitch_strands(strands, seam);
+  return try_stitch_strands(options.strands, seam);
 }
 
 void InteractingSampler::stitch_sweep(const StitchSweepOptions &options) {
@@ -754,10 +771,10 @@ void InteractingSampler::execute_stitch_sweep(const PreparedStitchSweep &options
     const std::size_t strand_count = options.mixture.counts[mixture_index];
     const auto anchor = static_cast<ParticleId>(
         random_.uniform_index(static_cast<std::uint64_t>(model_.free.particle_count())));
-    const std::vector<ParticleId> strands = select_stitch_strands(
-        anchor, strand_count, seam.left_site_ids(), seam.partner_buckets(), layout_, model_.free,
+    const detail::SelectedStitchStrands strands = detail::select_stitch_strands(
+        anchor, strand_count, seam.left_site_ids(), seam.partner_buckets(), layout_,
         options.locality_radius, options.global_partner_probability, random_);
-    static_cast<void>(try_stitch_strands(strands, seam));
+    static_cast<void>(try_stitch_strands(strands.strands(), seam));
   }
 }
 

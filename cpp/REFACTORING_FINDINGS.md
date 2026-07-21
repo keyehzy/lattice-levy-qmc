@@ -76,7 +76,7 @@ type collects one invariant that is currently spread across several files.
 | P1 | Unify discrete log-weight draws and bounded-tail sampling (done 2026-07-20) | One truncation policy and fewer allocations | Medium |
 | P1 | Unify full/incremental action around accepted state (ownership slice done 2026-07-20) | One source of truth and faster full evaluation | Medium |
 | P1 | Make permutation topology authoritative (continuous and retained ideal done 2026-07-20) | Remove duplicated state and synchronization code | Medium |
-| P1 | Separate stitch selection, proposal, and commit (option/prevalidation and seam-cache slices done 2026-07-21) | Readability, testability, and API clarity | Medium |
+| P1 | Separate stitch selection, proposal, and commit (option/prevalidation, seam-cache, and fixed-capacity selection slices done 2026-07-21) | Readability, testability, and API clarity | Medium |
 | P2 | Add streaming runs, checkpoints, and prepared options | Operational quality of life | Small/medium |
 | P2 | Consolidate local helpers, names, and value equality | Less duplication and review noise | Small |
 | P2 | Split large translation units and demo output code | Navigation and reviewability | Small |
@@ -898,8 +898,17 @@ supported strand count now evaluates its matrix in row-major order and samples
 through the same validated `PreparedPermanent` recursion. An exact 2x2
 permanent regression and its sampled identity/exchange law cover the unified
 path; seeded pair-stitch streams may change while the proposal law remains
-unchanged. Translation-unit splitting and fixed-capacity strand selection
-remain open.
+unchanged. The fixed-capacity strand-selection slice is also complete.
+Automatic selection now owns at most eight chosen labels in an inline array,
+tests membership against that bounded prefix, scans the existing local pool
+twice to count and select an eligible label, and scans particle labels directly
+for global fallback. This removes the particle-count-sized `vector<bool>`, the
+heap-backed result, and one filtered candidate allocation per selected strand.
+Proposal validation likewise detects duplicates within the bounded input span
+instead of allocating a second particle-count-sized bitmap.
+A focused regression compares selected-label order and subsequent RNG position
+with the former algorithm across all supported strand counts, local/global
+fallback probabilities, and 64 seeds. Translation-unit splitting remains open.
 
 The fixed-seam and bridge-distribution cache slice is also complete. A private
 `StitchSeamContext` now owns `tau0/tau1`, the left-seam physical positions,
@@ -918,7 +927,13 @@ workload, a stitch fraction of 0.25, and one `k=8` stitch attempt per step
 reduced warm wall time from 0.95-0.97 s to 0.52-0.59 s across repeated runs. The
 generated trace remained byte-identical for the same seed. This is a focused
 diagnostic, not an end-to-end production benchmark. Translation-unit splitting
-and fixed-capacity strand selection remain open.
+remains open.
+
+The same warm release diagnostic measured 0.51-0.52 s immediately before the
+fixed-capacity strand-selection slice and 0.50-0.55 s after it; its 5,000-sample
+trace remained byte-identical. The end-to-end timing is neutral because bridge
+construction, matching, and path replacement dominate this workload, but the
+selection bookkeeping allocations are removed structurally.
 
 Pre-slice evidence:
 
@@ -959,9 +974,9 @@ Remaining recommendation:
   `TorusBridgeDistribution` by endpoint displacement. The same object exposes
   its log normalization and samples a covering endpoint, so matrix construction
   and selected bridge generation do not repeat Bessel support work.
-- For at most eight strands, use a small fixed array of selected labels and scan
-  candidate spans instead of allocating an `N`-bit vector and copied filtered
-  vectors on each attempt.
+- Completed 2026-07-21: for at most eight strands, use a small fixed array of
+  selected labels and scan candidate spans instead of allocating an `N`-bit
+  vector and copied filtered vectors on each attempt.
 - Completed 2026-07-21: route `k == 2` through the same prepared-permanent
   evaluator and sampler as all other supported sizes. The exact permanent and
   sampled pair law are covered directly; its seeded sample sequence may change.
@@ -1227,9 +1242,9 @@ visible at the assertion sites.
 8. Accepted-chain ownership completed 2026-07-20; a production k-way event
    merge was benchmarked and reverted 2026-07-21. Add the bundled interaction
    measurement separately.
-9. Segment/stitch option values, early compound-plan preparation, and fixed-seam
-   bridge-distribution caching completed 2026-07-21; split stitch
-   selection/proposal code separately.
+9. Segment/stitch option values, early compound-plan preparation, fixed-seam
+   bridge-distribution caching, and fixed-capacity strand selection completed
+   2026-07-21; split stitch selection/proposal code separately.
 10. Split translation units and demos after responsibilities have stabilized.
 11. GoogleTest exclusion from clang-tidy completed 2026-07-19; add install, CI,
    benchmark support, and an external consumer test.

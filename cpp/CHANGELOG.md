@@ -92,6 +92,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   within each fixed-seam stitch sweep, sharing exact matching normalizations
   and covering-endpoint draws without changing the proposal law or seeded
   stream.
+- Store automatic stitch selections in a fixed eight-label buffer and scan
+  candidate spans directly, removing the particle-count-sized selection bitmap,
+  heap-backed result, per-strand filtered candidate allocations, and the
+  proposal-validation bitmap while preserving the seeded proposal stream.
 
 ### Removed
 
