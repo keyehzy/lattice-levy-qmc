@@ -143,6 +143,27 @@ TEST(CanonicalObservablesTest, MatchesFockSpaceEnumeration) {
   EXPECT_NEAR(momentum.kinetic_energy, brute.energy, 3e-13);
 }
 
+TEST(CanonicalObservablesTest, HandlesSingleParticleOccupationFactorialBoundary) {
+  const qmc::Model model(qmc::ModelParameters{
+      .particle_count = 1,
+      .beta = 0.8,
+      .linear_size = 4,
+      .dimension = 1,
+      .hopping = 0.6,
+  });
+  const auto momentum = qmc::momentum_distribution(qmc::CanonicalEnsemble(model));
+
+  double normalization = 0.0;
+  for (const qmc::MomentumMode &mode : momentum.modes) {
+    normalization += std::exp(-model.beta() * mode.energy);
+  }
+  for (const qmc::MomentumMode &mode : momentum.modes) {
+    const double expected_occupation = std::exp(-model.beta() * mode.energy) / normalization;
+    EXPECT_NEAR(mode.occupation, expected_occupation, 2e-15);
+    EXPECT_NEAR(mode.occupation_variance, expected_occupation * (1.0 - expected_occupation), 2e-15);
+  }
+}
+
 TEST(CanonicalObservablesTest, SatisfiesMomentumDensityMatrixAndCycleNormalizations) {
   const qmc::Model model(qmc::ModelParameters{
       .particle_count = 7,

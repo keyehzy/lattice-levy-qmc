@@ -6,6 +6,7 @@
 #include "qmc/torus_layout.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <complex>
 #include <limits>
@@ -124,31 +125,31 @@ double phase_for_indices(std::span<const std::size_t> left, std::span<const std:
   return phase;
 }
 
-std::pair<double, double> occupation_moments(const double energy,
-                                             const CanonicalEnsemble &ensemble) {
+std::pair<double, double> occupation_moments(const double energy, const CanonicalEnsemble &ensemble,
+                                             const std::span<double> terms) {
   const Model &model = ensemble.model();
   const auto log_Z = ensemble.log_partitions();
-  if (model.particle_count() == 0) {
+  const std::size_t particle_count = model.particle_count();
+  assert(terms.size() >= particle_count);
+  if (particle_count == 0) {
     return {0.0, 0.0};
   }
-  std::vector<double> occupation_terms(model.particle_count());
-  for (std::size_t length = 1; length <= model.particle_count(); ++length) {
+  for (std::size_t length = 1; length <= particle_count; ++length) {
     const double duration = static_cast<double>(length) * model.beta();
-    occupation_terms[length - 1] = log_Z[model.particle_count() - length] -
-                                   log_Z[model.particle_count()] - (duration * energy);
+    terms[length - 1] =
+        log_Z[particle_count - length] - log_Z[particle_count] - (duration * energy);
   }
-  const double occupation = std::exp(log_sum_exp(occupation_terms));
+  const double occupation = std::exp(log_sum_exp(terms.first(particle_count)));
 
   double factorial_moment = 0.0;
-  if (model.particle_count() >= 2) {
-    std::vector<double> factorial_terms(model.particle_count() - 1);
-    for (std::size_t length = 2; length <= model.particle_count(); ++length) {
+  if (particle_count >= 2) {
+    for (std::size_t length = 2; length <= particle_count; ++length) {
       const double duration = static_cast<double>(length) * model.beta();
-      factorial_terms[length - 2] = std::log(2.0 * static_cast<double>(length - 1)) +
-                                    log_Z[model.particle_count() - length] -
-                                    log_Z[model.particle_count()] - (duration * energy);
+      terms[length - 2] = std::log(2.0 * static_cast<double>(length - 1)) +
+                          log_Z[particle_count - length] - log_Z[particle_count] -
+                          (duration * energy);
     }
-    factorial_moment = std::exp(log_sum_exp(factorial_terms));
+    factorial_moment = std::exp(log_sum_exp(terms.first(particle_count - 1)));
   }
   const double second_moment = factorial_moment + occupation;
   const double variance =
@@ -256,6 +257,7 @@ MomentumDistribution momentum_distribution(const CanonicalEnsemble &ensemble) {
   const auto volume = layout.volume();
   MomentumDistribution result;
   result.modes.reserve(volume);
+  std::vector<double> occupation_moment_terms(model.particle_count());
 
   for (std::size_t flat = 0; flat < volume; ++flat) {
     MomentumMode mode;
@@ -266,7 +268,8 @@ MomentumDistribution momentum_distribution(const CanonicalEnsemble &ensemble) {
     }
     mode.energy = spectrum.energy(mode.indices);
 
-    const auto [occupation, variance] = occupation_moments(mode.energy, ensemble);
+    const auto [occupation, variance] =
+        occupation_moments(mode.energy, ensemble, occupation_moment_terms);
     mode.occupation = occupation;
     mode.occupation_variance = variance;
     result.kinetic_energy += mode.energy * mode.occupation;

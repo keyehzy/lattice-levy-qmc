@@ -72,7 +72,7 @@ type collects one invariant that is currently spread across several files.
 | P0 | Make paths/configurations valid-by-construction (done 2026-07-21) | Ownership clarity and removal of nested validation | Large |
 | P1 | Path cursor/slice migration (done 2026-07-20) | Simpler boundary semantics and faster path surgery | Medium |
 | P1 | Add a retained-measurement context (done 2026-07-20); add accumulators | Less repeated work and a smaller demo | Medium |
-| P1 | Collect reusable free-particle numerics (spectrum, path-kernel, partition-recurrence, and cycle-sampling slices done 2026-07-21) | Numerical clarity and less repeated setup | Medium |
+| P1 | Collect reusable free-particle numerics (spectrum, path-kernel, partition-recurrence, cycle-sampling, and occupation-moment slices done 2026-07-21) | Numerical clarity and less repeated setup | Medium |
 | P1 | Unify discrete log-weight draws and bounded-tail sampling (done 2026-07-20) | One truncation policy and fewer allocations | Medium |
 | P1 | Unify full/incremental action around accepted state (ownership slice done 2026-07-20) | One source of truth and faster full evaluation | Medium |
 | P1 | Make permutation topology authoritative (continuous and retained ideal done 2026-07-20) | Remove duplicated state and synchronization code | Medium |
@@ -561,12 +561,17 @@ at `N=512`, `L=16384`, `d=1`, `beta=0.01`, and `t=1` took 0.3576-0.3905 s
 before the change and 0.2851-0.2926 s after it. This focused workload exercises
 the previous worst-case label-management path; it is not an end-to-end sampling
 benchmark.
-Occupation-moment scratch remains open.
-
-Remaining evidence:
-
-- `occupation_moments()` allocates log-term vectors for every momentum mode
-  (`src/observables.cpp:126-155`).
+The occupation-moment workspace slice is also complete. One particle-count-sized
+log-term buffer is now allocated per complete momentum distribution and reused
+for both the occupation and factorial-moment reductions of every mode. The
+calculation keeps the previous term order and log-sum-exp formulas. Exact
+Fock-space and momentum-normalization tests retain their existing coverage, and
+a single-particle regression covers the empty factorial-moment span. In ten
+alternating warm Apple Clang 17 release-build trials, 5,000 momentum-distribution
+evaluations at `N=64`, `L=64`, `d=1`, `beta=1.25`, and `t=0.9` reduced measured
+allocations per evaluation from 257 to 130 and median runtime from 0.2165 s to
+0.1979 s. This focused allocation-counting workload demonstrates the intended
+workspace reuse; it is not an end-to-end observable benchmark.
 
 Recommendation:
 
@@ -592,6 +597,9 @@ Recommendation:
   that prefix without a full-size mask/copy. Canonical minimum-label rooting and
   the complete directed labeled-permutation law are explicit in tests; changed
   active-label ordering intentionally permits a changed labeled seeded stream.
+- Completed 2026-07-21: allocate one maximum-sized occupation-moment log-term
+  buffer per momentum distribution and reuse its leading spans for every mode's
+  occupation and factorial-moment reductions.
 
 This refactor should precede low-level optimization because it establishes the
 cache boundaries and removes repeated trigonometry naturally.
@@ -1158,7 +1166,7 @@ visible at the assertion sites.
 7. Log-weight categorical draws and adaptive-support numerics completed
    2026-07-20; canonical derivative and partition recurrences,
    spectrum/trigonometric caching, reusable free-path kernels, and cycle-label
-   sampling completed 2026-07-21. Collect the remaining occupation scratch.
+   sampling and occupation-moment scratch reuse completed 2026-07-21.
 8. Accepted-chain ownership completed 2026-07-20; a production k-way event
    merge was benchmarked and reverted 2026-07-21. Add the bundled interaction
    measurement separately.
