@@ -101,15 +101,6 @@ std::ofstream output_file(const std::filesystem::path &path) {
   return output;
 }
 
-void add_values(std::vector<double> &destination, const std::span<const double> source) {
-  if (destination.size() != source.size()) {
-    throw std::logic_error("observable accumulator shape mismatch");
-  }
-  for (std::size_t index = 0; index < destination.size(); ++index) {
-    destination[index] += source[index];
-  }
-}
-
 void divide_values(std::vector<double> &values, const double divisor) {
   for (double &value : values) {
     value /= divisor;
@@ -217,7 +208,6 @@ struct SampleAverages {
 SampleAverages sample_ensemble(const CommandLine &command_line,
                                const qmc::CanonicalEnsemble &ensemble, qmc::Random &random) {
   const auto &model = command_line.model;
-  const auto volume = model.volume();
   SampleAverages averages{
       .cycle_count = std::vector<double>(model.particle_count() + 1),
       .cycle_particles = std::vector<double>(model.particle_count() + 1),
@@ -231,9 +221,9 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
       .structure_factor = {},
       .onsite_probability = {},
       .connected_density = {},
-      .mean_square_displacement = std::vector<double>(command_line.time_links),
-      .return_probability = std::vector<double>(command_line.time_links),
-      .displacement_probability = std::vector<double>(command_line.time_links * volume),
+      .mean_square_displacement = {},
+      .return_probability = {},
+      .displacement_probability = {},
       .winding_second_moment = std::vector<double>(model.dimension()),
       .winding_fourth_moment = std::vector<double>(model.dimension()),
       .winding_squared_trace = {},
@@ -255,6 +245,7 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
   qmc::EqualTimeAccumulator equal_time_accumulator(retained_grid, model.particle_count());
   qmc::RetainedDensityCorrelationAccumulator density_accumulator(retained_grid,
                                                                  model.particle_count());
+  qmc::RetainedGeometryAccumulator geometry_accumulator(retained_grid, model.particle_count());
 
   for (std::size_t sample = 0; sample < command_line.samples; ++sample) {
     const auto configuration =
@@ -311,10 +302,7 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
     const qmc::RetainedMeasurementContext measurement_context(configuration);
     equal_time_accumulator.observe(measurement_context);
     density_accumulator.observe(measurement_context);
-    const auto retained_geometry = qmc::retained_geometry_observables(configuration);
-    add_values(averages.mean_square_displacement, retained_geometry.mean_square_displacement);
-    add_values(averages.return_probability, retained_geometry.return_probability);
-    add_values(averages.displacement_probability, retained_geometry.displacement_probability);
+    geometry_accumulator.observe(configuration);
   }
 
   auto equal_time = equal_time_accumulator.finish();
@@ -327,14 +315,15 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
   const auto density_correlations = density_accumulator.finish();
   const auto connected_density = density_correlations.connected_density();
   averages.connected_density.assign(connected_density.begin(), connected_density.end());
+  auto retained_geometry = geometry_accumulator.finish();
+  averages.mean_square_displacement = std::move(retained_geometry.mean_square_displacement);
+  averages.return_probability = std::move(retained_geometry.return_probability);
+  averages.displacement_probability = std::move(retained_geometry.displacement_probability);
 
   const auto sample_count = static_cast<double>(command_line.samples);
   divide_values(averages.cycle_count, sample_count);
   divide_values(averages.cycle_particles, sample_count);
   divide_values(averages.longest_cycle_probability, sample_count);
-  divide_values(averages.mean_square_displacement, sample_count);
-  divide_values(averages.return_probability, sample_count);
-  divide_values(averages.displacement_probability, sample_count);
   divide_values(averages.winding_second_moment, sample_count);
   divide_values(averages.winding_fourth_moment, sample_count);
   averages.nonzero_winding_probability /= sample_count;

@@ -37,6 +37,15 @@ void expect_vector_average(const std::span<const double> actual,
   }
 }
 
+void expect_same_retained_geometry(const qmc::RetainedGeometryObservables &actual,
+                                   const qmc::RetainedGeometryObservables &expected) {
+  EXPECT_EQ(actual.time_points, expected.time_points);
+  EXPECT_EQ(actual.displacement_points, expected.displacement_points);
+  EXPECT_EQ(actual.mean_square_displacement, expected.mean_square_displacement);
+  EXPECT_EQ(actual.return_probability, expected.return_probability);
+  EXPECT_EQ(actual.displacement_probability, expected.displacement_probability);
+}
+
 BruteCanonicalResult enumerate_fock_states(const qmc::Model &model) {
   const auto volume = model.volume();
   std::vector<double> energies(volume);
@@ -543,6 +552,124 @@ TEST(ConfigurationObservablesTest, RetainedAccumulatorsRejectEmptyAndMismatchedC
   EXPECT_DOUBLE_EQ(actual_equal_time.mean_factorial_occupation,
                    expected_equal_time.mean_factorial_occupation);
   EXPECT_EQ(density.finish(), expected_density);
+}
+
+TEST(ConfigurationObservablesTest, RetainedGeometryAccumulatorAveragesCompatibleConfigurations) {
+  const qmc::Model model(qmc::ModelParameters{
+      .particle_count = 4,
+      .beta = 1.1,
+      .linear_size = 3,
+      .dimension = 2,
+      .hopping = 0.8,
+  });
+  const qmc::CanonicalEnsemble ensemble(model);
+  qmc::Random random(1921);
+  const auto first = qmc::sample_ideal_boson_configuration(ensemble, 5, random);
+  const auto second = qmc::sample_ideal_boson_configuration(ensemble, 5, random);
+  const auto first_geometry = qmc::retained_geometry_observables(first);
+  const auto second_geometry = qmc::retained_geometry_observables(second);
+  const qmc::RetainedGrid grid(model.beta(),
+                               qmc::TorusLayout(model.linear_size(), model.dimension()), 5);
+  qmc::RetainedGeometryAccumulator accumulator(grid, model.particle_count());
+
+  EXPECT_EQ(accumulator.grid(), grid);
+  EXPECT_EQ(accumulator.particle_count(), model.particle_count());
+  EXPECT_EQ(accumulator.sample_count(), 0U);
+
+  accumulator.observe(first);
+  EXPECT_EQ(accumulator.sample_count(), 1U);
+  expect_same_retained_geometry(accumulator.finish(), first_geometry);
+
+  accumulator.observe(second);
+  EXPECT_EQ(accumulator.sample_count(), 2U);
+  const auto averaged = accumulator.finish();
+  EXPECT_EQ(averaged.time_points, grid.time_points());
+  EXPECT_EQ(averaged.displacement_points, grid.layout().volume());
+  expect_vector_average(averaged.mean_square_displacement, first_geometry.mean_square_displacement,
+                        second_geometry.mean_square_displacement);
+  expect_vector_average(averaged.return_probability, first_geometry.return_probability,
+                        second_geometry.return_probability);
+  expect_vector_average(averaged.displacement_probability, first_geometry.displacement_probability,
+                        second_geometry.displacement_probability);
+}
+
+TEST(ConfigurationObservablesTest,
+     RetainedGeometryAccumulatorRejectsEmptyAndMismatchedConfigurations) {
+  const auto make_configuration = [](const qmc::ModelParameters parameters,
+                                     const std::size_t time_points, const std::uint64_t seed) {
+    const qmc::Model model(parameters);
+    qmc::Random random(seed);
+    return qmc::sample_ideal_boson_configuration(model, time_points, random);
+  };
+  const qmc::ModelParameters base_parameters{
+      .particle_count = 2,
+      .beta = 1.0,
+      .linear_size = 4,
+      .dimension = 1,
+      .hopping = 0.7,
+  };
+  const auto base = make_configuration(base_parameters, 3, 1923);
+  const qmc::RetainedGrid grid(
+      base.model().beta(), qmc::TorusLayout(base.model().linear_size(), base.model().dimension()),
+      base.time_links_per_beta());
+  qmc::RetainedGeometryAccumulator accumulator(grid, base.model().particle_count());
+
+  EXPECT_THROW(static_cast<void>(accumulator.finish()), std::logic_error);
+
+  auto expect_rejected = [&](const qmc::IdealBosonConfiguration &configuration) {
+    EXPECT_THROW(accumulator.observe(configuration), std::invalid_argument);
+    EXPECT_EQ(accumulator.sample_count(), 0U);
+  };
+  auto parameters = base_parameters;
+  parameters.particle_count = 3;
+  expect_rejected(make_configuration(parameters, 3, 1924));
+
+  parameters = base_parameters;
+  parameters.beta = 2.0;
+  expect_rejected(make_configuration(parameters, 3, 1925));
+
+  parameters = base_parameters;
+  parameters.linear_size = 2;
+  parameters.dimension = 2;
+  expect_rejected(make_configuration(parameters, 3, 1926));
+
+  const auto different_time_points = make_configuration(base_parameters, 4, 1927);
+  expect_rejected(different_time_points);
+
+  accumulator.observe(base);
+  EXPECT_EQ(accumulator.sample_count(), 1U);
+  const auto expected = qmc::retained_geometry_observables(base);
+  expect_same_retained_geometry(accumulator.finish(), expected);
+  EXPECT_THROW(accumulator.observe(different_time_points), std::invalid_argument);
+  EXPECT_EQ(accumulator.sample_count(), 1U);
+  expect_same_retained_geometry(accumulator.finish(), expected);
+}
+
+TEST(ConfigurationObservablesTest, RetainedGeometryAccumulatorHandlesEmptySystem) {
+  const qmc::Model model(qmc::ModelParameters{
+      .particle_count = 0,
+      .beta = 0.0,
+      .linear_size = 3,
+      .dimension = 2,
+      .hopping = 0.0,
+  });
+  qmc::Random random(1929);
+  const auto configuration = qmc::sample_ideal_boson_configuration(model, 4, random);
+  const qmc::RetainedGrid grid(model.beta(),
+                               qmc::TorusLayout(model.linear_size(), model.dimension()), 4);
+  qmc::RetainedGeometryAccumulator accumulator(grid, model.particle_count());
+
+  accumulator.observe(configuration);
+  const auto result = accumulator.finish();
+  EXPECT_EQ(accumulator.sample_count(), 1U);
+  EXPECT_EQ(result.time_points, grid.time_points());
+  EXPECT_EQ(result.displacement_points, grid.layout().volume());
+  EXPECT_TRUE(std::ranges::all_of(result.mean_square_displacement,
+                                  [](const double value) { return value == 0.0; }));
+  EXPECT_TRUE(std::ranges::all_of(result.return_probability,
+                                  [](const double value) { return value == 0.0; }));
+  EXPECT_TRUE(std::ranges::all_of(result.displacement_probability,
+                                  [](const double value) { return value == 0.0; }));
 }
 
 TEST(ConfigurationObservablesTest, RejectsWrappedMatsubaraGridExtent) {

@@ -251,6 +251,28 @@ struct RetainedGeometryObservables {
 [[nodiscard]] RetainedGeometryObservables
 retained_geometry_observables(const IdealBosonConfiguration &configuration);
 
+// Averages retained covering/displacement geometry over compatible ideal
+// configurations. Each observed configuration must have the construction grid
+// and particle count.
+class RetainedGeometryAccumulator {
+public:
+  RetainedGeometryAccumulator(RetainedGrid grid, std::size_t particle_count);
+
+  [[nodiscard]] const RetainedGrid &grid() const noexcept { return grid_; }
+  [[nodiscard]] std::size_t particle_count() const noexcept { return particle_count_; }
+  [[nodiscard]] std::size_t sample_count() const noexcept { return sample_count_; }
+
+  void observe(const IdealBosonConfiguration &configuration);
+  // Throws logic_error when no sample has been observed.
+  [[nodiscard]] RetainedGeometryObservables finish() const;
+
+private:
+  RetainedGrid grid_;
+  std::size_t particle_count_;
+  std::size_t sample_count_ = 0;
+  RetainedGeometryObservables sums_;
+};
+
 struct RetainedCycleGeometry {
   std::size_t length = 0;
   Site winding;

@@ -75,6 +75,21 @@ void require_matching_measurement_context(const RetainedGrid &grid,
   }
 }
 
+void require_matching_retained_configuration(const RetainedGrid &grid,
+                                             const std::size_t particle_count,
+                                             const IdealBosonConfiguration &configuration) {
+  const Model &model = configuration.model();
+  const RetainedGrid configuration_grid(model.beta(),
+                                        TorusLayout(model.linear_size(), model.dimension()),
+                                        configuration.time_links_per_beta());
+  if (configuration_grid != grid) {
+    throw std::invalid_argument("retained configuration has a different grid");
+  }
+  if (model.particle_count() != particle_count) {
+    throw std::invalid_argument("retained configuration has a different particle count");
+  }
+}
+
 std::size_t next_observation_count(const std::size_t sample_count) {
   return detail::checked_add_size(sample_count, 1, "observable sample count exceeds size_t");
 }
@@ -855,6 +870,41 @@ retained_geometry_observables(const IdealBosonConfiguration &configuration) {
       }
     }
   }
+  return result;
+}
+
+RetainedGeometryAccumulator::RetainedGeometryAccumulator(RetainedGrid grid,
+                                                         const std::size_t particle_count)
+    : grid_(std::move(grid)), particle_count_(particle_count),
+      sums_{
+          .time_points = grid_.time_points(),
+          .displacement_points = grid_.layout().volume(),
+          .mean_square_displacement = std::vector<double>(grid_.time_points()),
+          .return_probability = std::vector<double>(grid_.time_points()),
+          .displacement_probability = std::vector<double>(
+              detail::checked_product(grid_.time_points(), grid_.layout().volume(),
+                                      "retained-geometry accumulator grid exceeds size_t")),
+      } {}
+
+void RetainedGeometryAccumulator::observe(const IdealBosonConfiguration &configuration) {
+  require_matching_retained_configuration(grid_, particle_count_, configuration);
+  const auto updated_sample_count = next_observation_count(sample_count_);
+  const auto observation = retained_geometry_observables(configuration);
+  add_values(sums_.mean_square_displacement, observation.mean_square_displacement);
+  add_values(sums_.return_probability, observation.return_probability);
+  add_values(sums_.displacement_probability, observation.displacement_probability);
+  sample_count_ = updated_sample_count;
+}
+
+RetainedGeometryObservables RetainedGeometryAccumulator::finish() const {
+  if (sample_count_ == 0) {
+    throw std::logic_error("cannot finish a retained-geometry accumulator without samples");
+  }
+  RetainedGeometryObservables result = sums_;
+  const auto divisor = static_cast<double>(sample_count_);
+  divide_values(result.mean_square_displacement, divisor);
+  divide_values(result.return_probability, divisor);
+  divide_values(result.displacement_probability, divisor);
   return result;
 }
 

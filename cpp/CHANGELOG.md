@@ -25,8 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a deterministic read-only cycle decomposition.
 - Add an owning `RetainedMeasurementContext` so equal-time and retained-density
   estimators can share one physical-site traversal and retained-grid provenance.
-- Add typed equal-time and retained-density accumulators that enforce grid and
-  particle-count provenance and own sample normalization.
+- Add typed equal-time, retained-density, and retained-geometry accumulators
+  that enforce grid and particle-count provenance and own sample normalization.
 - Add a bundled interaction measurement that derives action, overlap, double
   occupancy, and energy estimators from one full overlap sweep.
 - Add self-describing segment, stitch, fixed-seam stitch-sweep, and random-seam

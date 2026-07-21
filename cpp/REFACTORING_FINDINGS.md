@@ -71,7 +71,7 @@ type collects one invariant that is currently spread across several files.
 | P0 | Bind model and canonical table (done 2026-07-19); reusable path kernels (done 2026-07-21) | Correctness and large repeated-work reduction | Medium |
 | P0 | Make paths/configurations valid-by-construction (done 2026-07-21) | Ownership clarity and removal of nested validation | Large |
 | P1 | Path cursor/slice migration (done 2026-07-20) | Simpler boundary semantics and faster path surgery | Medium |
-| P1 | Add a retained-measurement context (done 2026-07-20) and equal-time/density accumulators (done 2026-07-21); add remaining accumulators | Less repeated work and a smaller demo | Medium |
+| P1 | Add a retained-measurement context (done 2026-07-20) and equal-time/density/retained-geometry accumulators (done 2026-07-21); add cycle/winding accumulators | Less repeated work and a smaller demo | Medium |
 | P1 | Collect reusable free-particle numerics (spectrum, path-kernel, partition-recurrence, cycle-sampling, and occupation-moment slices done 2026-07-21) | Numerical clarity and less repeated setup | Medium |
 | P1 | Unify discrete log-weight draws and bounded-tail sampling (done 2026-07-20) | One truncation policy and fewer allocations | Medium |
 | P1 | Unify full/incremental action around accepted state (ownership slice done 2026-07-20) | One source of truth and faster full evaluation | Medium |
@@ -442,8 +442,8 @@ proportional to events plus pieces and is easier to reason about.
 
 ### 6. P1: share retained measurement state and provide real accumulators
 
-Status (2026-07-21): the retained-measurement-context and equal-time/density
-accumulator slices are complete.
+Status (2026-07-21): the retained-measurement-context and
+equal-time/density/retained-geometry accumulator slices are complete.
 `RetainedMeasurementContext` owns the retained-grid provenance and flattened,
 time-major physical positions derived once from a retained configuration.
 Equal-time and retained-density estimators consume it, while their existing
@@ -456,8 +456,14 @@ own their sample counts, and return normalized results from `finish()`. The
 ideal demo uses both instead of manually initializing, adding, and dividing
 their result fields. Exact context/wrapper equivalence, two-sample averages,
 single-sample identity, grid/particle mismatches, bounds, and empty boundaries
-cover the new ownership units. Cycle/winding/geometry accumulators, shape-aware
-result accessors, and transform plans remain open.
+cover the new ownership units. `RetainedGeometryAccumulator` likewise binds one
+retained grid and particle count, rejects incompatible configurations before
+mutation, owns its sample count, and returns normalized covering/displacement
+geometry from `finish()`. The ideal demo uses it instead of manually sizing,
+adding, and dividing three geometry arrays. Single- and two-sample identity,
+grid/particle mismatches, empty completion, and the zero-particle boundary cover
+that slice. Cycle/winding accumulators, context-based retained-geometry
+evaluation, shape-aware result accessors, and transform plans remain open.
 
 Pre-context evidence:
 
@@ -473,9 +479,9 @@ Pre-context evidence:
 
 Remaining evidence:
 
-- `SampleAverages` still manually initializes, adds, and normalizes its cycle,
-  winding, and retained-geometry fields (`examples/ideal_demo.cpp:188-247` and
-  `examples/ideal_demo.cpp:301-347`). Adding one of those result fields requires
+- `SampleAverages` still manually initializes, adds, and normalizes its cycle and
+  winding fields (`examples/ideal_demo.cpp:188-247` and
+  `examples/ideal_demo.cpp:253-343`). Adding one of those result fields requires
   updating several distant blocks correctly.
 - flattened time/space arrays expose dimensions next to raw vectors rather than
   through shape-aware accessors (`include/qmc/observables.hpp:134-143` and
@@ -491,10 +497,12 @@ Recommendation:
   Optional precomputed displacement/phase data remains a transform-plan
   follow-up.
 - Let equal-time, density, and geometry estimators consume that context.
-- Completed 2026-07-21 for equal-time and retained-density results: add typed
-  accumulator objects with `observe(context)` and sample-count-owning
-  `finish()`; keep raw per-configuration estimators for users who need them.
-  Cycle, winding, and retained-geometry accumulation remain separate follow-ups.
+- Completed 2026-07-21 for equal-time, retained-density, and retained-geometry
+  results: add typed accumulator objects with sample-count-owning `finish()`;
+  keep raw per-configuration estimators for users who need them. Equal-time and
+  density observe the shared context, while retained geometry observes the
+  configuration until covering-space geometry joins that context. Cycle and
+  winding accumulation remain separate follow-ups.
 - Stream slices where possible instead of retaining `M x volume` intermediate
   occupancy state.
 - Give flattened lattice/time results shape-aware accessors. For small
@@ -1183,9 +1191,10 @@ visible at the assertion sites.
    `ContinuousConfiguration`, and `Model` encapsulation, plus authoritative
    continuous and retained `Permutation` topology; full path/configuration
    validation remains available as an explicit diagnostic audit.
-6. Retained measurement context completed 2026-07-20 and equal-time/density
-   accumulators completed 2026-07-21; add cycle/winding/geometry accumulators,
-   then optimize direct correlation kernels from benchmark evidence.
+6. Retained measurement context completed 2026-07-20 and
+   equal-time/density/retained-geometry accumulators completed 2026-07-21; add
+   cycle/winding accumulators, then optimize direct correlation kernels from
+   benchmark evidence.
 7. Log-weight categorical draws and adaptive-support numerics completed
    2026-07-20; canonical derivative and partition recurrences,
    spectrum/trigonometric caching, reusable free-path kernels, and cycle-label
