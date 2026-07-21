@@ -63,6 +63,57 @@ double clamp_nonnegative_roundoff(const double value, const double scale) {
   return value;
 }
 
+using SecondDerivativeFinalizer = double (*)(double value, double scale);
+
+double preserve_second_derivative(const double value, [[maybe_unused]] const double scale) {
+  return value;
+}
+
+std::vector<LogDerivatives>
+canonical_log_derivatives(const CanonicalEnsemble &ensemble,
+                          const std::span<const LogDerivatives> log_cycle_derivatives,
+                          const SecondDerivativeFinalizer finalize_second) {
+  const auto log_cycle_weights = ensemble.log_cycle_weights();
+  const auto log_partitions = ensemble.log_partitions();
+  if (log_cycle_derivatives.size() != log_cycle_weights.size() ||
+      log_cycle_weights.size() != log_partitions.size()) {
+    throw std::logic_error("canonical derivative inputs have inconsistent sizes");
+  }
+
+  const auto count = ensemble.model().particle_count();
+  std::vector<LogDerivatives> result(count + 1);
+  std::vector<double> probabilities(count);
+  for (std::size_t particles = 1; particles <= count; ++particles) {
+    const double log_particles = std::log(static_cast<double>(particles));
+    double probability_sum = 0.0;
+    for (std::size_t length = 1; length <= particles; ++length) {
+      const double log_probability = log_cycle_weights[length] +
+                                     log_partitions[particles - length] - log_particles -
+                                     log_partitions[particles];
+      probabilities[length - 1] = std::exp(log_probability);
+      probability_sum += probabilities[length - 1];
+    }
+    if (!std::isfinite(probability_sum) || probability_sum <= 0.0) {
+      throw std::runtime_error("failed to normalize canonical derivative recursion");
+    }
+
+    double first = 0.0;
+    double raw_second = 0.0;
+    for (std::size_t length = 1; length <= particles; ++length) {
+      const double probability = probabilities[length - 1] / probability_sum;
+      const double candidate_first =
+          log_cycle_derivatives[length].first + result[particles - length].first;
+      const double candidate_second =
+          log_cycle_derivatives[length].second + result[particles - length].second;
+      first += probability * candidate_first;
+      raw_second += probability * (candidate_second + (candidate_first * candidate_first));
+    }
+    result[particles].first = first;
+    result[particles].second = finalize_second(raw_second - (first * first), raw_second);
+  }
+  return result;
+}
+
 double mode_energy(const std::vector<std::size_t> &indices, const Model &model) {
   double cosine_sum = 0.0;
   for (const std::size_t index : indices) {
@@ -171,7 +222,6 @@ void accumulate_structure_factor(const std::span<const SiteId> positions, const 
 
 CanonicalThermodynamics canonical_thermodynamics(const CanonicalEnsemble &ensemble) {
   const Model &model = ensemble.model();
-  const auto log_z = ensemble.log_cycle_weights();
   const auto log_Z = ensemble.log_partitions();
   if (model.beta() <= 0.0) {
     throw std::invalid_argument("canonical thermodynamics requires beta > 0");
@@ -182,36 +232,8 @@ CanonicalThermodynamics canonical_thermodynamics(const CanonicalEnsemble &ensemb
   for (std::size_t length = 1; length <= count; ++length) {
     log_z_derivatives[length] = one_particle_beta_derivatives(model, length);
   }
-
-  std::vector<double> log_Z_first(count + 1, 0.0);
-  std::vector<double> log_Z_second(count + 1, 0.0);
-  for (std::size_t particles = 1; particles <= count; ++particles) {
-    std::vector<double> probabilities(particles);
-    double probability_sum = 0.0;
-    for (std::size_t length = 1; length <= particles; ++length) {
-      const double log_probability = log_z[length] + log_Z[particles - length] -
-                                     std::log(static_cast<double>(particles)) - log_Z[particles];
-      probabilities[length - 1] = std::exp(log_probability);
-      probability_sum += probabilities[length - 1];
-    }
-    if (!std::isfinite(probability_sum) || probability_sum <= 0.0) {
-      throw std::runtime_error("failed to normalize canonical derivative recursion");
-    }
-
-    double first = 0.0;
-    double raw_second = 0.0;
-    for (std::size_t length = 1; length <= particles; ++length) {
-      const double probability = probabilities[length - 1] / probability_sum;
-      const double candidate_first =
-          log_z_derivatives[length].first + log_Z_first[particles - length];
-      const double candidate_second =
-          log_z_derivatives[length].second + log_Z_second[particles - length];
-      first += probability * candidate_first;
-      raw_second += probability * (candidate_second + (candidate_first * candidate_first));
-    }
-    log_Z_first[particles] = first;
-    log_Z_second[particles] = clamp_nonnegative_roundoff(raw_second - (first * first), raw_second);
-  }
+  const auto log_Z_derivatives =
+      canonical_log_derivatives(ensemble, log_z_derivatives, clamp_nonnegative_roundoff);
 
   const double nan = std::numeric_limits<double>::quiet_NaN();
   CanonicalThermodynamics result{
@@ -223,8 +245,9 @@ CanonicalThermodynamics canonical_thermodynamics(const CanonicalEnsemble &ensemb
   };
   for (std::size_t particles = 0; particles <= count; ++particles) {
     result.free_energy[particles] = -log_Z[particles] / model.beta();
-    result.energy[particles] = -log_Z_first[particles];
-    result.heat_capacity[particles] = model.beta() * model.beta() * log_Z_second[particles];
+    result.energy[particles] = -log_Z_derivatives[particles].first;
+    result.heat_capacity[particles] =
+        model.beta() * model.beta() * log_Z_derivatives[particles].second;
     result.entropy[particles] = log_Z[particles] + (model.beta() * result.energy[particles]);
     if (particles > 0) {
       result.addition_chemical_potential[particles] =
@@ -459,8 +482,6 @@ double log_canonical_partition_twisted(const Model &model, std::span<const doubl
 
 double twist_free_energy_curvature(const CanonicalEnsemble &ensemble, const std::size_t axis) {
   const Model &model = ensemble.model();
-  const auto log_z = ensemble.log_cycle_weights();
-  const auto log_Z = ensemble.log_partitions();
   if (model.beta() <= 0.0) {
     throw std::invalid_argument("twist free-energy curvature requires beta > 0");
   }
@@ -495,30 +516,9 @@ double twist_free_energy_curvature(const CanonicalEnsemble &ensemble, const std:
         (-scale * mean_cosine + scale * scale * (mean_sine_square - (mean_sine * mean_sine)));
   }
 
-  std::vector<double> first(model.particle_count() + 1);
-  std::vector<double> second(model.particle_count() + 1);
-  for (std::size_t particles = 1; particles <= model.particle_count(); ++particles) {
-    double probability_sum = 0.0;
-    double next_first = 0.0;
-    double raw_second = 0.0;
-    std::vector<double> probabilities(particles);
-    for (std::size_t length = 1; length <= particles; ++length) {
-      probabilities[length - 1] =
-          std::exp(log_z[length] + log_Z[particles - length] -
-                   std::log(static_cast<double>(particles)) - log_Z[particles]);
-      probability_sum += probabilities[length - 1];
-    }
-    for (std::size_t length = 1; length <= particles; ++length) {
-      const double probability = probabilities[length - 1] / probability_sum;
-      const double candidate_first = log_z_derivatives[length].first + first[particles - length];
-      const double candidate_second = log_z_derivatives[length].second + second[particles - length];
-      next_first += probability * candidate_first;
-      raw_second += probability * (candidate_second + (candidate_first * candidate_first));
-    }
-    first[particles] = next_first;
-    second[particles] = raw_second - (next_first * next_first);
-  }
-  const double curvature = -second[model.particle_count()] / model.beta();
+  const auto log_Z_derivatives =
+      canonical_log_derivatives(ensemble, log_z_derivatives, preserve_second_derivative);
+  const double curvature = -log_Z_derivatives[model.particle_count()].second / model.beta();
   return clamp_nonnegative_roundoff(curvature, std::abs(curvature));
 }
 

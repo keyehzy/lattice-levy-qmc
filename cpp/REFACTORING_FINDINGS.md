@@ -507,7 +507,19 @@ correlation from DFT cost.
 
 ### 7. P1: collect free-particle numerics into reusable kernels
 
-Evidence:
+Status (2026-07-21): the canonical derivative-recurrence slice is complete. One
+private recurrence now propagates first and second log derivatives for both
+canonical thermodynamics and twist curvature, with one reusable probability
+scratch buffer instead of one allocation per recursion row. Thermodynamics
+retains its per-row nonnegative roundoff handling, while twist propagation
+preserves the signed second derivative until converting it to free-energy
+curvature. Exact Fock-space thermodynamics, twist finite differences, isotropic
+axis equality, invalid-axis handling, and the empty-system boundary cover the
+shared implementation. Spectrum/trigonometric caching, the base/twisted
+partition recurrence, occupation scratch, cycle-label management, and prepared
+path kernels remain open.
+
+Remaining evidence:
 
 - `canonical_table()` allocates a new `terms` vector for every particle number
   and revalidates the model through `log_one_particle_trace(duration, model)` for
@@ -519,9 +531,6 @@ Evidence:
   to the required canonical probability work.
 - canonical log recursion is implemented again for twisted boundaries
   (`src/observables.cpp:474-516`).
-- the derivative recursion in thermodynamics
-  (`src/observables.cpp:262-297`) is substantially repeated in twist curvature
-  (`src/observables.cpp:530-581`).
 - momentum angles, cosines, and exponential weights are rebuilt in the trace,
   beta derivatives, mode energies, one-body matrix, twist partition, and twist
   curvature.
@@ -1109,7 +1118,8 @@ visible at the assertion sites.
 6. Retained measurement context completed 2026-07-20; add accumulators, then
    optimize direct correlation kernels from benchmark evidence.
 7. Log-weight categorical draws and adaptive-support numerics completed
-   2026-07-20; consolidate canonical derivative recurrences.
+   2026-07-20; canonical derivative recurrences completed 2026-07-21. Collect
+   spectrum/trigonometric caching and the remaining reusable free numerics.
 8. Accepted-chain ownership completed 2026-07-20; a production k-way event
    merge was benchmarked and reverted 2026-07-21. Add the bundled interaction
    measurement separately.

@@ -158,6 +158,9 @@ TEST(CanonicalObservablesTest, TwistCurvatureMatchesFiniteDifference) {
   });
   const qmc::CanonicalEnsemble canonical(model);
   const double curvature = qmc::twist_free_energy_curvature(canonical, 0);
+  EXPECT_DOUBLE_EQ(qmc::twist_free_energy_curvature(canonical, 1), curvature);
+  EXPECT_THROW(static_cast<void>(qmc::twist_free_energy_curvature(canonical, model.dimension())),
+               std::out_of_range);
   constexpr double step = 1e-3;
   const std::vector<double> zero(model.dimension());
   std::vector<double> positive(model.dimension());
@@ -390,6 +393,7 @@ TEST(CanonicalObservablesTest, HandlesEmptySystemAndRejectsUndefinedTemperatureQ
       momentum.modes, [](const qmc::MomentumMode &mode) { return mode.occupation == 0.0; }));
   EXPECT_TRUE(std::ranges::all_of(
       density_matrix, [](const qmc::OneBodyDensityPoint &point) { return point.value == 0.0; }));
+  EXPECT_DOUBLE_EQ(qmc::twist_free_energy_curvature(empty_ensemble, 0), 0.0);
 
   qmc::Random random(1911);
   const auto configuration = qmc::sample_ideal_boson_configuration(empty_ensemble, 3, random);
