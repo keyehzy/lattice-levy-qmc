@@ -13,7 +13,7 @@
 namespace qmc {
 
 // One validated free model and the canonical recursion derived from it. Prefix
-// queries through any particle count not exceeding model().particle_count reuse
+// queries through any particle count not exceeding model().particle_count() reuse
 // the same physical parameters and recursion.
 class CanonicalEnsemble {
 public:
@@ -28,7 +28,7 @@ public:
 
   // Samples directed labeled permutation cycles for the ensemble particle count.
   [[nodiscard]] std::vector<Cycle> sample_cycles(Random &random) const;
-  // Reuses a canonical prefix. particle_count must not exceed model().particle_count.
+  // Reuses a canonical prefix. particle_count must not exceed model().particle_count().
   [[nodiscard]] std::vector<Cycle> sample_cycles(std::size_t particle_count, Random &random) const;
 
 private:

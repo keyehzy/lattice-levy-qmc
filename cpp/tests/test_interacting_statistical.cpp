@@ -39,7 +39,8 @@ TEST(InteractingDistributionTest, MatchesSmallSystemExactDiagonalizationReferenc
   constexpr std::size_t burn_in = 2'000;
   constexpr std::size_t sample_count = 30'000;
   const qmc::InteractingModel model{
-      .free = {.particle_count = 2, .beta = 0.8, .linear_size = 3, .dimension = 1, .hopping = 1.0},
+      .free = qmc::Model(qmc::ModelParameters{
+          .particle_count = 2, .beta = 0.8, .linear_size = 3, .dimension = 1, .hopping = 1.0}),
       .interaction = 1.2,
   };
   qmc::InteractingSampler sampler(model, 20260717);
@@ -57,7 +58,7 @@ TEST(InteractingDistributionTest, MatchesSmallSystemExactDiagonalizationReferenc
     total_energy += value.total_energy;
     kinetic_energy += value.kinetic_energy;
     interaction_energy += value.interaction_energy;
-    pair_count += value.pair_overlap_time / model.free.beta;
+    pair_count += value.pair_overlap_time / model.free.beta();
   }
 
   const double denominator = static_cast<double>(sample_count);

@@ -79,27 +79,18 @@ Site derive_cycle_winding(const IdealBosonConfiguration &configuration,
   const DenseWorldlines &worldlines = configuration.covering_worldlines();
   const ParticleId root = cycle.front();
   const ParticleId last = cycle.back();
-  Site winding(model.dimension);
-  for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+  Site winding(model.dimension());
+  for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
     winding[axis] =
         winding_component(worldlines.at(root, 0, axis),
                           worldlines.at(last, configuration.time_links_per_beta(), axis),
-                          model.linear_size, boundary);
+                          model.linear_size(), boundary);
   }
   return winding;
 }
 
 void validate_configuration(const IdealBosonConfiguration &configuration,
                             const ValidationBoundary boundary) {
-  try {
-    configuration.model().validate();
-  } catch (const std::invalid_argument &error) {
-    if (boundary == ValidationBoundary::Construction) {
-      throw;
-    }
-    throw std::logic_error(error.what());
-  }
-
   const Model &model = configuration.model();
   const std::size_t time_links = configuration.time_links_per_beta();
   if (time_links < 1) {
@@ -107,18 +98,18 @@ void validate_configuration(const IdealBosonConfiguration &configuration,
   }
   const auto expected_points =
       detail::checked_add_size(time_links, 1, "world-line time-point count exceeds size_t");
-  if (configuration.topology().size() != model.particle_count) {
+  if (configuration.topology().size() != model.particle_count()) {
     fail_validation(boundary, "retained topology size does not match particle_count");
   }
 
   const DenseWorldlines &worldlines = configuration.covering_worldlines();
-  if (worldlines.particle_count() != model.particle_count ||
-      worldlines.time_points() != expected_points || worldlines.dimension() != model.dimension) {
+  if (worldlines.particle_count() != model.particle_count() ||
+      worldlines.time_points() != expected_points || worldlines.dimension() != model.dimension()) {
     fail_validation(boundary,
                     "covering world-line shape does not match the retained configuration");
   }
 
-  static_cast<void>(TorusLayout(model.linear_size, model.dimension));
+  static_cast<void>(TorusLayout(model.linear_size(), model.dimension()));
 
   const auto cycles = configuration.topology().cycles();
   for (std::size_t cycle_index = 0; cycle_index < cycles.size(); ++cycle_index) {
@@ -200,7 +191,7 @@ IdealBosonConfiguration sample_ideal_boson_configuration(const CanonicalEnsemble
                                                          Random &random,
                                                          const NumericalOptions &options) {
   const Model &model = ensemble.model();
-  static_cast<void>(TorusLayout(model.linear_size, model.dimension));
+  static_cast<void>(TorusLayout(model.linear_size(), model.dimension()));
   options.validate();
   if (time_links_per_beta < 1) {
     throw std::invalid_argument("time_links_per_beta must be positive");
@@ -209,27 +200,27 @@ IdealBosonConfiguration sample_ideal_boson_configuration(const CanonicalEnsemble
                                                     "world-line time-point count exceeds size_t");
 
   const std::vector<Cycle> cycle_labels = ensemble.sample_cycles(random);
-  std::vector<ParticleId> successors(model.particle_count);
-  DenseWorldlines covering_worldlines(model.particle_count, time_points, model.dimension);
+  std::vector<ParticleId> successors(model.particle_count());
+  DenseWorldlines covering_worldlines(model.particle_count(), time_points, model.dimension());
 
   for (const Cycle &labels : cycle_labels) {
     const auto length = labels.size();
-    const double duration = static_cast<double>(length) * model.beta;
+    const double duration = static_cast<double>(length) * model.beta();
     if (!std::isfinite(duration)) {
       throw std::overflow_error("cycle duration overflowed");
     }
 
-    Site base(model.dimension);
-    Site winding(model.dimension);
-    Site endpoint(model.dimension);
-    for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+    Site base(model.dimension());
+    Site winding(model.dimension());
+    Site endpoint(model.dimension());
+    for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
       base[axis] =
-          static_cast<Coord>(random.uniform_index(static_cast<std::uint64_t>(model.linear_size)));
+          static_cast<Coord>(random.uniform_index(static_cast<std::uint64_t>(model.linear_size())));
       winding[axis] =
-          sample_winding_1d(model.linear_size, duration, model.hopping, random, options);
+          sample_winding_1d(model.linear_size(), duration, model.hopping(), random, options);
       endpoint[axis] =
           detail::checked_add(base[axis],
-                              detail::checked_scale(model.linear_size, winding[axis],
+                              detail::checked_scale(model.linear_size(), winding[axis],
                                                     "winding displacement exceeds int64 range"),
                               "covering endpoint exceeds int64 range");
     }
@@ -237,13 +228,13 @@ IdealBosonConfiguration sample_ideal_boson_configuration(const CanonicalEnsemble
     const auto steps = detail::checked_product(length, time_links_per_beta,
                                                "cycle skeleton length exceeds size_t");
     const CoveringPath covering =
-        sample_bridge_covering(base, endpoint, duration, steps, model.hopping, random, options);
+        sample_bridge_covering(base, endpoint, duration, steps, model.hopping(), random, options);
 
     for (std::size_t cycle_index = 0; cycle_index < length; ++cycle_index) {
       const ParticleId label = labels[cycle_index];
       const auto start = cycle_index * time_links_per_beta;
       for (std::size_t time = 0; time <= time_links_per_beta; ++time) {
-        for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+        for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
           covering_worldlines.at(label, time, axis) = covering[start + time][axis];
         }
       }

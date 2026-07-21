@@ -69,7 +69,7 @@ type collects one invariant that is currently spread across several files.
 | P0 | Make occupancy replacement transactional (done 2026-07-19) | Correctness and simpler move code | Medium |
 | P0/P1 | Checked flat extents and `TorusLayout`/`SiteId` (done 2026-07-19); retained-grid provenance (done 2026-07-20) | Memory safety, shared geometry, and fewer allocations | Medium |
 | P0 | Bind model and canonical table (done 2026-07-19); add reusable free numerics | Correctness and large repeated-work reduction | Medium |
-| P0 | Make paths/configurations valid-by-construction (path and both configuration types done 2026-07-21; `Model` remains) | Ownership clarity and removal of nested validation | Large |
+| P0 | Make paths/configurations valid-by-construction (done 2026-07-21) | Ownership clarity and removal of nested validation | Large |
 | P1 | Path cursor/slice migration (done 2026-07-20) | Simpler boundary semantics and faster path surgery | Medium |
 | P1 | Add a retained-measurement context (done 2026-07-20); add accumulators | Less repeated work and a smaller demo | Medium |
 | P1 | Collect reusable free-particle numerics | Numerical clarity and less repeated setup | Medium |
@@ -239,8 +239,9 @@ Verification:
 
 ### 3. P0: replace mutable record bags with valid-by-construction values
 
-Status (2026-07-21): the `ContinuousPath`, retained ideal-configuration, and
-continuous-configuration slices are complete. `ContinuousPath` construction now
+Status (2026-07-21): complete. The `ContinuousPath`, retained
+ideal-configuration, continuous-configuration, and `Model` slices are complete.
+`ContinuousPath` construction now
 owns and validates duration, endpoint dimensions, sorted event times, axes,
 directions, coordinate range, and endpoint consistency. Path storage is private;
 callers receive read-only endpoint references and an event span, and structural
@@ -259,9 +260,13 @@ retains the complete path audit. Geometry queries and time rotation consume the
 owned model, interaction estimators reject mismatched interacting-model
 provenance, and `AcceptedChainState` is the only path/topology mutation boundary.
 The unused per-sample `log_Z0_N` copy is removed in favor of the normalization
-owned by `CanonicalEnsemble`. Construction-failure tests and the existing
-boundary, surgery, sampling, topology, observable, action, and cache tests cover
-the migrations. The mutable public `Model` parameter bag remains open.
+owned by `CanonicalEnsemble`. `Model` now converts a designated
+`ModelParameters` input record into private, read-only physical parameters,
+rejecting invalid scalars, particle-label overflow, and unrepresentable lattice
+volume at construction. Its checked volume is cached and downstream trusted
+code no longer revalidates the model. Construction-failure tests and the
+existing boundary, surgery, sampling, topology, observable, action, and cache
+tests cover the migrations.
 
 Pre-refactor evidence:
 
@@ -1097,10 +1102,10 @@ visible at the assertion sites.
 4. Completed 2026-07-20: `PathCursor`/`PathSlice` migration for split,
    resample, stitch, and time-origin rotation, with exact traversal and boundary
    equivalence tests.
-5. Completed 2026-07-21: `ContinuousPath`, retained dense/configuration, and
-   `ContinuousConfiguration` encapsulation, plus authoritative continuous and
-   retained `Permutation` topology; full validation remains available as an
-   explicit diagnostic audit. Immutable `Model` preparation remains separate.
+5. Completed 2026-07-21: `ContinuousPath`, retained dense/configuration,
+   `ContinuousConfiguration`, and `Model` encapsulation, plus authoritative
+   continuous and retained `Permutation` topology; full path/configuration
+   validation remains available as an explicit diagnostic audit.
 6. Retained measurement context completed 2026-07-20; add accumulators, then
    optimize direct correlation kernels from benchmark evidence.
 7. Log-weight categorical draws and adaptive-support numerics completed

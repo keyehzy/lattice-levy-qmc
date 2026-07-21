@@ -30,8 +30,8 @@ BruteCanonicalResult enumerate_fock_states(const qmc::Model &model) {
   std::vector<double> energies(volume);
   for (std::size_t momentum = 0; momentum < volume; ++momentum) {
     const double angle = 2.0 * std::numbers::pi * static_cast<double>(momentum) /
-                         static_cast<double>(model.linear_size);
-    energies[momentum] = -2.0 * model.hopping * std::cos(angle);
+                         static_cast<double>(model.linear_size());
+    energies[momentum] = -2.0 * model.hopping() * std::cos(angle);
   }
   std::vector<std::size_t> occupation(volume);
   BruteCanonicalResult result{
@@ -46,7 +46,7 @@ BruteCanonicalResult enumerate_fock_states(const qmc::Model &model) {
       for (std::size_t index = 0; index < volume; ++index) {
         energy += static_cast<double>(occupation[index]) * energies[index];
       }
-      const double weight = std::exp(-model.beta * energy);
+      const double weight = std::exp(-model.beta() * energy);
       result.partition += weight;
       result.energy += weight * energy;
       result.energy_squared += weight * energy * energy;
@@ -62,7 +62,7 @@ BruteCanonicalResult enumerate_fock_states(const qmc::Model &model) {
       enumerate(mode + 1, remaining - value);
     }
   };
-  enumerate(0, model.particle_count);
+  enumerate(0, model.particle_count());
 
   result.energy /= result.partition;
   result.energy_squared /= result.partition;
@@ -74,28 +74,28 @@ BruteCanonicalResult enumerate_fock_states(const qmc::Model &model) {
 }
 
 TEST(CanonicalObservablesTest, MatchesFockSpaceEnumeration) {
-  const qmc::Model model{
+  const qmc::Model model(qmc::ModelParameters{
       .particle_count = 3,
       .beta = 0.7,
       .linear_size = 3,
       .dimension = 1,
       .hopping = 0.8,
-  };
+  });
   const qmc::CanonicalEnsemble canonical(model);
   const auto thermodynamics = qmc::canonical_thermodynamics(canonical);
   const auto momentum = qmc::momentum_distribution(canonical);
   const auto brute = enumerate_fock_states(model);
-  const auto particles = model.particle_count;
+  const auto particles = model.particle_count();
 
   EXPECT_NEAR(std::exp(canonical.log_partition(particles)), brute.partition, 2e-13);
-  EXPECT_NEAR(thermodynamics.free_energy[particles], -std::log(brute.partition) / model.beta,
+  EXPECT_NEAR(thermodynamics.free_energy[particles], -std::log(brute.partition) / model.beta(),
               2e-13);
   EXPECT_NEAR(thermodynamics.energy[particles], brute.energy, 2e-13);
   EXPECT_NEAR(thermodynamics.heat_capacity[particles],
-              model.beta * model.beta * (brute.energy_squared - (brute.energy * brute.energy)),
+              model.beta() * model.beta() * (brute.energy_squared - (brute.energy * brute.energy)),
               3e-13);
   EXPECT_NEAR(thermodynamics.entropy[particles],
-              std::log(brute.partition) + (model.beta * brute.energy), 3e-13);
+              std::log(brute.partition) + (model.beta() * brute.energy), 3e-13);
   EXPECT_NEAR(thermodynamics.addition_chemical_potential[particles],
               thermodynamics.free_energy[particles] - thermodynamics.free_energy[particles - 1],
               1e-15);
@@ -112,13 +112,13 @@ TEST(CanonicalObservablesTest, MatchesFockSpaceEnumeration) {
 }
 
 TEST(CanonicalObservablesTest, SatisfiesMomentumDensityMatrixAndCycleNormalizations) {
-  const qmc::Model model{
+  const qmc::Model model(qmc::ModelParameters{
       .particle_count = 7,
       .beta = 1.1,
       .linear_size = 5,
       .dimension = 2,
       .hopping = 0.9,
-  };
+  });
   const qmc::CanonicalEnsemble canonical(model);
   const auto momentum = qmc::momentum_distribution(canonical);
   const auto density_matrix = qmc::one_body_density_matrix(canonical);
@@ -127,13 +127,13 @@ TEST(CanonicalObservablesTest, SatisfiesMomentumDensityMatrixAndCycleNormalizati
   const double occupation_sum = std::accumulate(
       momentum.modes.begin(), momentum.modes.end(), 0.0,
       [](const double sum, const qmc::MomentumMode &mode) { return sum + mode.occupation; });
-  EXPECT_NEAR(occupation_sum, static_cast<double>(model.particle_count), 2e-12);
+  EXPECT_NEAR(occupation_sum, static_cast<double>(model.particle_count()), 2e-12);
   EXPECT_NEAR(momentum.condensate_density,
               momentum.condensate_occupation / static_cast<double>(model.volume()), 1e-15);
   EXPECT_GT(momentum.coherence_length, 0.0);
   ASSERT_EQ(density_matrix.size(), model.volume());
   EXPECT_NEAR(density_matrix.front().value,
-              static_cast<double>(model.particle_count) / static_cast<double>(model.volume()),
+              static_cast<double>(model.particle_count()) / static_cast<double>(model.volume()),
               2e-13);
   const double density_matrix_sum = std::accumulate(
       density_matrix.begin(), density_matrix.end(), 0.0,
@@ -144,31 +144,31 @@ TEST(CanonicalObservablesTest, SatisfiesMomentumDensityMatrixAndCycleNormalizati
       std::accumulate(cycles.expected_particles.begin(), cycles.expected_particles.end(), 0.0);
   const double probability_sum =
       std::accumulate(cycles.particle_probability.begin(), cycles.particle_probability.end(), 0.0);
-  EXPECT_NEAR(expected_particles, static_cast<double>(model.particle_count), 2e-13);
+  EXPECT_NEAR(expected_particles, static_cast<double>(model.particle_count()), 2e-13);
   EXPECT_NEAR(probability_sum, 1.0, 2e-13);
 }
 
 TEST(CanonicalObservablesTest, TwistCurvatureMatchesFiniteDifference) {
-  const qmc::Model model{
+  const qmc::Model model(qmc::ModelParameters{
       .particle_count = 4,
       .beta = 0.9,
       .linear_size = 5,
       .dimension = 2,
       .hopping = 0.7,
-  };
+  });
   const qmc::CanonicalEnsemble canonical(model);
   const double curvature = qmc::twist_free_energy_curvature(canonical, 0);
   constexpr double step = 1e-3;
-  const std::vector<double> zero(model.dimension);
-  std::vector<double> positive(model.dimension);
-  std::vector<double> negative(model.dimension);
+  const std::vector<double> zero(model.dimension());
+  std::vector<double> positive(model.dimension());
+  std::vector<double> negative(model.dimension());
   positive[0] = step;
   negative[0] = -step;
-  const double free_zero = -qmc::log_canonical_partition_twisted(canonical, zero) / model.beta;
+  const double free_zero = -qmc::log_canonical_partition_twisted(canonical, zero) / model.beta();
   const double free_positive =
-      -qmc::log_canonical_partition_twisted(canonical, positive) / model.beta;
+      -qmc::log_canonical_partition_twisted(canonical, positive) / model.beta();
   const double free_negative =
-      -qmc::log_canonical_partition_twisted(canonical, negative) / model.beta;
+      -qmc::log_canonical_partition_twisted(canonical, negative) / model.beta();
   const double finite_difference =
       (free_positive + free_negative - (2.0 * free_zero)) / (step * step);
   EXPECT_GT(curvature, 0.0);
@@ -176,13 +176,13 @@ TEST(CanonicalObservablesTest, TwistCurvatureMatchesFiniteDifference) {
 }
 
 TEST(ConfigurationObservablesTest, ExactSampleInvariantsHoldOnRetainedGrid) {
-  const qmc::Model model{
+  const qmc::Model model(qmc::ModelParameters{
       .particle_count = 6,
       .beta = 1.2,
       .linear_size = 4,
       .dimension = 2,
       .hopping = 0.9,
-  };
+  });
   qmc::Random random(1807);
   const auto configuration = qmc::sample_ideal_boson_configuration(model, 7, random);
   const auto histogram = qmc::sampled_cycle_histogram(configuration);
@@ -197,37 +197,38 @@ TEST(ConfigurationObservablesTest, ExactSampleInvariantsHoldOnRetainedGrid) {
   for (std::size_t length = 1; length < histogram.size(); ++length) {
     particles_in_cycles += length * histogram[length];
   }
-  EXPECT_EQ(particles_in_cycles, model.particle_count);
+  EXPECT_EQ(particles_in_cycles, model.particle_count());
   EXPECT_GE(qmc::longest_cycle_length(configuration), 1U);
-  qmc::Site winding_reference(model.dimension);
+  qmc::Site winding_reference(model.dimension());
   for (std::size_t cycle = 0; cycle < configuration.topology().cycles().size(); ++cycle) {
     const qmc::Site cycle_winding = configuration.cycle_winding(cycle);
-    for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+    for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
       winding_reference[axis] += cycle_winding[axis];
     }
   }
   EXPECT_EQ(winding, winding_reference);
 
   EXPECT_NEAR(std::accumulate(equal_time.site_density.begin(), equal_time.site_density.end(), 0.0),
-              static_cast<double>(model.particle_count), 2e-13);
+              static_cast<double>(model.particle_count()), 2e-13);
   EXPECT_NEAR(std::accumulate(equal_time.onsite_occupation_probability.begin(),
                               equal_time.onsite_occupation_probability.end(), 0.0),
               1.0, 2e-13);
-  EXPECT_NEAR(equal_time.static_structure_factor.front(), static_cast<double>(model.particle_count),
-              2e-13);
+  EXPECT_NEAR(equal_time.static_structure_factor.front(),
+              static_cast<double>(model.particle_count()), 2e-13);
   const double pair_sum =
       std::accumulate(equal_time.pair_correlation.begin(), equal_time.pair_correlation.end(), 0.0);
   EXPECT_NEAR(pair_sum,
-              static_cast<double>(model.volume() * (model.particle_count - 1)) /
-                  static_cast<double>(model.particle_count),
+              static_cast<double>(model.volume() * (model.particle_count() - 1)) /
+                  static_cast<double>(model.particle_count()),
               2e-12);
 
   ASSERT_EQ(imaginary_time.time_points(), configuration.time_links_per_beta());
   ASSERT_EQ(imaginary_time.spatial_points(), model.volume());
-  EXPECT_DOUBLE_EQ(imaginary_time.grid().beta(), model.beta);
-  EXPECT_EQ(imaginary_time.grid().layout(), qmc::TorusLayout(model.linear_size, model.dimension));
+  EXPECT_DOUBLE_EQ(imaginary_time.grid().beta(), model.beta());
+  EXPECT_EQ(imaginary_time.grid().layout(),
+            qmc::TorusLayout(model.linear_size(), model.dimension()));
   const double density =
-      static_cast<double>(model.particle_count) / static_cast<double>(model.volume());
+      static_cast<double>(model.particle_count()) / static_cast<double>(model.volume());
   for (std::size_t displacement = 0; displacement < model.volume(); ++displacement) {
     const double expected =
         (density * density * (equal_time.pair_correlation[displacement] - 1.0)) +
@@ -267,26 +268,26 @@ TEST(ConfigurationObservablesTest, ExactSampleInvariantsHoldOnRetainedGrid) {
 }
 
 TEST(ConfigurationObservablesTest, RetainedMeasurementContextReusesOwnedPositions) {
-  const qmc::Model model{
+  const qmc::Model model(qmc::ModelParameters{
       .particle_count = 5,
       .beta = 0.8,
       .linear_size = 4,
       .dimension = 2,
       .hopping = 0.7,
-  };
+  });
   qmc::Random random(1907);
   const auto configuration = qmc::sample_ideal_boson_configuration(model, 6, random);
   const qmc::RetainedMeasurementContext context(configuration);
-  const qmc::TorusLayout layout(model.linear_size, model.dimension);
+  const qmc::TorusLayout layout(model.linear_size(), model.dimension());
 
-  EXPECT_DOUBLE_EQ(context.grid().beta(), model.beta);
+  EXPECT_DOUBLE_EQ(context.grid().beta(), model.beta());
   EXPECT_EQ(context.grid().layout(), layout);
   EXPECT_EQ(context.grid().time_points(), configuration.time_links_per_beta());
-  EXPECT_EQ(context.particle_count(), model.particle_count);
+  EXPECT_EQ(context.particle_count(), model.particle_count());
   for (std::size_t time = 0; time < context.grid().time_points(); ++time) {
     const auto positions = context.positions_at(time);
-    ASSERT_EQ(positions.size(), model.particle_count);
-    for (std::size_t particle = 0; particle < model.particle_count; ++particle) {
+    ASSERT_EQ(positions.size(), model.particle_count());
+    for (std::size_t particle = 0; particle < model.particle_count(); ++particle) {
       const auto label = static_cast<qmc::ParticleId>(particle);
       EXPECT_EQ(positions[particle],
                 layout.encode_covering(configuration.covering_worldlines().site(label, time)));
@@ -360,25 +361,25 @@ TEST(ConfigurationObservablesTest, DensityCorrelationStorageIsValidByConstructio
 }
 
 TEST(CanonicalObservablesTest, HandlesEmptySystemAndRejectsUndefinedTemperatureQuantities) {
-  const qmc::Model zero_temperature_parameter{
+  const qmc::Model zero_temperature_parameter(qmc::ModelParameters{
       .particle_count = 2,
       .beta = 0.0,
       .linear_size = 3,
       .dimension = 1,
       .hopping = 1.0,
-  };
+  });
   const qmc::CanonicalEnsemble beta_zero(zero_temperature_parameter);
   EXPECT_THROW(static_cast<void>(qmc::canonical_thermodynamics(beta_zero)), std::invalid_argument);
   EXPECT_THROW(static_cast<void>(qmc::twist_free_energy_curvature(beta_zero, 0)),
                std::invalid_argument);
 
-  const qmc::Model empty{
+  const qmc::Model empty(qmc::ModelParameters{
       .particle_count = 0,
       .beta = 1.0,
       .linear_size = 3,
       .dimension = 1,
       .hopping = 1.0,
-  };
+  });
   const qmc::CanonicalEnsemble empty_ensemble(empty);
   const auto thermodynamics = qmc::canonical_thermodynamics(empty_ensemble);
   const auto momentum = qmc::momentum_distribution(empty_ensemble);

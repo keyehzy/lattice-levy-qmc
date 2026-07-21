@@ -73,18 +73,27 @@ namespace qmc {
 using Coord = std::int64_t;
 using ParticleId = std::uint32_t;
 using Axis = std::uint32_t;
-using Site = std::vector<Coord>;        // always model.dimension entries
+using Site = std::vector<Coord>;        // always model.dimension() entries
 using Cycle = std::vector<ParticleId>; // directed cyclic label order
 
-struct Model {
+struct ModelParameters {
   std::size_t particle_count;
   double beta;
   Coord linear_size;
   std::size_t dimension;
   double hopping;
+};
 
-  void validate() const;      // beta >= 0
-  std::size_t volume() const; // checked integer exponentiation
+class Model {
+public:
+  explicit Model(ModelParameters parameters); // beta >= 0
+
+  std::size_t particle_count() const noexcept;
+  double beta() const noexcept;
+  Coord linear_size() const noexcept;
+  std::size_t dimension() const noexcept;
+  double hopping() const noexcept;
+  std::size_t volume() const noexcept; // checked during construction
 };
 
 struct InteractingModel {

@@ -6,8 +6,7 @@
 namespace qmc {
 
 void InteractingModel::validate() const {
-  free.validate();
-  if (free.beta <= 0.0) {
+  if (free.beta() <= 0.0) {
     throw std::invalid_argument("interacting beta must be finite and positive");
   }
   if (!std::isfinite(interaction)) {

@@ -22,8 +22,8 @@ struct LogDerivatives {
 };
 
 LogDerivatives one_particle_beta_derivatives(const Model &model, const std::size_t length) {
-  const double duration = static_cast<double>(length) * model.beta;
-  const double scale = 2.0 * model.hopping * duration;
+  const double duration = static_cast<double>(length) * model.beta();
+  const double scale = 2.0 * model.hopping() * duration;
   if (!std::isfinite(scale)) {
     throw std::overflow_error("one-particle derivative scale overflowed");
   }
@@ -31,9 +31,9 @@ LogDerivatives one_particle_beta_derivatives(const Model &model, const std::size
   double normalization = 0.0;
   double cosine_sum = 0.0;
   double cosine_square_sum = 0.0;
-  for (Coord momentum = 0; momentum < model.linear_size; ++momentum) {
+  for (Coord momentum = 0; momentum < model.linear_size(); ++momentum) {
     const double angle = 2.0 * std::numbers::pi * static_cast<double>(momentum) /
-                         static_cast<double>(model.linear_size);
+                         static_cast<double>(model.linear_size());
     const double cosine = std::cos(angle);
     const double weight = std::exp(scale * (cosine - 1.0));
     normalization += weight;
@@ -44,9 +44,10 @@ LogDerivatives one_particle_beta_derivatives(const Model &model, const std::size
   double cosine_variance = (cosine_square_sum / normalization) - (mean_cosine * mean_cosine);
   cosine_variance = std::max(0.0, cosine_variance);
 
-  const auto dimensions = static_cast<double>(model.dimension);
-  const double mean_energy = -2.0 * model.hopping * dimensions * mean_cosine;
-  const double energy_variance = 4.0 * model.hopping * model.hopping * dimensions * cosine_variance;
+  const auto dimensions = static_cast<double>(model.dimension());
+  const double mean_energy = -2.0 * model.hopping() * dimensions * mean_cosine;
+  const double energy_variance =
+      4.0 * model.hopping() * model.hopping() * dimensions * cosine_variance;
   const auto cycle_length = static_cast<double>(length);
   return LogDerivatives{
       .first = -cycle_length * mean_energy,
@@ -66,10 +67,10 @@ double mode_energy(const std::vector<std::size_t> &indices, const Model &model) 
   double cosine_sum = 0.0;
   for (const std::size_t index : indices) {
     const double angle = 2.0 * std::numbers::pi * static_cast<double>(index) /
-                         static_cast<double>(model.linear_size);
+                         static_cast<double>(model.linear_size());
     cosine_sum += std::cos(angle);
   }
-  const double energy = -2.0 * model.hopping * cosine_sum;
+  const double energy = -2.0 * model.hopping() * cosine_sum;
   if (!std::isfinite(energy)) {
     throw std::overflow_error("one-particle energy overflowed");
   }
@@ -90,25 +91,25 @@ std::pair<double, double> occupation_moments(const double energy,
                                              const CanonicalEnsemble &ensemble) {
   const Model &model = ensemble.model();
   const auto log_Z = ensemble.log_partitions();
-  if (model.particle_count == 0) {
+  if (model.particle_count() == 0) {
     return {0.0, 0.0};
   }
-  std::vector<double> occupation_terms(model.particle_count);
-  for (std::size_t length = 1; length <= model.particle_count; ++length) {
-    const double duration = static_cast<double>(length) * model.beta;
-    occupation_terms[length - 1] =
-        log_Z[model.particle_count - length] - log_Z[model.particle_count] - (duration * energy);
+  std::vector<double> occupation_terms(model.particle_count());
+  for (std::size_t length = 1; length <= model.particle_count(); ++length) {
+    const double duration = static_cast<double>(length) * model.beta();
+    occupation_terms[length - 1] = log_Z[model.particle_count() - length] -
+                                   log_Z[model.particle_count()] - (duration * energy);
   }
   const double occupation = std::exp(log_sum_exp(occupation_terms));
 
   double factorial_moment = 0.0;
-  if (model.particle_count >= 2) {
-    std::vector<double> factorial_terms(model.particle_count - 1);
-    for (std::size_t length = 2; length <= model.particle_count; ++length) {
-      const double duration = static_cast<double>(length) * model.beta;
+  if (model.particle_count() >= 2) {
+    std::vector<double> factorial_terms(model.particle_count() - 1);
+    for (std::size_t length = 2; length <= model.particle_count(); ++length) {
+      const double duration = static_cast<double>(length) * model.beta();
       factorial_terms[length - 2] = std::log(2.0 * static_cast<double>(length - 1)) +
-                                    log_Z[model.particle_count - length] -
-                                    log_Z[model.particle_count] - (duration * energy);
+                                    log_Z[model.particle_count() - length] -
+                                    log_Z[model.particle_count()] - (duration * energy);
     }
     factorial_moment = std::exp(log_sum_exp(factorial_terms));
   }
@@ -119,22 +120,22 @@ std::pair<double, double> occupation_moments(const double energy,
 }
 
 double momentum_coherence_length(const MomentumDistribution &momentum, const Model &model) {
-  if (model.linear_size <= 1 || momentum.condensate_occupation <= 0.0) {
+  if (model.linear_size() <= 1 || momentum.condensate_occupation <= 0.0) {
     return 0.0;
   }
   double minimum_momentum_occupation = 0.0;
   std::size_t flat = 1;
-  for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+  for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
     minimum_momentum_occupation += momentum.modes[flat].occupation;
-    flat *= static_cast<std::size_t>(model.linear_size);
+    flat *= static_cast<std::size_t>(model.linear_size());
   }
-  minimum_momentum_occupation /= static_cast<double>(model.dimension);
+  minimum_momentum_occupation /= static_cast<double>(model.dimension());
   if (minimum_momentum_occupation <= 0.0) {
     return 0.0;
   }
   const double occupation_ratio = momentum.condensate_occupation / minimum_momentum_occupation;
   const double ratio = clamp_nonnegative_roundoff(occupation_ratio - 1.0, occupation_ratio);
-  const double lattice_momentum = std::numbers::pi / static_cast<double>(model.linear_size);
+  const double lattice_momentum = std::numbers::pi / static_cast<double>(model.linear_size());
   return std::sqrt(std::max(0.0, ratio)) / (2.0 * std::sin(lattice_momentum));
 }
 
@@ -172,11 +173,11 @@ CanonicalThermodynamics canonical_thermodynamics(const CanonicalEnsemble &ensemb
   const Model &model = ensemble.model();
   const auto log_z = ensemble.log_cycle_weights();
   const auto log_Z = ensemble.log_partitions();
-  if (model.beta <= 0.0) {
+  if (model.beta() <= 0.0) {
     throw std::invalid_argument("canonical thermodynamics requires beta > 0");
   }
 
-  const auto count = model.particle_count;
+  const auto count = model.particle_count();
   std::vector<LogDerivatives> log_z_derivatives(count + 1);
   for (std::size_t length = 1; length <= count; ++length) {
     log_z_derivatives[length] = one_particle_beta_derivatives(model, length);
@@ -221,10 +222,10 @@ CanonicalThermodynamics canonical_thermodynamics(const CanonicalEnsemble &ensemb
       .addition_chemical_potential = std::vector<double>(count + 1, nan),
   };
   for (std::size_t particles = 0; particles <= count; ++particles) {
-    result.free_energy[particles] = -log_Z[particles] / model.beta;
+    result.free_energy[particles] = -log_Z[particles] / model.beta();
     result.energy[particles] = -log_Z_first[particles];
-    result.heat_capacity[particles] = model.beta * model.beta * log_Z_second[particles];
-    result.entropy[particles] = log_Z[particles] + (model.beta * result.energy[particles]);
+    result.heat_capacity[particles] = model.beta() * model.beta() * log_Z_second[particles];
+    result.entropy[particles] = log_Z[particles] + (model.beta() * result.energy[particles]);
     if (particles > 0) {
       result.addition_chemical_potential[particles] =
           result.free_energy[particles] - result.free_energy[particles - 1];
@@ -239,7 +240,7 @@ CanonicalThermodynamics canonical_thermodynamics(const Model &model) {
 
 MomentumDistribution momentum_distribution(const CanonicalEnsemble &ensemble) {
   const Model &model = ensemble.model();
-  const TorusLayout layout(model.linear_size, model.dimension);
+  const TorusLayout layout(model.linear_size(), model.dimension());
   const auto volume = layout.volume();
   MomentumDistribution result;
   result.modes.reserve(volume);
@@ -247,10 +248,10 @@ MomentumDistribution momentum_distribution(const CanonicalEnsemble &ensemble) {
   for (std::size_t flat = 0; flat < volume; ++flat) {
     MomentumMode mode;
     mode.indices = layout.decode(SiteId(flat));
-    mode.wavevector.resize(model.dimension);
-    for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+    mode.wavevector.resize(model.dimension());
+    for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
       mode.wavevector[axis] = 2.0 * std::numbers::pi * static_cast<double>(mode.indices[axis]) /
-                              static_cast<double>(model.linear_size);
+                              static_cast<double>(model.linear_size());
     }
     mode.energy = mode_energy(mode.indices, model);
 
@@ -264,9 +265,9 @@ MomentumDistribution momentum_distribution(const CanonicalEnsemble &ensemble) {
   if (!result.modes.empty()) {
     result.condensate_occupation = result.modes.front().occupation;
   }
-  if (model.particle_count > 0) {
+  if (model.particle_count() > 0) {
     result.condensate_fraction =
-        result.condensate_occupation / static_cast<double>(model.particle_count);
+        result.condensate_occupation / static_cast<double>(model.particle_count());
   }
   result.condensate_density = result.condensate_occupation / static_cast<double>(volume);
   result.coherence_length = momentum_coherence_length(result, model);
@@ -281,20 +282,20 @@ std::vector<OneBodyDensityPoint> one_body_density_matrix(const CanonicalEnsemble
   const Model &model = ensemble.model();
   const auto log_z = ensemble.log_cycle_weights();
   const auto log_Z = ensemble.log_partitions();
-  const TorusLayout layout(model.linear_size, model.dimension);
+  const TorusLayout layout(model.linear_size(), model.dimension());
   const auto volume = layout.volume();
-  const auto linear_size = static_cast<std::size_t>(model.linear_size);
+  const auto linear_size = static_cast<std::size_t>(model.linear_size());
 
-  std::vector<std::vector<double>> kernel_ratios(model.particle_count + 1,
+  std::vector<std::vector<double>> kernel_ratios(model.particle_count() + 1,
                                                  std::vector<double>(linear_size));
-  for (std::size_t length = 1; length <= model.particle_count; ++length) {
-    const double duration = static_cast<double>(length) * model.beta;
-    const double scale = 2.0 * model.hopping * duration;
+  for (std::size_t length = 1; length <= model.particle_count(); ++length) {
+    const double duration = static_cast<double>(length) * model.beta();
+    const double scale = 2.0 * model.hopping() * duration;
     std::vector<double> weights(linear_size);
     double scaled_trace = 0.0;
     for (std::size_t momentum = 0; momentum < linear_size; ++momentum) {
       const double angle = 2.0 * std::numbers::pi * static_cast<double>(momentum) /
-                           static_cast<double>(model.linear_size);
+                           static_cast<double>(model.linear_size());
       weights[momentum] = std::exp(scale * (std::cos(angle) - 1.0));
       scaled_trace += weights[momentum];
     }
@@ -302,7 +303,7 @@ std::vector<OneBodyDensityPoint> one_body_density_matrix(const CanonicalEnsemble
       double numerator = 0.0;
       for (std::size_t momentum = 0; momentum < linear_size; ++momentum) {
         const double angle = 2.0 * std::numbers::pi * static_cast<double>(momentum) /
-                             static_cast<double>(model.linear_size);
+                             static_cast<double>(model.linear_size());
         numerator += weights[momentum] * std::cos(angle * static_cast<double>(displacement));
       }
       const double ratio = numerator / (static_cast<double>(linear_size) * scaled_trace);
@@ -310,21 +311,21 @@ std::vector<OneBodyDensityPoint> one_body_density_matrix(const CanonicalEnsemble
     }
   }
 
-  std::vector<double> cycle_weights(model.particle_count + 1);
-  for (std::size_t length = 1; length <= model.particle_count; ++length) {
-    cycle_weights[length] = std::exp(log_z[length] + log_Z[model.particle_count - length] -
-                                     log_Z[model.particle_count]);
+  std::vector<double> cycle_weights(model.particle_count() + 1);
+  for (std::size_t length = 1; length <= model.particle_count(); ++length) {
+    cycle_weights[length] = std::exp(log_z[length] + log_Z[model.particle_count() - length] -
+                                     log_Z[model.particle_count()]);
   }
 
   std::vector<OneBodyDensityPoint> result;
   result.reserve(volume);
   for (std::size_t flat = 0; flat < volume; ++flat) {
     const auto components = layout.decode(SiteId(flat));
-    OneBodyDensityPoint point{.displacement = Site(model.dimension), .value = 0.0};
-    for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+    OneBodyDensityPoint point{.displacement = Site(model.dimension()), .value = 0.0};
+    for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
       point.displacement[axis] = static_cast<Coord>(components[axis]);
     }
-    for (std::size_t length = 1; length <= model.particle_count; ++length) {
+    for (std::size_t length = 1; length <= model.particle_count(); ++length) {
       double normalized_kernel = 1.0;
       for (const std::size_t component : components) {
         normalized_kernel *= kernel_ratios[length][component];
@@ -341,12 +342,12 @@ std::vector<OneBodyDensityPoint> one_body_density_matrix(const Model &model) {
 }
 
 ExactCycleStatistics exact_cycle_statistics(const CanonicalEnsemble &ensemble) {
-  return exact_cycle_statistics(ensemble, ensemble.model().particle_count);
+  return exact_cycle_statistics(ensemble, ensemble.model().particle_count());
 }
 
 ExactCycleStatistics exact_cycle_statistics(const CanonicalEnsemble &ensemble,
                                             const std::size_t particle_count) {
-  if (particle_count > ensemble.model().particle_count) {
+  if (particle_count > ensemble.model().particle_count()) {
     throw std::out_of_range("cycle-statistics particle count exceeds the ensemble capacity");
   }
   const auto log_z = ensemble.log_cycle_weights();
@@ -375,7 +376,7 @@ ExactCycleStatistics exact_cycle_statistics(const Model &model) {
 }
 
 std::vector<std::size_t> sampled_cycle_histogram(const IdealBosonConfiguration &configuration) {
-  std::vector<std::size_t> result(configuration.model().particle_count + 1);
+  std::vector<std::size_t> result(configuration.model().particle_count() + 1);
   for (const Cycle &cycle : configuration.topology().cycles()) {
     ++result[cycle.size()];
   }
@@ -391,10 +392,10 @@ std::size_t longest_cycle_length(const IdealBosonConfiguration &configuration) {
 }
 
 Site total_winding(const IdealBosonConfiguration &configuration) {
-  Site result(configuration.model().dimension);
+  Site result(configuration.model().dimension());
   for (std::size_t cycle = 0; cycle < configuration.topology().cycles().size(); ++cycle) {
     const Site winding = configuration.cycle_winding(cycle);
-    for (std::size_t axis = 0; axis < configuration.model().dimension; ++axis) {
+    for (std::size_t axis = 0; axis < configuration.model().dimension(); ++axis) {
       const Coord value = winding[axis];
       if ((value > 0 && result[axis] > std::numeric_limits<Coord>::max() - value) ||
           (value < 0 && result[axis] < std::numeric_limits<Coord>::min() - value)) {
@@ -409,7 +410,7 @@ Site total_winding(const IdealBosonConfiguration &configuration) {
 double log_canonical_partition_twisted(const CanonicalEnsemble &ensemble,
                                        std::span<const double> twist) {
   const Model &model = ensemble.model();
-  if (twist.size() != model.dimension) {
+  if (twist.size() != model.dimension()) {
     throw std::invalid_argument("twist vector has the wrong dimension");
   }
   for (const double component : twist) {
@@ -418,24 +419,24 @@ double log_canonical_partition_twisted(const CanonicalEnsemble &ensemble,
     }
   }
 
-  const auto count = model.particle_count;
+  const auto count = model.particle_count();
   const double negative_infinity = -std::numeric_limits<double>::infinity();
   std::vector<double> log_z(count + 1, negative_infinity);
   std::vector<double> log_Z(count + 1, negative_infinity);
   log_Z[0] = 0.0;
   for (std::size_t length = 1; length <= count; ++length) {
-    const double duration = static_cast<double>(length) * model.beta;
-    const double scale = 2.0 * model.hopping * duration;
+    const double duration = static_cast<double>(length) * model.beta();
+    const double scale = 2.0 * model.hopping() * duration;
     if (!std::isfinite(scale)) {
       throw std::overflow_error("twisted trace exponent scale overflowed");
     }
     double value = 0.0;
-    for (std::size_t axis = 0; axis < model.dimension; ++axis) {
-      std::vector<double> exponents(static_cast<std::size_t>(model.linear_size));
-      for (Coord momentum = 0; momentum < model.linear_size; ++momentum) {
+    for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
+      std::vector<double> exponents(static_cast<std::size_t>(model.linear_size()));
+      for (Coord momentum = 0; momentum < model.linear_size(); ++momentum) {
         const double angle =
             (2.0 * std::numbers::pi * static_cast<double>(momentum) + twist[axis]) /
-            static_cast<double>(model.linear_size);
+            static_cast<double>(model.linear_size());
         exponents[static_cast<std::size_t>(momentum)] = scale * std::cos(angle);
       }
       value += log_sum_exp(exponents);
@@ -460,25 +461,25 @@ double twist_free_energy_curvature(const CanonicalEnsemble &ensemble, const std:
   const Model &model = ensemble.model();
   const auto log_z = ensemble.log_cycle_weights();
   const auto log_Z = ensemble.log_partitions();
-  if (model.beta <= 0.0) {
+  if (model.beta() <= 0.0) {
     throw std::invalid_argument("twist free-energy curvature requires beta > 0");
   }
-  if (axis >= model.dimension) {
+  if (axis >= model.dimension()) {
     throw std::out_of_range("twist axis is out of range");
   }
 
-  std::vector<LogDerivatives> log_z_derivatives(model.particle_count + 1);
-  const double inverse_size = 1.0 / static_cast<double>(model.linear_size);
-  for (std::size_t length = 1; length <= model.particle_count; ++length) {
-    const double duration = static_cast<double>(length) * model.beta;
-    const double scale = 2.0 * model.hopping * duration;
+  std::vector<LogDerivatives> log_z_derivatives(model.particle_count() + 1);
+  const double inverse_size = 1.0 / static_cast<double>(model.linear_size());
+  for (std::size_t length = 1; length <= model.particle_count(); ++length) {
+    const double duration = static_cast<double>(length) * model.beta();
+    const double scale = 2.0 * model.hopping() * duration;
     double normalization = 0.0;
     double sine_sum = 0.0;
     double sine_square_sum = 0.0;
     double cosine_sum = 0.0;
-    for (Coord momentum = 0; momentum < model.linear_size; ++momentum) {
+    for (Coord momentum = 0; momentum < model.linear_size(); ++momentum) {
       const double angle = 2.0 * std::numbers::pi * static_cast<double>(momentum) /
-                           static_cast<double>(model.linear_size);
+                           static_cast<double>(model.linear_size());
       const double weight = std::exp(scale * (std::cos(angle) - 1.0));
       normalization += weight;
       sine_sum += weight * std::sin(angle);
@@ -494,9 +495,9 @@ double twist_free_energy_curvature(const CanonicalEnsemble &ensemble, const std:
         (-scale * mean_cosine + scale * scale * (mean_sine_square - (mean_sine * mean_sine)));
   }
 
-  std::vector<double> first(model.particle_count + 1);
-  std::vector<double> second(model.particle_count + 1);
-  for (std::size_t particles = 1; particles <= model.particle_count; ++particles) {
+  std::vector<double> first(model.particle_count() + 1);
+  std::vector<double> second(model.particle_count() + 1);
+  for (std::size_t particles = 1; particles <= model.particle_count(); ++particles) {
     double probability_sum = 0.0;
     double next_first = 0.0;
     double raw_second = 0.0;
@@ -517,7 +518,7 @@ double twist_free_energy_curvature(const CanonicalEnsemble &ensemble, const std:
     first[particles] = next_first;
     second[particles] = raw_second - (next_first * next_first);
   }
-  const double curvature = -second[model.particle_count] / model.beta;
+  const double curvature = -second[model.particle_count()] / model.beta();
   return clamp_nonnegative_roundoff(curvature, std::abs(curvature));
 }
 
@@ -536,10 +537,10 @@ RetainedGrid::RetainedGrid(const double beta, TorusLayout layout, const std::siz
 }
 
 RetainedMeasurementContext::RetainedMeasurementContext(const IdealBosonConfiguration &configuration)
-    : grid_(configuration.model().beta,
-            TorusLayout(configuration.model().linear_size, configuration.model().dimension),
+    : grid_(configuration.model().beta(),
+            TorusLayout(configuration.model().linear_size(), configuration.model().dimension()),
             configuration.time_links_per_beta()),
-      particle_count_(configuration.model().particle_count) {
+      particle_count_(configuration.model().particle_count()) {
   const auto position_count = detail::checked_product(grid_.time_points(), particle_count_,
                                                       "retained-position grid exceeds size_t");
   positions_.reserve(position_count);
@@ -732,7 +733,7 @@ retained_grid_matsubara_transform(const ImaginaryTimeDensityCorrelations &correl
 RetainedGeometryObservables
 retained_geometry_observables(const IdealBosonConfiguration &configuration) {
   const Model &model = configuration.model();
-  const TorusLayout layout(model.linear_size, model.dimension);
+  const TorusLayout layout(model.linear_size(), model.dimension());
   const auto volume = layout.volume();
   const auto time_points = configuration.time_links_per_beta();
   const DenseWorldlines &worldlines = configuration.covering_worldlines();
@@ -745,16 +746,16 @@ retained_geometry_observables(const IdealBosonConfiguration &configuration) {
       .return_probability = std::vector<double>(time_points),
       .displacement_probability = std::vector<double>(grid_size),
   };
-  if (model.particle_count == 0) {
+  if (model.particle_count() == 0) {
     return result;
   }
 
-  const auto particle_count = static_cast<double>(model.particle_count);
+  const auto particle_count = static_cast<double>(model.particle_count());
   for (std::size_t time = 0; time < time_points; ++time) {
-    for (std::size_t particle = 0; particle < model.particle_count; ++particle) {
+    for (std::size_t particle = 0; particle < model.particle_count(); ++particle) {
       double squared_displacement = 0.0;
       const auto label = static_cast<ParticleId>(particle);
-      for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+      for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
         const double value = static_cast<double>(worldlines.at(label, time, axis)) -
                              static_cast<double>(worldlines.at(label, 0, axis));
         squared_displacement += value * value;
@@ -784,10 +785,10 @@ retained_cycle_geometry(const IdealBosonConfiguration &configuration) {
     const Cycle &cycle = cycles[cycle_index];
     const auto distinct_points = detail::checked_product(
         cycle.size(), time_links, "cycle retained-point count exceeds size_t");
-    std::vector<double> center(model.dimension);
+    std::vector<double> center(model.dimension());
     for (const ParticleId label : cycle) {
       for (std::size_t time = 0; time < time_links; ++time) {
-        for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+        for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
           center[axis] += static_cast<double>(worldlines.at(label, time, axis));
         }
       }
@@ -803,7 +804,7 @@ retained_cycle_geometry(const IdealBosonConfiguration &configuration) {
     for (const ParticleId label : cycle) {
       for (std::size_t time = 0; time < time_links; ++time) {
         double squared_radius = 0.0;
-        for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+        for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
           const double displacement =
               static_cast<double>(worldlines.at(label, time, axis)) - center[axis];
           squared_radius += displacement * displacement;

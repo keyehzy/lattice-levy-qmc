@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Make `Model` valid by construction with private physical parameters,
+  read-only accessors, and a cached checked lattice volume; invalid scalar,
+  particle-label, and volume inputs now fail at construction.
 - Centralize bounded-tail growth, work limits, included-mass tracking, and tail
   acceptance for winding and conditioned Bessel-count laws; support expansion
   now preserves evaluated weights, and Bessel counts use an adjacent-term

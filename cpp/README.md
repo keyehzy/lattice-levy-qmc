@@ -80,13 +80,13 @@ operations:
 ```cpp
 #include <qmc/ideal.hpp>
 
-qmc::Model model{
+qmc::Model model(qmc::ModelParameters{
     .particle_count = 8,
     .beta = 2.0,
     .linear_size = 16,
     .dimension = 2,
     .hopping = 1.0,
-};
+});
 const qmc::CanonicalEnsemble ensemble(model);
 qmc::Random random(2026);
 const auto configuration =
@@ -129,16 +129,18 @@ For the interacting chain, include the separate umbrella header:
 #include <qmc/interacting.hpp>
 
 qmc::InteractingModel model{
-    .free = {.particle_count = 6,
-             .beta = 1.5,
-             .linear_size = 8,
-             .dimension = 1,
-             .hopping = 1.0},
+    .free = qmc::Model(qmc::ModelParameters{
+        .particle_count = 6,
+        .beta = 1.5,
+        .linear_size = 8,
+        .dimension = 1,
+        .hopping = 1.0,
+    }),
     .interaction = 2.0,
 };
 qmc::InteractingSampler sampler(model, 20260717);
 qmc::SweepOptions sweep{
-    .segment_updates = model.free.particle_count,
+    .segment_updates = model.free.particle_count(),
     .segment_fraction = 0.35,
     .cycle_updates = 1,
     .global_updates = 1,

@@ -24,8 +24,7 @@ bool nearly_equal_time(const double left, const double right) {
 }
 
 void validate_continuous_model(const Model &model) {
-  model.validate();
-  if (model.beta <= 0.0) {
+  if (model.beta() <= 0.0) {
     throw std::invalid_argument("continuous configurations require positive beta");
   }
 }
@@ -34,21 +33,21 @@ void validate_configuration_components(const Model &model, const Permutation &to
                                        const std::span<const ContinuousPath> worldlines,
                                        const bool audit_paths) {
   validate_continuous_model(model);
-  if (topology.size() != model.particle_count) {
+  if (topology.size() != model.particle_count()) {
     throw std::invalid_argument("continuous topology size does not match particle_count");
   }
-  if (worldlines.size() != model.particle_count) {
+  if (worldlines.size() != model.particle_count()) {
     throw std::invalid_argument("continuous worldline count does not match particle_count");
   }
-  const TorusLayout layout(model.linear_size, model.dimension);
-  for (std::size_t particle = 0; particle < model.particle_count; ++particle) {
+  const TorusLayout layout(model.linear_size(), model.dimension());
+  for (std::size_t particle = 0; particle < model.particle_count(); ++particle) {
     const ContinuousPath &path = worldlines[particle];
     if (audit_paths) {
-      path.validate(model.dimension);
-    } else if (path.dimension() != model.dimension) {
+      path.validate(model.dimension());
+    } else if (path.dimension() != model.dimension()) {
       throw std::invalid_argument("continuous path endpoint dimension mismatch");
     }
-    if (!nearly_equal_time(path.duration(), model.beta)) {
+    if (!nearly_equal_time(path.duration(), model.beta())) {
       throw std::invalid_argument("continuous worldline duration does not match beta");
     }
     const ContinuousPath &successor =
@@ -73,29 +72,29 @@ std::vector<ContinuousPath> sample_paths_for_cycle(const Cycle &labels, const Mo
     throw std::invalid_argument("cannot sample paths for an empty cycle");
   }
 
-  const double duration = static_cast<double>(labels.size()) * model.beta;
+  const double duration = static_cast<double>(labels.size()) * model.beta();
   if (!std::isfinite(duration)) {
     throw std::overflow_error("continuous cycle duration overflowed");
   }
-  Site base(model.dimension);
-  Site endpoint(model.dimension);
-  for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+  Site base(model.dimension());
+  Site endpoint(model.dimension());
+  for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
     base[axis] =
-        static_cast<Coord>(random.uniform_index(static_cast<std::uint64_t>(model.linear_size)));
+        static_cast<Coord>(random.uniform_index(static_cast<std::uint64_t>(model.linear_size())));
     const Coord winding =
-        sample_winding_1d(model.linear_size, duration, model.hopping, random, options);
+        sample_winding_1d(model.linear_size(), duration, model.hopping(), random, options);
     const Coord winding_displacement = checked_scale(
-        model.linear_size, winding, "continuous winding displacement exceeds int64 range");
+        model.linear_size(), winding, "continuous winding displacement exceeds int64 range");
     endpoint[axis] = checked_add(base[axis], winding_displacement,
                                  "continuous cycle endpoint exceeds int64 range");
   }
 
   ContinuousPath long_path =
-      sample_continuous_bridge(base, endpoint, duration, model.hopping, random, options);
+      sample_continuous_bridge(base, endpoint, duration, model.hopping(), random, options);
   std::vector<double> cuts;
   cuts.reserve(labels.size() - 1);
   for (std::size_t index = 1; index < labels.size(); ++index) {
-    const double cut = static_cast<double>(index) * model.beta;
+    const double cut = static_cast<double>(index) * model.beta();
     if (!std::isfinite(cut)) {
       throw std::overflow_error("continuous cycle cut time overflowed");
     }
@@ -109,16 +108,16 @@ std::vector<ContinuousPath> sample_paths_for_cycle(const Cycle &labels, const Mo
   // beta by a few ulps. Worldline time is exactly [0,beta], so normalize that
   // harmless arithmetic drift before the paths enter the Markov state.
   for (ContinuousPath &path : paths) {
-    if (!nearly_equal_time(path.duration(), model.beta)) {
+    if (!nearly_equal_time(path.duration(), model.beta())) {
       throw std::runtime_error("continuous cycle piece duration drift exceeds tolerance");
     }
     std::vector<JumpEvent> events(path.events().begin(), path.events().end());
     for (JumpEvent &event : events) {
-      if (event.time > model.beta && nearly_equal_time(event.time, model.beta)) {
-        event.time = model.beta;
+      if (event.time > model.beta() && nearly_equal_time(event.time, model.beta())) {
+        event.time = model.beta();
       }
     }
-    path = ContinuousPath(model.beta, path.start(), path.end(), std::move(events));
+    path = ContinuousPath(model.beta(), path.start(), path.end(), std::move(events));
   }
   return paths;
 }
@@ -128,10 +127,10 @@ std::vector<ContinuousPath> sample_paths_for_cycle(const Cycle &labels, const Mo
 ContinuousConfiguration rotate_configuration_time_origin(const ContinuousConfiguration &state,
                                                          const double shift) {
   const Model &model = state.model();
-  if (!std::isfinite(shift) || shift < 0.0 || shift >= model.beta) {
+  if (!std::isfinite(shift) || shift < 0.0 || shift >= model.beta()) {
     throw std::invalid_argument("time-origin shift must lie in [0, beta)");
   }
-  if (shift == 0.0 || model.particle_count == 0) {
+  if (shift == 0.0 || model.particle_count() == 0) {
     return state;
   }
 
@@ -171,18 +170,18 @@ ContinuousConfiguration rotate_configuration_time_origin(const ContinuousConfigu
     const ParticleId successor_label =
         state.topology().successor(static_cast<ParticleId>(particle));
     const ContinuousPath &successor = state.path(successor_label);
-    Site successor_translation(model.dimension);
+    Site successor_translation(model.dimension());
     for (std::size_t axis = 0; axis < successor_translation.size(); ++axis) {
       successor_translation[axis] =
           detail::checked_subtract(path.end()[axis], successor.start()[axis],
                                    "time-rotation path translation exceeds int64 range");
       const Coord translation = successor_translation[axis];
-      if (translation % model.linear_size != 0) {
+      if (translation % model.linear_size() != 0) {
         throw std::logic_error("invalid path connectivity during time rotation");
       }
     }
     paths.push_back(detail::concatenate_path_slices(suffixes[particle], prefixes[successor_label],
-                                                    successor_translation, model.beta));
+                                                    successor_translation, model.beta()));
   }
 
   return {model, state.topology(), std::move(paths)};
@@ -229,10 +228,10 @@ std::vector<std::size_t> ContinuousConfiguration::cycle_lengths() const {
 }
 
 std::vector<Site> ContinuousConfiguration::positions_at(const double tau) const {
-  if (!std::isfinite(tau) || tau < 0.0 || tau > model_.beta) {
+  if (!std::isfinite(tau) || tau < 0.0 || tau > model_.beta()) {
     throw std::invalid_argument("tau must lie in [0, beta]");
   }
-  const TorusLayout layout(model_.linear_size, model_.dimension);
+  const TorusLayout layout(model_.linear_size(), model_.dimension());
   std::vector<Site> positions;
   positions.reserve(worldlines_.size());
   for (const ContinuousPath &path : worldlines_) {
@@ -244,9 +243,9 @@ std::vector<Site> ContinuousConfiguration::positions_at(const double tau) const 
 }
 
 Site ContinuousConfiguration::total_winding() const {
-  Site displacement(model_.dimension, 0);
+  Site displacement(model_.dimension(), 0);
   for (const ContinuousPath &path : worldlines_) {
-    for (std::size_t axis = 0; axis < model_.dimension; ++axis) {
+    for (std::size_t axis = 0; axis < model_.dimension(); ++axis) {
       const Coord path_displacement = detail::checked_subtract(
           path.end()[axis], path.start()[axis], "path displacement exceeds int64 range");
       displacement[axis] = detail::checked_add(displacement[axis], path_displacement,
@@ -254,10 +253,10 @@ Site ContinuousConfiguration::total_winding() const {
     }
   }
   for (Coord &coordinate : displacement) {
-    if (coordinate % model_.linear_size != 0) {
+    if (coordinate % model_.linear_size() != 0) {
       throw std::logic_error("total covering displacement is not an integer winding");
     }
-    coordinate /= model_.linear_size;
+    coordinate /= model_.linear_size();
   }
   return displacement;
 }
@@ -270,8 +269,8 @@ ContinuousConfiguration sample_ideal_continuous_configuration(const CanonicalEns
   options.validate();
 
   const std::vector<Cycle> cycles = ensemble.sample_cycles(random);
-  std::vector<ParticleId> permutation(model.particle_count);
-  std::vector<std::optional<ContinuousPath>> staged_paths(model.particle_count);
+  std::vector<ParticleId> permutation(model.particle_count());
+  std::vector<std::optional<ContinuousPath>> staged_paths(model.particle_count());
 
   for (const Cycle &cycle : cycles) {
     auto paths = detail::sample_paths_for_cycle(cycle, model, random, options);
@@ -283,7 +282,7 @@ ContinuousConfiguration sample_ideal_continuous_configuration(const CanonicalEns
   }
 
   std::vector<ContinuousPath> worldlines;
-  worldlines.reserve(model.particle_count);
+  worldlines.reserve(model.particle_count());
   for (auto &path : staged_paths) {
     if (!path.has_value()) {
       throw std::logic_error("continuous cycle sampling left a particle path unassigned");

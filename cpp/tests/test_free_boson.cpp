@@ -73,13 +73,13 @@ TEST(FreeBosonTest, TorusTraceMatchesPythonAndDirectMomentumSum) {
 }
 
 TEST(FreeBosonTest, CanonicalEnsembleMatchesPythonReference) {
-  const qmc::Model model{
+  const qmc::Model model(qmc::ModelParameters{
       .particle_count = 5,
       .beta = 0.8,
       .linear_size = 4,
       .dimension = 1,
       .hopping = 0.9,
-  };
+  });
   const qmc::CanonicalEnsemble ensemble(model);
   const auto log_z = ensemble.log_cycle_weights();
   const auto log_Z = ensemble.log_partitions();
@@ -108,31 +108,36 @@ TEST(FreeBosonTest, CanonicalEnsembleMatchesPythonReference) {
 }
 
 TEST(FreeBosonTest, CanonicalEnsembleOwnsItsValidatedModel) {
-  qmc::Model model{
+  qmc::Model model(qmc::ModelParameters{
       .particle_count = 3,
       .beta = 0.8,
       .linear_size = 4,
       .dimension = 1,
       .hopping = 0.9,
-  };
+  });
   const qmc::CanonicalEnsemble ensemble(model);
-  model.beta = 1.7;
-  model.hopping = 0.2;
+  model = qmc::Model(qmc::ModelParameters{
+      .particle_count = 3,
+      .beta = 1.7,
+      .linear_size = 4,
+      .dimension = 1,
+      .hopping = 0.2,
+  });
 
-  EXPECT_DOUBLE_EQ(ensemble.model().beta, 0.8);
-  EXPECT_DOUBLE_EQ(ensemble.model().hopping, 0.9);
+  EXPECT_DOUBLE_EQ(ensemble.model().beta(), 0.8);
+  EXPECT_DOUBLE_EQ(ensemble.model().hopping(), 0.9);
   EXPECT_TRUE(std::isfinite(ensemble.log_partition(3)));
 }
 
 TEST(FreeBosonTest, CanonicalRecursionMatchesPermutationEnumeration) {
   constexpr std::size_t particle_count = 5;
-  const qmc::Model model{
+  const qmc::Model model(qmc::ModelParameters{
       .particle_count = particle_count,
       .beta = 0.8,
       .linear_size = 4,
       .dimension = 1,
       .hopping = 0.9,
-  };
+  });
   const qmc::CanonicalEnsemble ensemble(model);
   const auto log_z = ensemble.log_cycle_weights();
   std::vector<qmc::ParticleId> permutation{0, 1, 2, 3, 4};
@@ -149,32 +154,36 @@ TEST(FreeBosonTest, CanonicalRecursionMatchesPermutationEnumeration) {
 }
 
 TEST(FreeBosonTest, SampledCyclesPartitionLabels) {
-  const qmc::Model model{
+  const qmc::Model model(qmc::ModelParameters{
       .particle_count = 19,
       .beta = 0.6,
       .linear_size = 7,
       .dimension = 2,
       .hopping = 1.1,
-  };
+  });
   const qmc::CanonicalEnsemble ensemble(model);
   qmc::Random random(2026);
   const auto cycles = ensemble.sample_cycles(random);
 
-  EXPECT_TRUE(cycles_partition_labels(cycles, model.particle_count));
+  EXPECT_TRUE(cycles_partition_labels(cycles, model.particle_count()));
 }
 
 TEST(FreeBosonTest, CanonicalPrefixReuseIsExplicitAndBounded) {
-  const qmc::Model model{
+  const qmc::Model model(qmc::ModelParameters{
       .particle_count = 7,
       .beta = 0.6,
       .linear_size = 5,
       .dimension = 2,
       .hopping = 0.9,
-  };
+  });
   const qmc::CanonicalEnsemble ensemble(model);
-  qmc::Model prefix_model = model;
-  prefix_model.particle_count = 3;
-  const qmc::CanonicalEnsemble prefix(prefix_model);
+  const qmc::CanonicalEnsemble prefix(qmc::Model(qmc::ModelParameters{
+      .particle_count = 3,
+      .beta = model.beta(),
+      .linear_size = model.linear_size(),
+      .dimension = model.dimension(),
+      .hopping = model.hopping(),
+  }));
   qmc::Random reused_random(27);
   qmc::Random direct_random(27);
   const auto reused_cycles = ensemble.sample_cycles(3, reused_random);
@@ -188,25 +197,25 @@ TEST(FreeBosonTest, CanonicalPrefixReuseIsExplicitAndBounded) {
 }
 
 TEST(FreeBosonTest, CanonicalConstructionRejectsNonFiniteRecursionAtItsSource) {
-  const qmc::Model model{
+  const qmc::Model model(qmc::ModelParameters{
       .particle_count = 2,
       .beta = std::numeric_limits<double>::max(),
       .linear_size = 2,
       .dimension = 1,
       .hopping = 0.0,
-  };
+  });
 
   EXPECT_THROW(static_cast<void>(qmc::CanonicalEnsemble(model)), std::overflow_error);
 }
 
 TEST(FreeBosonTest, EmptyCanonicalSystemIsValid) {
-  const qmc::Model model{
+  const qmc::Model model(qmc::ModelParameters{
       .particle_count = 0,
       .beta = 0.0,
       .linear_size = 3,
       .dimension = 2,
       .hopping = 0.0,
-  };
+  });
   const qmc::CanonicalEnsemble ensemble(model);
   EXPECT_EQ(ensemble.log_cycle_weights().size(), 1U);
   ASSERT_EQ(ensemble.log_partitions().size(), 1U);

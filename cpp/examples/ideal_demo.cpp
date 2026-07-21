@@ -75,14 +75,13 @@ std::optional<CommandLine> parse_command_line(const int argc, char **argv) {
   }
 
   return CommandLine{
-      .model =
-          {
-              .particle_count = result["particles"].as<std::size_t>(),
-              .beta = result["beta"].as<double>(),
-              .linear_size = result["linear-size"].as<qmc::Coord>(),
-              .dimension = result["dimension"].as<std::size_t>(),
-              .hopping = result["hopping"].as<double>(),
-          },
+      .model = qmc::Model(qmc::ModelParameters{
+          .particle_count = result["particles"].as<std::size_t>(),
+          .beta = result["beta"].as<double>(),
+          .linear_size = result["linear-size"].as<qmc::Coord>(),
+          .dimension = result["dimension"].as<std::size_t>(),
+          .hopping = result["hopping"].as<double>(),
+      }),
       .time_links = result["time-links"].as<std::size_t>(),
       .seed = result["seed"].as<std::uint64_t>(),
       .samples = samples,
@@ -126,7 +125,7 @@ double winding_squared(const qmc::Site &winding) {
 }
 
 std::size_t axis_cut_flat_index(const std::size_t first_component, const qmc::Model &model) {
-  const auto linear_size = static_cast<std::size_t>(model.linear_size);
+  const auto linear_size = static_cast<std::size_t>(model.linear_size());
   if (first_component >= linear_size) {
     throw std::out_of_range("axis-cut component is outside the torus");
   }
@@ -134,9 +133,9 @@ std::size_t axis_cut_flat_index(const std::size_t first_component, const qmc::Mo
 }
 
 std::size_t farthest_flat_index(const qmc::Model &model) {
-  const auto component = static_cast<std::size_t>(model.linear_size / 2);
-  const qmc::TorusLayout layout(model.linear_size, model.dimension);
-  return layout.encode(std::vector<std::size_t>(model.dimension, component)).value();
+  const auto component = static_cast<std::size_t>(model.linear_size() / 2);
+  const qmc::TorusLayout layout(model.linear_size(), model.dimension());
+  return layout.encode(std::vector<std::size_t>(model.dimension(), component)).value();
 }
 
 void write_index_components(std::ostream &output, std::span<const std::size_t> components) {
@@ -219,23 +218,23 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
   const auto &model = command_line.model;
   const auto volume = model.volume();
   SampleAverages averages{
-      .cycle_count = std::vector<double>(model.particle_count + 1),
-      .cycle_particles = std::vector<double>(model.particle_count + 1),
-      .cycle_winding_squared = std::vector<double>(model.particle_count + 1),
-      .cycle_radius_of_gyration_squared = std::vector<double>(model.particle_count + 1),
-      .cycle_maximum_radius_squared = std::vector<double>(model.particle_count + 1),
-      .cycle_occurrences = std::vector<double>(model.particle_count + 1),
-      .longest_cycle_probability = std::vector<double>(model.particle_count + 1),
+      .cycle_count = std::vector<double>(model.particle_count() + 1),
+      .cycle_particles = std::vector<double>(model.particle_count() + 1),
+      .cycle_winding_squared = std::vector<double>(model.particle_count() + 1),
+      .cycle_radius_of_gyration_squared = std::vector<double>(model.particle_count() + 1),
+      .cycle_maximum_radius_squared = std::vector<double>(model.particle_count() + 1),
+      .cycle_occurrences = std::vector<double>(model.particle_count() + 1),
+      .longest_cycle_probability = std::vector<double>(model.particle_count() + 1),
       .site_density = std::vector<double>(volume),
       .pair_correlation = std::vector<double>(volume),
       .structure_factor = std::vector<double>(volume),
-      .onsite_probability = std::vector<double>(model.particle_count + 1),
+      .onsite_probability = std::vector<double>(model.particle_count() + 1),
       .connected_density = std::vector<double>(command_line.time_links * volume),
       .mean_square_displacement = std::vector<double>(command_line.time_links),
       .return_probability = std::vector<double>(command_line.time_links),
       .displacement_probability = std::vector<double>(command_line.time_links * volume),
-      .winding_second_moment = std::vector<double>(model.dimension),
-      .winding_fourth_moment = std::vector<double>(model.dimension),
+      .winding_second_moment = std::vector<double>(model.dimension()),
+      .winding_fourth_moment = std::vector<double>(model.dimension()),
       .winding_squared_trace = {},
       .winding_histogram = {},
       .winding_squared_histogram = {},
@@ -248,13 +247,13 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
   };
   averages.winding_squared_trace.reserve(command_line.samples);
   const std::size_t macroscopic_threshold =
-      model.particle_count == 0 ? 1 : (model.particle_count + 1) / 2;
+      model.particle_count() == 0 ? 1 : (model.particle_count() + 1) / 2;
 
   for (std::size_t sample = 0; sample < command_line.samples; ++sample) {
     const auto configuration =
         qmc::sample_ideal_boson_configuration(ensemble, command_line.time_links, random);
     const auto cycle_histogram = qmc::sampled_cycle_histogram(configuration);
-    for (std::size_t length = 1; length <= model.particle_count; ++length) {
+    for (std::size_t length = 1; length <= model.particle_count(); ++length) {
       averages.cycle_count[length] += static_cast<double>(cycle_histogram[length]);
       averages.cycle_particles[length] += static_cast<double>(length * cycle_histogram[length]);
     }
@@ -268,7 +267,7 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
     if (total_winding_squared > 0.0) {
       averages.nonzero_winding_probability += 1.0;
     }
-    for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+    for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
       const auto component = static_cast<double>(winding[axis]);
       averages.winding_second_moment[axis] += component * component;
       averages.winding_fourth_moment[axis] += component * component * component * component;
@@ -297,9 +296,9 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
         macroscopic_particles += length;
       }
     }
-    if (model.particle_count > 0) {
+    if (model.particle_count() > 0) {
       averages.macroscopic_cycle_fraction +=
-          static_cast<double>(macroscopic_particles) / static_cast<double>(model.particle_count);
+          static_cast<double>(macroscopic_particles) / static_cast<double>(model.particle_count());
     }
 
     const qmc::RetainedMeasurementContext measurement_context(configuration);
@@ -337,7 +336,7 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
   averages.mean_factorial_occupation /= sample_count;
   averages.nonzero_winding_probability /= sample_count;
   averages.macroscopic_cycle_fraction /= sample_count;
-  for (std::size_t length = 1; length <= model.particle_count; ++length) {
+  for (std::size_t length = 1; length <= model.particle_count(); ++length) {
     if (averages.cycle_occurrences[length] > 0.0) {
       averages.cycle_winding_squared[length] /= averages.cycle_occurrences[length];
       averages.cycle_radius_of_gyration_squared[length] /= averages.cycle_occurrences[length];
@@ -352,7 +351,7 @@ void write_thermodynamics(const std::filesystem::path &directory, const qmc::Mod
   auto output = output_file(directory / "thermodynamics.dat");
   output << "# N F E C S mu_addition\n";
   const double nan = std::numeric_limits<double>::quiet_NaN();
-  for (std::size_t particles = 0; particles <= model.particle_count; ++particles) {
+  for (std::size_t particles = 0; particles <= model.particle_count(); ++particles) {
     if (thermodynamics.has_value()) {
       output << particles << ' ' << thermodynamics->free_energy[particles] << ' '
              << thermodynamics->energy[particles] << ' ' << thermodynamics->heat_capacity[particles]
@@ -381,7 +380,7 @@ void write_momentum(const std::filesystem::path &directory, const qmc::Model &mo
     output << ' ' << mode.energy << ' ' << mode.occupation << ' ' << mode.occupation_variance
            << '\n';
   }
-  const auto linear_size = static_cast<std::size_t>(model.linear_size);
+  const auto linear_size = static_cast<std::size_t>(model.linear_size());
   for (std::size_t component = 0; component < linear_size; ++component) {
     const auto &mode = momentum.modes[axis_cut_flat_index(component, model)];
     cut << component << ' ' << mode.wavevector.front() << ' ' << mode.occupation << ' '
@@ -400,7 +399,7 @@ void write_one_body(const std::filesystem::path &directory, const qmc::Model &mo
     write_site_components(output, density_matrix[flat].displacement);
     output << ' ' << density_matrix[flat].value << '\n';
   }
-  const auto linear_size = static_cast<std::size_t>(model.linear_size);
+  const auto linear_size = static_cast<std::size_t>(model.linear_size());
   for (std::size_t component = 0; component < linear_size; ++component) {
     const auto &point = density_matrix[axis_cut_flat_index(component, model)];
     cut << component << ' ' << point.value << '\n';
@@ -412,10 +411,10 @@ void write_cycles(const std::filesystem::path &directory, const qmc::Model &mode
   auto output = output_file(directory / "cycle_statistics.dat");
   output << "# l exact_m exact_particles particle_probability sampled_m sampled_particles "
             "sampled_cycle_winding2 longest_probability radius_gyration2 maximum_radius2\n";
-  if (model.particle_count == 0) {
+  if (model.particle_count() == 0) {
     output << "0 0 0 0 0 0 0 1 0 0\n";
   }
-  for (std::size_t length = 1; length <= model.particle_count; ++length) {
+  for (std::size_t length = 1; length <= model.particle_count(); ++length) {
     output << length << ' ' << exact.expected_cycle_count[length] << ' '
            << exact.expected_particles[length] << ' ' << exact.particle_probability[length] << ' '
            << sampled.cycle_count[length] << ' ' << sampled.cycle_particles[length] << ' '
@@ -474,15 +473,15 @@ void write_winding(const std::filesystem::path &directory, const CommandLine &co
   moments << "# axis W2 fourth_cumulant sampled_free_energy_curvature "
              "exact_free_energy_curvature\n";
   const double nan = std::numeric_limits<double>::quiet_NaN();
-  for (std::size_t axis = 0; axis < command_line.model.dimension; ++axis) {
+  for (std::size_t axis = 0; axis < command_line.model.dimension(); ++axis) {
     const double fourth_cumulant =
         sampled.winding_fourth_moment[axis] -
         (3.0 * sampled.winding_second_moment[axis] * sampled.winding_second_moment[axis]);
     const double sampled_curvature =
-        command_line.model.beta > 0.0
-            ? sampled.winding_second_moment[axis] / command_line.model.beta
+        command_line.model.beta() > 0.0
+            ? sampled.winding_second_moment[axis] / command_line.model.beta()
             : nan;
-    const double exact_curvature = command_line.model.beta > 0.0 ? twist_curvature[axis] : nan;
+    const double exact_curvature = command_line.model.beta() > 0.0 ? twist_curvature[axis] : nan;
     moments << axis << ' ' << sampled.winding_second_moment[axis] << ' ' << fourth_cumulant << ' '
             << sampled_curvature << ' ' << exact_curvature << '\n';
   }
@@ -505,7 +504,7 @@ void write_density(const std::filesystem::path &directory, const qmc::Model &mod
         pair, qmc::Site(momentum.modes[flat].indices.begin(), momentum.modes[flat].indices.end()));
     pair << ' ' << sampled.pair_correlation[flat] << '\n';
   }
-  const auto linear_size = static_cast<std::size_t>(model.linear_size);
+  const auto linear_size = static_cast<std::size_t>(model.linear_size());
   for (std::size_t component = 0; component < linear_size; ++component) {
     pair_cut << component << ' ' << sampled.pair_correlation[axis_cut_flat_index(component, model)]
              << '\n';
@@ -540,7 +539,7 @@ void write_imaginary_time(const std::filesystem::path &directory, const CommandL
   auto onsite = output_file(directory / "imaginary_time_onsite.dat");
   onsite << "# tau_index tau Cnn(r=0,tau)\n";
   for (std::size_t time = 0; time < command_line.time_links; ++time) {
-    const double tau = command_line.model.beta * static_cast<double>(time) /
+    const double tau = command_line.model.beta() * static_cast<double>(time) /
                        static_cast<double>(command_line.time_links);
     for (std::size_t flat = 0; flat < volume; ++flat) {
       output << time << ' ' << tau << ' ' << flat;
@@ -556,7 +555,7 @@ void write_imaginary_time(const std::filesystem::path &directory, const CommandL
   auto displacement = output_file(directory / "bridge_displacement.dat");
   displacement << "# tau_index tau flat displacement[0..d) probability\n";
   for (std::size_t time = 0; time < command_line.time_links; ++time) {
-    const double tau = command_line.model.beta * static_cast<double>(time) /
+    const double tau = command_line.model.beta() * static_cast<double>(time) /
                        static_cast<double>(command_line.time_links);
     geometry << time << ' ' << tau << ' ' << sampled.mean_square_displacement[time] << ' '
              << sampled.return_probability[time] << '\n';
@@ -575,7 +574,7 @@ void write_imaginary_time(const std::filesystem::path &directory, const CommandL
   if (!matsubara.has_value()) {
     return;
   }
-  const std::size_t cut_momentum = command_line.model.linear_size > 1 ? 1 : 0;
+  const std::size_t cut_momentum = command_line.model.linear_size() > 1 ? 1 : 0;
   for (std::size_t frequency = 0; frequency < matsubara->frequencies.size(); ++frequency) {
     for (std::size_t flat = 0; flat < volume; ++flat) {
       const auto value = matsubara->values[(frequency * volume) + flat];
@@ -707,7 +706,7 @@ void print_summary(const CommandLine &command_line, const qmc::CanonicalEnsemble
   const auto &model = command_line.model;
   const auto sample_count = static_cast<double>(command_line.samples);
   const double expected_density =
-      static_cast<double>(model.particle_count) / static_cast<double>(model.volume());
+      static_cast<double>(model.particle_count()) / static_cast<double>(model.volume());
   const double maximum_density_error = std::transform_reduce(
       sampled.site_density.begin(), sampled.site_density.end(), 0.0,
       [](const double left, const double right) { return std::max(left, right); },
@@ -728,12 +727,13 @@ void print_summary(const CommandLine &command_line, const qmc::CanonicalEnsemble
                       });
 
   std::cout << std::setprecision(12);
-  std::cout << "model: N=" << model.particle_count << " beta=" << model.beta
-            << " L=" << model.linear_size << " d=" << model.dimension << " t=" << model.hopping
-            << " M=" << command_line.time_links << " samples=" << command_line.samples << '\n';
-  std::cout << "log Z_N = " << canonical.log_partition(model.particle_count) << '\n';
+  std::cout << "model: N=" << model.particle_count() << " beta=" << model.beta()
+            << " L=" << model.linear_size() << " d=" << model.dimension()
+            << " t=" << model.hopping() << " M=" << command_line.time_links
+            << " samples=" << command_line.samples << '\n';
+  std::cout << "log Z_N = " << canonical.log_partition(model.particle_count()) << '\n';
   if (thermodynamics.has_value()) {
-    const auto particles = model.particle_count;
+    const auto particles = model.particle_count();
     std::cout << "thermodynamics: F=" << thermodynamics->free_energy[particles]
               << " E=" << thermodynamics->energy[particles]
               << " C=" << thermodynamics->heat_capacity[particles]
@@ -758,14 +758,14 @@ void print_summary(const CommandLine &command_line, const qmc::CanonicalEnsemble
             << " macroscopic particle fraction=" << sampled.macroscopic_cycle_fraction << '\n';
   std::cout << "winding: <W^2>=" << mean_winding_squared
             << " P(W!=0)=" << sampled.nonzero_winding_probability << '\n';
-  for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+  for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
     const double fourth_cumulant =
         sampled.winding_fourth_moment[axis] -
         (3.0 * sampled.winding_second_moment[axis] * sampled.winding_second_moment[axis]);
     std::cout << "  axis " << axis << ": <W_a^2>=" << sampled.winding_second_moment[axis]
               << " kappa4=" << fourth_cumulant;
-    if (model.beta > 0.0) {
-      std::cout << " sampled F''=" << sampled.winding_second_moment[axis] / model.beta
+    if (model.beta() > 0.0) {
+      std::cout << " sampled F''=" << sampled.winding_second_moment[axis] / model.beta()
                 << " exact F''=" << twist_curvature[axis];
     }
     std::cout << '\n';
@@ -793,7 +793,6 @@ int main(const int argc, char **argv) {
     if (!command_line.has_value()) {
       return 0;
     }
-    command_line->model.validate();
     if (command_line->time_links < 1) {
       throw std::invalid_argument("time_links must be positive");
     }
@@ -802,10 +801,10 @@ int main(const int argc, char **argv) {
     std::filesystem::create_directories(directory);
     const qmc::CanonicalEnsemble canonical(command_line->model);
     std::optional<qmc::CanonicalThermodynamics> thermodynamics;
-    std::vector<double> twist_curvature(command_line->model.dimension);
-    if (command_line->model.beta > 0.0) {
+    std::vector<double> twist_curvature(command_line->model.dimension());
+    if (command_line->model.beta() > 0.0) {
       thermodynamics = qmc::canonical_thermodynamics(canonical);
-      for (std::size_t axis = 0; axis < command_line->model.dimension; ++axis) {
+      for (std::size_t axis = 0; axis < command_line->model.dimension(); ++axis) {
         twist_curvature[axis] = qmc::twist_free_energy_curvature(canonical, axis);
       }
     }
@@ -817,12 +816,12 @@ int main(const int argc, char **argv) {
     const auto sampled = sample_ensemble(*command_line, canonical, random);
     const qmc::ImaginaryTimeDensityCorrelations averaged_correlations(
         qmc::RetainedGrid(
-            command_line->model.beta,
-            qmc::TorusLayout(command_line->model.linear_size, command_line->model.dimension),
+            command_line->model.beta(),
+            qmc::TorusLayout(command_line->model.linear_size(), command_line->model.dimension()),
             command_line->time_links),
         sampled.connected_density);
     std::optional<qmc::MatsubaraDensityCorrelations> matsubara;
-    if (command_line->model.beta > 0.0) {
+    if (command_line->model.beta() > 0.0) {
       matsubara = qmc::retained_grid_matsubara_transform(averaged_correlations);
     }
 
@@ -833,7 +832,7 @@ int main(const int argc, char **argv) {
     write_winding(directory, *command_line, twist_curvature, sampled);
     write_density(directory, command_line->model, momentum, sampled);
     write_imaginary_time(directory, *command_line, momentum, sampled, matsubara);
-    const auto script = write_gnuplot_script(directory, command_line->model.beta > 0.0);
+    const auto script = write_gnuplot_script(directory, command_line->model.beta() > 0.0);
     print_summary(*command_line, canonical, thermodynamics, momentum, density_matrix, exact_cycles,
                   twist_curvature, sampled, directory);
 

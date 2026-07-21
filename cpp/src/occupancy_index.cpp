@@ -171,9 +171,8 @@ double OccupancyIndex::ReplacementTransaction::exact_proposed_overlap() {
 }
 
 OccupancyIndex::OccupancyIndex(const Model &model)
-    : layout_(model.linear_size, model.dimension), beta_(model.beta) {
-  model.validate();
-  if (model.beta <= 0.0) {
+    : layout_(model.linear_size(), model.dimension()), beta_(model.beta()) {
+  if (model.beta() <= 0.0) {
     throw std::invalid_argument("occupancy index requires positive beta");
   }
 }

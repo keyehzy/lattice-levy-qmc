@@ -74,7 +74,7 @@ OverlapWorkspace initialize_workspace(const Model &model, const TorusLayout &lay
     if (path == nullptr) {
       throw std::logic_error("pair-overlap path view contains null");
     }
-    if (path->dimension() != model.dimension) {
+    if (path->dimension() != model.dimension()) {
       throw std::invalid_argument("pair-overlap path dimension does not match the model");
     }
     const SiteId key = layout.encode_covering(path->start());
@@ -100,7 +100,7 @@ std::vector<TimedEvent> collect_events(const Model &model,
   for (std::size_t particle = 0; particle < worldlines.size(); ++particle) {
     for (const JumpEvent &event : worldlines[particle]->events()) {
       events.push_back(TimedEvent{
-          .time = normalize_event_time(event.time, model.beta),
+          .time = normalize_event_time(event.time, model.beta()),
           .particle = particle,
           .axis = event.axis,
           .direction = event.direction,
@@ -138,14 +138,13 @@ namespace detail {
 
 double pair_overlap_time_for_paths(const Model &model,
                                    const std::span<const ContinuousPath *const> worldlines) {
-  model.validate();
-  if (model.beta <= 0.0) {
+  if (model.beta() <= 0.0) {
     throw std::invalid_argument("pair overlap requires positive beta");
   }
-  if (worldlines.size() != model.particle_count) {
+  if (worldlines.size() != model.particle_count()) {
     throw std::logic_error("pair-overlap path count does not match particle_count");
   }
-  const TorusLayout layout(model.linear_size, model.dimension);
+  const TorusLayout layout(model.linear_size(), model.dimension());
   if (worldlines.size() < 2) {
     return 0.0;
   }
@@ -171,7 +170,7 @@ double pair_overlap_time_for_paths(const Model &model,
     event_index = group_end;
   }
 
-  overlap += (model.beta - previous_time) * static_cast<double>(workspace.pair_count);
+  overlap += (model.beta() - previous_time) * static_cast<double>(workspace.pair_count);
   ensure_finite_result(overlap, "pair-overlap integral overflowed");
   if (overlap < 0.0) {
     throw std::logic_error("pair-overlap integral became negative");
@@ -198,19 +197,19 @@ double interaction_action(const ContinuousConfiguration &configuration,
   }
   const double action =
       (model.interaction * pair_overlap_time(configuration)) -
-      (chemical_potential * static_cast<double>(model.free.particle_count) * model.free.beta);
+      (chemical_potential * static_cast<double>(model.free.particle_count()) * model.free.beta());
   ensure_finite_result(action, "interaction action overflowed");
   return action;
 }
 
 double kinetic_energy_estimator(const ContinuousConfiguration &configuration) {
-  return -static_cast<double>(configuration.event_count()) / configuration.model().beta;
+  return -static_cast<double>(configuration.event_count()) / configuration.model().beta();
 }
 
 double interaction_energy_estimator(const ContinuousConfiguration &configuration,
                                     const InteractingModel &model) {
   validate_configuration_model(configuration, model);
-  const double energy = model.interaction * pair_overlap_time(configuration) / model.free.beta;
+  const double energy = model.interaction * pair_overlap_time(configuration) / model.free.beta();
   ensure_finite_result(energy, "interaction energy estimator overflowed");
   return energy;
 }
@@ -223,7 +222,7 @@ double total_energy_estimator(const ContinuousConfiguration &configuration,
 
 double double_occupancy_per_site(const ContinuousConfiguration &configuration) {
   const Model &model = configuration.model();
-  return pair_overlap_time(configuration) / (model.beta * static_cast<double>(model.volume()));
+  return pair_overlap_time(configuration) / (model.beta() * static_cast<double>(model.volume()));
 }
 
 } // namespace qmc

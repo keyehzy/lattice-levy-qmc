@@ -55,7 +55,8 @@ namespace {
 
 InteractingModel sampler_model(const double interaction) {
   return InteractingModel{
-      .free = {.particle_count = 6, .beta = 1.1, .linear_size = 5, .dimension = 2, .hopping = 0.8},
+      .free = qmc::Model(qmc::ModelParameters{
+          .particle_count = 6, .beta = 1.1, .linear_size = 5, .dimension = 2, .hopping = 0.8}),
       .interaction = interaction,
   };
 }
@@ -241,7 +242,8 @@ TEST(InteractingSamplerTest, CopiesRetainAnAuthoritativeAcceptedState) {
 
 TEST(InteractingSamplerTest, StitchUpdatesChangeTopologyAndKeepActionCacheExact) {
   const InteractingModel model{
-      .free = {.particle_count = 8, .beta = 0.9, .linear_size = 9, .dimension = 1, .hopping = 1.0},
+      .free = qmc::Model(qmc::ModelParameters{
+          .particle_count = 8, .beta = 0.9, .linear_size = 9, .dimension = 1, .hopping = 1.0}),
       .interaction = 1.4,
   };
   InteractingSampler sampler(model, 121);
@@ -263,7 +265,8 @@ TEST(InteractingSamplerTest, StitchUpdatesChangeTopologyAndKeepActionCacheExact)
 
 TEST(InteractingSamplerTest, CollectiveStitchMixtureKeepsActionCacheExact) {
   const InteractingModel model{
-      .free = {.particle_count = 8, .beta = 0.9, .linear_size = 7, .dimension = 1, .hopping = 1.2},
+      .free = qmc::Model(qmc::ModelParameters{
+          .particle_count = 8, .beta = 0.9, .linear_size = 7, .dimension = 1, .hopping = 1.2}),
       .interaction = 2.3,
   };
   InteractingSampler sampler(model, 1231);
@@ -306,7 +309,8 @@ TEST(InteractingSamplerTest, ExplicitCollectiveStitchValidatesStrands) {
 
 TEST(InteractingSamplerTest, RejectedGlobalMoveLeavesAcceptedStateUntouched) {
   InteractingModel model{
-      .free = {.particle_count = 5, .beta = 2.0, .linear_size = 2, .dimension = 1, .hopping = 1.0},
+      .free = qmc::Model(qmc::ModelParameters{
+          .particle_count = 5, .beta = 2.0, .linear_size = 2, .dimension = 1, .hopping = 1.0}),
       .interaction = 100.0,
   };
   InteractingSampler sampler(model, 927);
@@ -327,7 +331,8 @@ TEST(InteractingSamplerTest, RejectedGlobalMoveLeavesAcceptedStateUntouched) {
 
 TEST(InteractingSamplerTest, RejectedLocalMovesLeaveStateCachesAndCountersUntouched) {
   const InteractingModel model{
-      .free = {.particle_count = 5, .beta = 2.0, .linear_size = 2, .dimension = 1, .hopping = 1.0},
+      .free = qmc::Model(qmc::ModelParameters{
+          .particle_count = 5, .beta = 2.0, .linear_size = 2, .dimension = 1, .hopping = 1.0}),
       .interaction = 100.0,
   };
 
@@ -370,7 +375,8 @@ TEST(InteractingSamplerTest, RejectedLocalMovesLeaveStateCachesAndCountersUntouc
 
 TEST(InteractingSamplerTest, ActionFailureAbandonsPreparedOccupancyReplacement) {
   const InteractingModel model{
-      .free = {.particle_count = 2, .beta = 2.0, .linear_size = 1, .dimension = 1, .hopping = 0.0},
+      .free = qmc::Model(qmc::ModelParameters{
+          .particle_count = 2, .beta = 2.0, .linear_size = 1, .dimension = 1, .hopping = 0.0}),
       .interaction = 0.0,
   };
   InteractingSampler sampler(model, 29);
@@ -450,7 +456,8 @@ TEST(InteractingSamplerTest, RunAppliesBurnInThinningAndReturnsTypedMeasurements
 
 TEST(InteractingSamplerTest, EmptySystemLocalMovesAreNoOps) {
   const InteractingModel model{
-      .free = {.particle_count = 0, .beta = 1.0, .linear_size = 3, .dimension = 1, .hopping = 1.0},
+      .free = qmc::Model(qmc::ModelParameters{
+          .particle_count = 0, .beta = 1.0, .linear_size = 3, .dimension = 1, .hopping = 1.0}),
       .interaction = 2.0,
   };
   InteractingSampler sampler(model, 5);
@@ -483,7 +490,8 @@ TEST(InteractingSamplerTest, ValidatesExplicitMoveArguments) {
 
 TEST(InteractingSamplerTest, SupportsAttractiveInteractionAndZeroHopping) {
   const InteractingModel model{
-      .free = {.particle_count = 3, .beta = 1.0, .linear_size = 2, .dimension = 1, .hopping = 0.0},
+      .free = qmc::Model(qmc::ModelParameters{
+          .particle_count = 3, .beta = 1.0, .linear_size = 2, .dimension = 1, .hopping = 0.0}),
       .interaction = -2.0,
   };
   InteractingSampler sampler(model, 123);

@@ -136,24 +136,24 @@ TEST(WindingDistributionTest, MatchesScaledBesselWeights) {
 
 TEST(CycleDistributionTest, MatchesCanonicalLengthProbabilities) {
   constexpr std::size_t sample_count = 60'000;
-  const qmc::Model model{
+  const qmc::Model model(qmc::ModelParameters{
       .particle_count = 5,
       .beta = 0.8,
       .linear_size = 4,
       .dimension = 1,
       .hopping = 0.9,
-  };
+  });
   const qmc::CanonicalEnsemble ensemble(model);
   const auto log_z = ensemble.log_cycle_weights();
   const auto log_Z = ensemble.log_partitions();
-  std::vector<double> exact(model.particle_count);
-  for (std::size_t length = 1; length <= model.particle_count; ++length) {
-    exact[length - 1] =
-        std::exp(log_z[length] + log_Z[model.particle_count - length] -
-                 std::log(static_cast<double>(model.particle_count)) - log_Z[model.particle_count]);
+  std::vector<double> exact(model.particle_count());
+  for (std::size_t length = 1; length <= model.particle_count(); ++length) {
+    exact[length - 1] = std::exp(log_z[length] + log_Z[model.particle_count() - length] -
+                                 std::log(static_cast<double>(model.particle_count())) -
+                                 log_Z[model.particle_count()]);
   }
 
-  std::vector<std::size_t> counts(model.particle_count, 0);
+  std::vector<std::size_t> counts(model.particle_count(), 0);
   qmc::Random random(774);
   for (std::size_t sample = 0; sample < sample_count; ++sample) {
     const auto cycles = ensemble.sample_cycles(random);
@@ -194,25 +194,25 @@ TEST(TorusMidpointDistributionTest, MatchesFiniteRingKernel) {
 
 TEST(ConfigurationObservableDistributionTest, MatchesExactCycleWindingAndDensityMeans) {
   constexpr std::size_t sample_count = 20'000;
-  const qmc::Model model{
+  const qmc::Model model(qmc::ModelParameters{
       .particle_count = 3,
       .beta = 1.1,
       .linear_size = 3,
       .dimension = 1,
       .hopping = 0.8,
-  };
+  });
   const qmc::CanonicalEnsemble ensemble(model);
   const auto exact_cycles = qmc::exact_cycle_statistics(ensemble);
   const double expected_winding_squared =
-      model.beta * qmc::twist_free_energy_curvature(ensemble, 0);
-  std::vector<double> cycle_counts(model.particle_count + 1);
+      model.beta() * qmc::twist_free_energy_curvature(ensemble, 0);
+  std::vector<double> cycle_counts(model.particle_count() + 1);
   std::vector<double> density(model.volume());
   double winding_squared_sum = 0.0;
   qmc::Random random(29173);
   for (std::size_t sample = 0; sample < sample_count; ++sample) {
     const auto configuration = qmc::sample_ideal_boson_configuration(ensemble, 1, random);
     const auto histogram = qmc::sampled_cycle_histogram(configuration);
-    for (std::size_t length = 1; length <= model.particle_count; ++length) {
+    for (std::size_t length = 1; length <= model.particle_count(); ++length) {
       cycle_counts[length] += static_cast<double>(histogram[length]);
     }
     const auto winding = qmc::total_winding(configuration);
@@ -223,14 +223,14 @@ TEST(ConfigurationObservableDistributionTest, MatchesExactCycleWindingAndDensity
       density[site] += equal_time.site_density[site];
     }
   }
-  for (std::size_t length = 1; length <= model.particle_count; ++length) {
+  for (std::size_t length = 1; length <= model.particle_count(); ++length) {
     EXPECT_NEAR(cycle_counts[length] / static_cast<double>(sample_count),
                 exact_cycles.expected_cycle_count[length], 0.015);
   }
   EXPECT_NEAR(winding_squared_sum / static_cast<double>(sample_count), expected_winding_squared,
               0.012);
   const double expected_density =
-      static_cast<double>(model.particle_count) / static_cast<double>(model.volume());
+      static_cast<double>(model.particle_count()) / static_cast<double>(model.volume());
   for (const double density_sum : density) {
     EXPECT_NEAR(density_sum / static_cast<double>(sample_count), expected_density, 0.025);
   }

@@ -105,11 +105,12 @@ std::optional<CommandLine> parse_command_line(const int argc, char **argv) {
   return CommandLine{
       .model =
           {
-              .free = {.particle_count = particle_count,
-                       .beta = result["beta"].as<double>(),
-                       .linear_size = result["linear-size"].as<qmc::Coord>(),
-                       .dimension = result["dimension"].as<std::size_t>(),
-                       .hopping = result["hopping"].as<double>()},
+              .free = qmc::Model(
+                  qmc::ModelParameters{.particle_count = particle_count,
+                                       .beta = result["beta"].as<double>(),
+                                       .linear_size = result["linear-size"].as<qmc::Coord>(),
+                                       .dimension = result["dimension"].as<std::size_t>(),
+                                       .hopping = result["hopping"].as<double>()}),
               .interaction = result["interaction"].as<double>(),
           },
       .seed = result["seed"].as<std::uint64_t>(),

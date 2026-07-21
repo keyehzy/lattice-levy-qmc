@@ -49,7 +49,7 @@ reference_rotate_configuration_time_origin(const ContinuousConfiguration &state,
     }
     for (auto event = successor.events().begin(); event != successor_cut; ++event) {
       events.push_back(JumpEvent{
-          .time = (model.beta - shift) + event->time,
+          .time = (model.beta() - shift) + event->time,
           .axis = event->axis,
           .direction = event->direction,
       });
@@ -59,10 +59,10 @@ reference_rotate_configuration_time_origin(const ContinuousConfiguration &state,
     for (auto event = successor.events().begin(); event != successor_cut; ++event) {
       end[event->axis] += static_cast<Coord>(event->direction);
     }
-    for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+    for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
       end[axis] += path.end()[axis] - successor.start()[axis];
     }
-    paths.emplace_back(model.beta, std::move(start), std::move(end), std::move(events));
+    paths.emplace_back(model.beta(), std::move(start), std::move(end), std::move(events));
   }
   return ContinuousConfiguration(model, state.topology(), std::move(paths));
 }
@@ -86,13 +86,13 @@ TEST(PermutationTest, RejectsMalformedSuccessorsAtConstruction) {
 }
 
 TEST(ContinuousConfigurationTest, SamplesConsistentCanonicalState) {
-  const Model model{
+  const Model model(qmc::ModelParameters{
       .particle_count = 8,
       .beta = 1.3,
       .linear_size = 7,
       .dimension = 2,
       .hopping = 0.75,
-  };
+  });
   Random random(11);
   const auto state = sample_ideal_continuous_configuration(model, random);
   EXPECT_NO_THROW(state.validate());
@@ -103,7 +103,7 @@ TEST(ContinuousConfigurationTest, SamplesConsistentCanonicalState) {
   EXPECT_EQ(std::accumulate(lengths.begin(), lengths.end(), std::size_t{0}), 8U);
   EXPECT_EQ(state.total_winding().size(), 2U);
   for (const ContinuousPath &path : state.worldlines()) {
-    EXPECT_DOUBLE_EQ(path.duration(), model.beta);
+    EXPECT_DOUBLE_EQ(path.duration(), model.beta());
   }
   for (const Site &position : state.positions_at(0.7)) {
     ASSERT_EQ(position.size(), 2U);
@@ -113,13 +113,13 @@ TEST(ContinuousConfigurationTest, SamplesConsistentCanonicalState) {
 }
 
 TEST(ContinuousConfigurationTest, SupportsEmptyCanonicalState) {
-  const Model model{
+  const Model model(qmc::ModelParameters{
       .particle_count = 0,
       .beta = 1.0,
       .linear_size = 4,
       .dimension = 2,
       .hopping = 1.0,
-  };
+  });
   Random random(3);
   const auto state = sample_ideal_continuous_configuration(model, random);
   EXPECT_NO_THROW(state.validate());
@@ -130,29 +130,35 @@ TEST(ContinuousConfigurationTest, SupportsEmptyCanonicalState) {
 }
 
 TEST(ContinuousConfigurationTest, OwnsModelProvenanceAndBoundsPathAccess) {
-  Model model{
+  Model model(qmc::ModelParameters{
       .particle_count = 1,
       .beta = 1.0,
       .linear_size = 4,
       .dimension = 1,
       .hopping = 0.75,
-  };
+  });
   const ContinuousConfiguration state(model, Permutation({0}), {ContinuousPath(1.0, {0}, {0}, {})});
-  model.hopping = 9.0;
+  model = Model(qmc::ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 4,
+      .dimension = 1,
+      .hopping = 9.0,
+  });
 
-  EXPECT_DOUBLE_EQ(state.model().hopping, 0.75);
+  EXPECT_DOUBLE_EQ(state.model().hopping(), 0.75);
   EXPECT_EQ(state.path(0), ContinuousPath(1.0, {0}, {0}, {}));
   EXPECT_THROW(static_cast<void>(state.path(1)), std::out_of_range);
 }
 
 TEST(ContinuousConfigurationTest, ReusableEnsembleMatchesOneOffWrapperForTheSameSeed) {
-  const Model model{
+  const Model model(qmc::ModelParameters{
       .particle_count = 6,
       .beta = 0.9,
       .linear_size = 5,
       .dimension = 2,
       .hopping = 0.7,
-  };
+  });
   const CanonicalEnsemble ensemble(model);
   Random one_off_random(1907);
   Random retained_random(1907);
@@ -164,16 +170,21 @@ TEST(ContinuousConfigurationTest, ReusableEnsembleMatchesOneOffWrapperForTheSame
 }
 
 TEST(ContinuousConfigurationTest, ConstructionRejectsInvalidShapeDurationAndConnectivity) {
-  const Model model{
+  const Model model(qmc::ModelParameters{
       .particle_count = 1,
       .beta = 1.0,
       .linear_size = 5,
       .dimension = 1,
       .hopping = 0.8,
-  };
+  });
   const ContinuousPath valid(1.0, {0}, {0}, {});
-  Model zero_beta = model;
-  zero_beta.beta = 0.0;
+  const Model zero_beta(qmc::ModelParameters{
+      .particle_count = model.particle_count(),
+      .beta = 0.0,
+      .linear_size = model.linear_size(),
+      .dimension = model.dimension(),
+      .hopping = model.hopping(),
+  });
   EXPECT_THROW(static_cast<void>(ContinuousConfiguration(zero_beta, Permutation({0}), {valid})),
                std::invalid_argument);
   EXPECT_THROW(static_cast<void>(ContinuousConfiguration(model, Permutation(), {valid})),
@@ -193,26 +204,26 @@ TEST(ContinuousConfigurationTest, ConstructionRejectsInvalidShapeDurationAndConn
 }
 
 TEST(ContinuousConfigurationTest, RejectsZeroBetaContinuousSampling) {
-  const Model model{
+  const Model model(qmc::ModelParameters{
       .particle_count = 1,
       .beta = 0.0,
       .linear_size = 3,
       .dimension = 1,
       .hopping = 1.0,
-  };
+  });
   Random random(9);
   EXPECT_THROW(static_cast<void>(sample_ideal_continuous_configuration(model, random)),
                std::invalid_argument);
 }
 
 TEST(ContinuousConfigurationTest, TimeOriginRotationPreservesPhysicalInvariants) {
-  const Model model{
+  const Model model(qmc::ModelParameters{
       .particle_count = 7,
       .beta = 1.3,
       .linear_size = 6,
       .dimension = 2,
       .hopping = 0.8,
-  };
+  });
   Random random(122);
   const auto state = sample_ideal_continuous_configuration(model, random);
   const double overlap = pair_overlap_time(state);
@@ -227,13 +238,13 @@ TEST(ContinuousConfigurationTest, TimeOriginRotationPreservesPhysicalInvariants)
 }
 
 TEST(ContinuousConfigurationTest, TimeOriginRotationRetainsJumpAtNewSeam) {
-  const Model model{
+  const Model model(qmc::ModelParameters{
       .particle_count = 1,
       .beta = 1.0,
       .linear_size = 3,
       .dimension = 1,
       .hopping = 1.0,
-  };
+  });
   const ContinuousPath path(
       1.0, {0}, {0},
       {{.time = 0.25, .axis = 0, .direction = 1}, {.time = 0.75, .axis = 0, .direction = -1}});
@@ -249,13 +260,13 @@ TEST(ContinuousConfigurationTest, TimeOriginRotationRetainsJumpAtNewSeam) {
 }
 
 TEST(ContinuousConfigurationTest, CursorRotationMatchesCoincidentSeamTraversalExactly) {
-  const Model model{
+  const Model model(qmc::ModelParameters{
       .particle_count = 2,
       .beta = 1.0,
       .linear_size = 5,
       .dimension = 1,
       .hopping = 1.0,
-  };
+  });
   const ContinuousPath first(1.0, {0}, {1},
                              {{.time = 0.0, .axis = 0, .direction = 1},
                               {.time = 0.25, .axis = 0, .direction = 1},
@@ -285,14 +296,14 @@ TEST(ContinuousConfigurationTest, CursorRotationMatchesCoincidentSeamTraversalEx
 }
 
 TEST(ContinuousConfigurationTest, CursorRotationPreservesAllowedDurationDriftSemantics) {
-  const Model model{
+  const Model model(qmc::ModelParameters{
       .particle_count = 1,
       .beta = 1.0,
       .linear_size = 3,
       .dimension = 1,
       .hopping = 1.0,
-  };
-  const double one_ulp_below_beta = std::nextafter(model.beta, 0.0);
+  });
+  const double one_ulp_below_beta = std::nextafter(model.beta(), 0.0);
   const double duration = std::nextafter(one_ulp_below_beta, 0.0);
   const ContinuousConfiguration state(
       model, Permutation({0}),

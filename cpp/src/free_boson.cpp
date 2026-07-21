@@ -105,29 +105,27 @@ double log_one_particle_trace(const double duration, const Coord linear_size,
 }
 
 double log_one_particle_trace(const double duration, const Model &model) {
-  model.validate();
-  return log_one_particle_trace(duration, model.linear_size, model.dimension, model.hopping);
+  return log_one_particle_trace(duration, model.linear_size(), model.dimension(), model.hopping());
 }
 
 CanonicalEnsemble::CanonicalEnsemble(Model model) : model_(model) {
-  model_.validate();
-  if (model_.particle_count == std::numeric_limits<std::size_t>::max()) {
+  if (model_.particle_count() == std::numeric_limits<std::size_t>::max()) {
     throw std::overflow_error("canonical table size exceeds size_t");
   }
 
-  const auto count = model_.particle_count;
+  const auto count = model_.particle_count();
   const double negative_infinity = -std::numeric_limits<double>::infinity();
   log_z_.assign(count + 1, negative_infinity);
   log_Z_.assign(count + 1, negative_infinity);
   log_Z_[0] = 0.0;
 
   for (std::size_t length = 1; length <= count; ++length) {
-    const double duration = static_cast<double>(length) * model_.beta;
+    const double duration = static_cast<double>(length) * model_.beta();
     if (!std::isfinite(duration)) {
       throw std::overflow_error("cycle duration overflowed");
     }
-    log_z_[length] =
-        log_one_particle_trace(duration, model_.linear_size, model_.dimension, model_.hopping);
+    log_z_[length] = log_one_particle_trace(duration, model_.linear_size(), model_.dimension(),
+                                            model_.hopping());
     if (!std::isfinite(log_z_[length])) {
       throw std::overflow_error("canonical one-particle trace is non-finite");
     }
@@ -146,19 +144,19 @@ CanonicalEnsemble::CanonicalEnsemble(Model model) : model_(model) {
 }
 
 double CanonicalEnsemble::log_partition(const std::size_t particle_count) const {
-  if (particle_count > model_.particle_count) {
+  if (particle_count > model_.particle_count()) {
     throw std::out_of_range("canonical particle count exceeds the ensemble capacity");
   }
   return log_Z_[particle_count];
 }
 
 std::vector<Cycle> CanonicalEnsemble::sample_cycles(Random &random) const {
-  return sample_cycles(model_.particle_count, random);
+  return sample_cycles(model_.particle_count(), random);
 }
 
 std::vector<Cycle> CanonicalEnsemble::sample_cycles(const std::size_t particle_count,
                                                     Random &random) const {
-  if (particle_count > model_.particle_count) {
+  if (particle_count > model_.particle_count()) {
     throw std::out_of_range("cycle-sampling particle count exceeds the ensemble capacity");
   }
   if (particle_count == 0) {

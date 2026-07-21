@@ -69,7 +69,7 @@ struct ExactCycleStatistics {
 
 [[nodiscard]] ExactCycleStatistics exact_cycle_statistics(const CanonicalEnsemble &ensemble);
 // A prefix query uses the ensemble's beta, lattice, and hopping and rejects counts
-// greater than ensemble.model().particle_count.
+// greater than ensemble.model().particle_count().
 [[nodiscard]] ExactCycleStatistics exact_cycle_statistics(const CanonicalEnsemble &ensemble,
                                                           std::size_t particle_count);
 [[nodiscard]] ExactCycleStatistics exact_cycle_statistics(const Model &model);

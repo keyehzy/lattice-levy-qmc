@@ -54,7 +54,7 @@ void AcceptedChainState::ReplacementTransaction::commit() noexcept {
 
 AcceptedChainState::AcceptedChainState(ContinuousConfiguration configuration)
     : configuration_(std::move(configuration)),
-      layout_(configuration_.model().linear_size, configuration_.model().dimension),
+      layout_(configuration_.model().linear_size(), configuration_.model().dimension()),
       occupancy_(configuration_.model()) {
   occupancy_.rebuild(configuration_.worldlines_);
   pair_overlap_ = occupancy_.pair_overlap();
@@ -80,10 +80,10 @@ void AcceptedChainState::validate_replacement_inputs(
         (index != 0 && replacements[index - 1].label == replacement.label)) {
       throw std::logic_error("path replacements contain an invalid or duplicate label");
     }
-    if (replacement.path.dimension() != configuration_.model_.dimension) {
+    if (replacement.path.dimension() != configuration_.model_.dimension()) {
       throw std::invalid_argument("replacement path dimension does not match the model");
     }
-    if (!nearly_equal_time(replacement.path.duration(), configuration_.model_.beta)) {
+    if (!nearly_equal_time(replacement.path.duration(), configuration_.model_.beta())) {
       throw std::invalid_argument("replacement path duration does not match beta");
     }
   }

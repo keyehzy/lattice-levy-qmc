@@ -15,13 +15,13 @@ ContinuousPath stationary_path(const Coord site, const double duration = 1.0) {
 }
 
 Model occupancy_model() {
-  return Model{
+  return Model(qmc::ModelParameters{
       .particle_count = 2,
       .beta = 1.0,
       .linear_size = 3,
       .dimension = 1,
       .hopping = 1.0,
-  };
+  });
 }
 
 TEST(OccupancyIndexTest, StagesAffectedTimelinesAndPublishesOnlyOnCommit) {
