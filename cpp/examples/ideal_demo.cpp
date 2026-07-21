@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -225,11 +226,11 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
       .cycle_maximum_radius_squared = std::vector<double>(model.particle_count() + 1),
       .cycle_occurrences = std::vector<double>(model.particle_count() + 1),
       .longest_cycle_probability = std::vector<double>(model.particle_count() + 1),
-      .site_density = std::vector<double>(volume),
-      .pair_correlation = std::vector<double>(volume),
-      .structure_factor = std::vector<double>(volume),
-      .onsite_probability = std::vector<double>(model.particle_count() + 1),
-      .connected_density = std::vector<double>(command_line.time_links * volume),
+      .site_density = {},
+      .pair_correlation = {},
+      .structure_factor = {},
+      .onsite_probability = {},
+      .connected_density = {},
       .mean_square_displacement = std::vector<double>(command_line.time_links),
       .return_probability = std::vector<double>(command_line.time_links),
       .displacement_probability = std::vector<double>(command_line.time_links * volume),
@@ -248,6 +249,12 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
   averages.winding_squared_trace.reserve(command_line.samples);
   const std::size_t macroscopic_threshold =
       model.particle_count() == 0 ? 1 : (model.particle_count() + 1) / 2;
+  const qmc::RetainedGrid retained_grid(model.beta(),
+                                        qmc::TorusLayout(model.linear_size(), model.dimension()),
+                                        command_line.time_links);
+  qmc::EqualTimeAccumulator equal_time_accumulator(retained_grid, model.particle_count());
+  qmc::RetainedDensityCorrelationAccumulator density_accumulator(retained_grid,
+                                                                 model.particle_count());
 
   for (std::size_t sample = 0; sample < command_line.samples; ++sample) {
     const auto configuration =
@@ -302,38 +309,34 @@ SampleAverages sample_ensemble(const CommandLine &command_line,
     }
 
     const qmc::RetainedMeasurementContext measurement_context(configuration);
-    const auto equal_time = qmc::equal_time_observables(measurement_context);
-    add_values(averages.site_density, equal_time.site_density);
-    add_values(averages.pair_correlation, equal_time.pair_correlation);
-    add_values(averages.structure_factor, equal_time.static_structure_factor);
-    add_values(averages.onsite_probability, equal_time.onsite_occupation_probability);
-    averages.mean_occupation_squared += equal_time.mean_occupation_squared;
-    averages.mean_factorial_occupation += equal_time.mean_factorial_occupation;
-
-    const auto imaginary_time = qmc::retained_density_correlations(measurement_context);
-    add_values(averages.connected_density, imaginary_time.connected_density());
+    equal_time_accumulator.observe(measurement_context);
+    density_accumulator.observe(measurement_context);
     const auto retained_geometry = qmc::retained_geometry_observables(configuration);
     add_values(averages.mean_square_displacement, retained_geometry.mean_square_displacement);
     add_values(averages.return_probability, retained_geometry.return_probability);
     add_values(averages.displacement_probability, retained_geometry.displacement_probability);
   }
 
+  auto equal_time = equal_time_accumulator.finish();
+  averages.site_density = std::move(equal_time.site_density);
+  averages.pair_correlation = std::move(equal_time.pair_correlation);
+  averages.structure_factor = std::move(equal_time.static_structure_factor);
+  averages.onsite_probability = std::move(equal_time.onsite_occupation_probability);
+  averages.mean_occupation_squared = equal_time.mean_occupation_squared;
+  averages.mean_factorial_occupation = equal_time.mean_factorial_occupation;
+  const auto density_correlations = density_accumulator.finish();
+  const auto connected_density = density_correlations.connected_density();
+  averages.connected_density.assign(connected_density.begin(), connected_density.end());
+
   const auto sample_count = static_cast<double>(command_line.samples);
   divide_values(averages.cycle_count, sample_count);
   divide_values(averages.cycle_particles, sample_count);
   divide_values(averages.longest_cycle_probability, sample_count);
-  divide_values(averages.site_density, sample_count);
-  divide_values(averages.pair_correlation, sample_count);
-  divide_values(averages.structure_factor, sample_count);
-  divide_values(averages.onsite_probability, sample_count);
-  divide_values(averages.connected_density, sample_count);
   divide_values(averages.mean_square_displacement, sample_count);
   divide_values(averages.return_probability, sample_count);
   divide_values(averages.displacement_probability, sample_count);
   divide_values(averages.winding_second_moment, sample_count);
   divide_values(averages.winding_fourth_moment, sample_count);
-  averages.mean_occupation_squared /= sample_count;
-  averages.mean_factorial_occupation /= sample_count;
   averages.nonzero_winding_probability /= sample_count;
   averages.macroscopic_cycle_fraction /= sample_count;
   for (std::size_t length = 1; length <= model.particle_count(); ++length) {

@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a deterministic read-only cycle decomposition.
 - Add an owning `RetainedMeasurementContext` so equal-time and retained-density
   estimators can share one physical-site traversal and retained-grid provenance.
+- Add typed equal-time and retained-density accumulators that enforce grid and
+  particle-count provenance and own sample normalization.
 - Add self-describing segment, stitch, fixed-seam stitch-sweep, and random-seam
   stitch option values.
 - Add generated compile-time version metadata in `<qmc/version.hpp>`, sourced

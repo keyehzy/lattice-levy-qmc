@@ -27,6 +27,16 @@ struct BruteCanonicalResult {
   std::vector<double> occupation_squared;
 };
 
+void expect_vector_average(const std::span<const double> actual,
+                           const std::span<const double> first,
+                           const std::span<const double> second) {
+  ASSERT_EQ(actual.size(), first.size());
+  ASSERT_EQ(actual.size(), second.size());
+  for (std::size_t index = 0; index < actual.size(); ++index) {
+    EXPECT_DOUBLE_EQ(actual[index], (first[index] + second[index]) / 2.0);
+  }
+}
+
 BruteCanonicalResult enumerate_fock_states(const qmc::Model &model) {
   const auto volume = model.volume();
   std::vector<double> energies(volume);
@@ -408,6 +418,131 @@ TEST(ConfigurationObservablesTest, RetainedMeasurementContextReusesOwnedPosition
 
   EXPECT_EQ(qmc::retained_density_correlations(context),
             qmc::retained_density_correlations(configuration));
+}
+
+TEST(ConfigurationObservablesTest, RetainedAccumulatorsAverageCompatibleContexts) {
+  const qmc::Model model(qmc::ModelParameters{
+      .particle_count = 4,
+      .beta = 1.1,
+      .linear_size = 3,
+      .dimension = 2,
+      .hopping = 0.8,
+  });
+  const qmc::CanonicalEnsemble ensemble(model);
+  qmc::Random random(1913);
+  const qmc::RetainedMeasurementContext first(
+      qmc::sample_ideal_boson_configuration(ensemble, 5, random));
+  const qmc::RetainedMeasurementContext second(
+      qmc::sample_ideal_boson_configuration(ensemble, 5, random));
+  const auto first_equal_time = qmc::equal_time_observables(first);
+  const auto second_equal_time = qmc::equal_time_observables(second);
+  const auto first_density = qmc::retained_density_correlations(first);
+  const auto second_density = qmc::retained_density_correlations(second);
+
+  qmc::EqualTimeAccumulator equal_time(first.grid(), model.particle_count());
+  qmc::RetainedDensityCorrelationAccumulator density(first.grid(), model.particle_count());
+  EXPECT_EQ(equal_time.grid(), first.grid());
+  EXPECT_EQ(density.grid(), first.grid());
+  EXPECT_EQ(equal_time.particle_count(), model.particle_count());
+  EXPECT_EQ(density.particle_count(), model.particle_count());
+  EXPECT_EQ(equal_time.sample_count(), 0U);
+  EXPECT_EQ(density.sample_count(), 0U);
+
+  equal_time.observe(first);
+  density.observe(first);
+  equal_time.observe(second);
+  density.observe(second);
+
+  EXPECT_EQ(equal_time.sample_count(), 2U);
+  EXPECT_EQ(density.sample_count(), 2U);
+  const auto averaged_equal_time = equal_time.finish();
+  const auto averaged_density = density.finish();
+  expect_vector_average(averaged_equal_time.site_density, first_equal_time.site_density,
+                        second_equal_time.site_density);
+  expect_vector_average(averaged_equal_time.pair_correlation, first_equal_time.pair_correlation,
+                        second_equal_time.pair_correlation);
+  expect_vector_average(averaged_equal_time.static_structure_factor,
+                        first_equal_time.static_structure_factor,
+                        second_equal_time.static_structure_factor);
+  expect_vector_average(averaged_equal_time.onsite_occupation_probability,
+                        first_equal_time.onsite_occupation_probability,
+                        second_equal_time.onsite_occupation_probability);
+  EXPECT_DOUBLE_EQ(
+      averaged_equal_time.mean_occupation_squared,
+      (first_equal_time.mean_occupation_squared + second_equal_time.mean_occupation_squared) / 2.0);
+  EXPECT_DOUBLE_EQ(
+      averaged_equal_time.mean_factorial_occupation,
+      (first_equal_time.mean_factorial_occupation + second_equal_time.mean_factorial_occupation) /
+          2.0);
+  EXPECT_EQ(averaged_density.grid(), first.grid());
+  expect_vector_average(averaged_density.connected_density(), first_density.connected_density(),
+                        second_density.connected_density());
+}
+
+TEST(ConfigurationObservablesTest, RetainedAccumulatorsRejectEmptyAndMismatchedContexts) {
+  const auto make_context = [](const qmc::ModelParameters parameters, const std::size_t time_points,
+                               const std::uint64_t seed) {
+    const qmc::Model model(parameters);
+    qmc::Random random(seed);
+    return qmc::RetainedMeasurementContext(
+        qmc::sample_ideal_boson_configuration(model, time_points, random));
+  };
+  const qmc::ModelParameters base_parameters{
+      .particle_count = 2,
+      .beta = 1.0,
+      .linear_size = 4,
+      .dimension = 1,
+      .hopping = 0.7,
+  };
+  const auto base = make_context(base_parameters, 3, 1915);
+  qmc::EqualTimeAccumulator equal_time(base.grid(), base.particle_count());
+  qmc::RetainedDensityCorrelationAccumulator density(base.grid(), base.particle_count());
+
+  EXPECT_THROW(static_cast<void>(equal_time.finish()), std::logic_error);
+  EXPECT_THROW(static_cast<void>(density.finish()), std::logic_error);
+
+  auto expect_rejected = [&](const qmc::RetainedMeasurementContext &context) {
+    EXPECT_THROW(equal_time.observe(context), std::invalid_argument);
+    EXPECT_THROW(density.observe(context), std::invalid_argument);
+    EXPECT_EQ(equal_time.sample_count(), 0U);
+    EXPECT_EQ(density.sample_count(), 0U);
+  };
+  auto parameters = base_parameters;
+  parameters.particle_count = 3;
+  const auto different_particle_count = make_context(parameters, 3, 1916);
+  expect_rejected(different_particle_count);
+
+  parameters = base_parameters;
+  parameters.beta = 2.0;
+  const auto different_beta = make_context(parameters, 3, 1917);
+  expect_rejected(different_beta);
+
+  parameters = base_parameters;
+  parameters.linear_size = 2;
+  parameters.dimension = 2;
+  const auto different_layout = make_context(parameters, 3, 1918);
+  expect_rejected(different_layout);
+
+  const auto different_time_points = make_context(base_parameters, 4, 1919);
+  expect_rejected(different_time_points);
+
+  equal_time.observe(base);
+  density.observe(base);
+  EXPECT_EQ(equal_time.sample_count(), 1U);
+  EXPECT_EQ(density.sample_count(), 1U);
+  const auto expected_equal_time = qmc::equal_time_observables(base);
+  const auto expected_density = qmc::retained_density_correlations(base);
+  const auto actual_equal_time = equal_time.finish();
+  EXPECT_EQ(actual_equal_time.site_density, expected_equal_time.site_density);
+  EXPECT_EQ(actual_equal_time.pair_correlation, expected_equal_time.pair_correlation);
+  EXPECT_EQ(actual_equal_time.static_structure_factor, expected_equal_time.static_structure_factor);
+  EXPECT_EQ(actual_equal_time.onsite_occupation_probability,
+            expected_equal_time.onsite_occupation_probability);
+  EXPECT_DOUBLE_EQ(actual_equal_time.mean_occupation_squared,
+                   expected_equal_time.mean_occupation_squared);
+  EXPECT_DOUBLE_EQ(actual_equal_time.mean_factorial_occupation,
+                   expected_equal_time.mean_factorial_occupation);
+  EXPECT_EQ(density.finish(), expected_density);
 }
 
 TEST(ConfigurationObservablesTest, RejectsWrappedMatsubaraGridExtent) {

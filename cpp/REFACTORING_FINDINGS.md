@@ -71,7 +71,7 @@ type collects one invariant that is currently spread across several files.
 | P0 | Bind model and canonical table (done 2026-07-19); reusable path kernels (done 2026-07-21) | Correctness and large repeated-work reduction | Medium |
 | P0 | Make paths/configurations valid-by-construction (done 2026-07-21) | Ownership clarity and removal of nested validation | Large |
 | P1 | Path cursor/slice migration (done 2026-07-20) | Simpler boundary semantics and faster path surgery | Medium |
-| P1 | Add a retained-measurement context (done 2026-07-20); add accumulators | Less repeated work and a smaller demo | Medium |
+| P1 | Add a retained-measurement context (done 2026-07-20) and equal-time/density accumulators (done 2026-07-21); add remaining accumulators | Less repeated work and a smaller demo | Medium |
 | P1 | Collect reusable free-particle numerics (spectrum, path-kernel, partition-recurrence, cycle-sampling, and occupation-moment slices done 2026-07-21) | Numerical clarity and less repeated setup | Medium |
 | P1 | Unify discrete log-weight draws and bounded-tail sampling (done 2026-07-20) | One truncation policy and fewer allocations | Medium |
 | P1 | Unify full/incremental action around accepted state (ownership slice done 2026-07-20) | One source of truth and faster full evaluation | Medium |
@@ -442,16 +442,22 @@ proportional to events plus pieces and is easier to reason about.
 
 ### 6. P1: share retained measurement state and provide real accumulators
 
-Status (2026-07-20): the retained-measurement-context slice is complete.
+Status (2026-07-21): the retained-measurement-context and equal-time/density
+accumulator slices are complete.
 `RetainedMeasurementContext` owns the retained-grid provenance and flattened,
 time-major physical positions derived once from a retained configuration.
 Equal-time and retained-density estimators consume it, while their existing
 configuration overloads remain as one-off wrappers. The ideal demo constructs
 one context per sample, and equal-time occupancy measurement now reuses one
-volume-sized slice buffer instead of retaining an `M x volume` matrix. Exact
-context/wrapper equivalence, position derivation, bounds, and empty-system tests
-cover the new boundary. Typed accumulators, shape-aware result accessors, and
-transform plans remain open.
+volume-sized slice buffer instead of retaining an `M x volume` matrix.
+`EqualTimeAccumulator` and `RetainedDensityCorrelationAccumulator` bind one
+retained grid and particle count, reject mismatched contexts before mutation,
+own their sample counts, and return normalized results from `finish()`. The
+ideal demo uses both instead of manually initializing, adding, and dividing
+their result fields. Exact context/wrapper equivalence, two-sample averages,
+single-sample identity, grid/particle mismatches, bounds, and empty boundaries
+cover the new ownership units. Cycle/winding/geometry accumulators, shape-aware
+result accessors, and transform plans remain open.
 
 Pre-context evidence:
 
@@ -467,23 +473,28 @@ Pre-context evidence:
 
 Remaining evidence:
 
-- `SampleAverages` has 27 manually initialized/added/divided fields
-  (`examples/ideal_demo.cpp:193-243` and `examples/ideal_demo.cpp:318-342`).
-  Adding a result field requires updating several distant blocks correctly.
+- `SampleAverages` still manually initializes, adds, and normalizes its cycle,
+  winding, and retained-geometry fields (`examples/ideal_demo.cpp:188-247` and
+  `examples/ideal_demo.cpp:301-347`). Adding one of those result fields requires
+  updating several distant blocks correctly.
 - flattened time/space arrays expose dimensions next to raw vectors rather than
-  through shape-aware accessors (`include/qmc/observables.hpp:100-131`).
+  through shape-aware accessors (`include/qmc/observables.hpp:134-143` and
+  `include/qmc/observables.hpp:228-248`).
 - the Matsubara conversion is a pair of direct DFTs and repeatedly allocates
   decoded coordinate vectors and complex phases inside its nested loops
-  (`src/observables.cpp:686-719`).
+  (`src/observables.cpp:769-815`).
 
 Recommendation:
 
-- Construct one `RetainedMeasurementContext` per configuration. It validates
-  once and holds/reuses flat retained positions, a slice occupancy buffer, and
-  optional precomputed displacement/phase data.
+- Completed 2026-07-20: construct one `RetainedMeasurementContext` per
+  configuration. It validates once and owns the flattened retained positions.
+  Optional precomputed displacement/phase data remains a transform-plan
+  follow-up.
 - Let equal-time, density, and geometry estimators consume that context.
-- Add typed accumulator objects with `observe(context)` and `finish(count)`;
-  keep raw per-configuration estimators for users who need them.
+- Completed 2026-07-21 for equal-time and retained-density results: add typed
+  accumulator objects with `observe(context)` and sample-count-owning
+  `finish()`; keep raw per-configuration estimators for users who need them.
+  Cycle, winding, and retained-geometry accumulation remain separate follow-ups.
 - Stream slices where possible instead of retaining `M x volume` intermediate
   occupancy state.
 - Give flattened lattice/time results shape-aware accessors. For small
@@ -1165,8 +1176,9 @@ visible at the assertion sites.
    `ContinuousConfiguration`, and `Model` encapsulation, plus authoritative
    continuous and retained `Permutation` topology; full path/configuration
    validation remains available as an explicit diagnostic audit.
-6. Retained measurement context completed 2026-07-20; add accumulators, then
-   optimize direct correlation kernels from benchmark evidence.
+6. Retained measurement context completed 2026-07-20 and equal-time/density
+   accumulators completed 2026-07-21; add cycle/winding/geometry accumulators,
+   then optimize direct correlation kernels from benchmark evidence.
 7. Log-weight categorical draws and adaptive-support numerics completed
    2026-07-20; canonical derivative and partition recurrences,
    spectrum/trigonometric caching, reusable free-path kernels, and cycle-label

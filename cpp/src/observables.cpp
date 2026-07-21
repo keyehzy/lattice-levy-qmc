@@ -64,6 +64,34 @@ double clamp_nonnegative_roundoff(const double value, const double scale) {
   return value;
 }
 
+void require_matching_measurement_context(const RetainedGrid &grid,
+                                          const std::size_t particle_count,
+                                          const RetainedMeasurementContext &context) {
+  if (context.grid() != grid) {
+    throw std::invalid_argument("retained measurement context has a different grid");
+  }
+  if (context.particle_count() != particle_count) {
+    throw std::invalid_argument("retained measurement context has a different particle count");
+  }
+}
+
+std::size_t next_observation_count(const std::size_t sample_count) {
+  return detail::checked_add_size(sample_count, 1, "observable sample count exceeds size_t");
+}
+
+void add_values(const std::span<double> sums, const std::span<const double> values) noexcept {
+  assert(sums.size() == values.size());
+  for (std::size_t index = 0; index < sums.size(); ++index) {
+    sums[index] += values[index];
+  }
+}
+
+void divide_values(const std::span<double> values, const double divisor) noexcept {
+  for (double &value : values) {
+    value /= divisor;
+  }
+}
+
 using SecondDerivativeFinalizer = double (*)(double value, double scale);
 
 double preserve_second_derivative(const double value, [[maybe_unused]] const double scale) {
@@ -636,6 +664,44 @@ EqualTimeObservables equal_time_observables(const IdealBosonConfiguration &confi
   return equal_time_observables(RetainedMeasurementContext(configuration));
 }
 
+EqualTimeAccumulator::EqualTimeAccumulator(RetainedGrid grid, const std::size_t particle_count)
+    : grid_(std::move(grid)), particle_count_(particle_count),
+      sums_{
+          .site_density = std::vector<double>(grid_.layout().volume()),
+          .pair_correlation = std::vector<double>(grid_.layout().volume()),
+          .static_structure_factor = std::vector<double>(grid_.layout().volume()),
+          .onsite_occupation_probability = std::vector<double>(detail::checked_add_size(
+              particle_count_, 1, "onsite-probability extent exceeds size_t")),
+      } {}
+
+void EqualTimeAccumulator::observe(const RetainedMeasurementContext &context) {
+  require_matching_measurement_context(grid_, particle_count_, context);
+  const auto updated_sample_count = next_observation_count(sample_count_);
+  const auto observation = equal_time_observables(context);
+  add_values(sums_.site_density, observation.site_density);
+  add_values(sums_.pair_correlation, observation.pair_correlation);
+  add_values(sums_.static_structure_factor, observation.static_structure_factor);
+  add_values(sums_.onsite_occupation_probability, observation.onsite_occupation_probability);
+  sums_.mean_occupation_squared += observation.mean_occupation_squared;
+  sums_.mean_factorial_occupation += observation.mean_factorial_occupation;
+  sample_count_ = updated_sample_count;
+}
+
+EqualTimeObservables EqualTimeAccumulator::finish() const {
+  if (sample_count_ == 0) {
+    throw std::logic_error("cannot finish an equal-time accumulator without samples");
+  }
+  EqualTimeObservables result = sums_;
+  const auto divisor = static_cast<double>(sample_count_);
+  divide_values(result.site_density, divisor);
+  divide_values(result.pair_correlation, divisor);
+  divide_values(result.static_structure_factor, divisor);
+  divide_values(result.onsite_occupation_probability, divisor);
+  result.mean_occupation_squared /= divisor;
+  result.mean_factorial_occupation /= divisor;
+  return result;
+}
+
 ImaginaryTimeDensityCorrelations
 retained_density_correlations(const RetainedMeasurementContext &context) {
   const RetainedGrid &grid = context.grid();
@@ -674,6 +740,30 @@ retained_density_correlations(const RetainedMeasurementContext &context) {
 ImaginaryTimeDensityCorrelations
 retained_density_correlations(const IdealBosonConfiguration &configuration) {
   return retained_density_correlations(RetainedMeasurementContext(configuration));
+}
+
+RetainedDensityCorrelationAccumulator::RetainedDensityCorrelationAccumulator(
+    RetainedGrid grid, const std::size_t particle_count)
+    : grid_(std::move(grid)), particle_count_(particle_count),
+      connected_density_sums_(
+          detail::checked_product(grid_.time_points(), grid_.layout().volume(),
+                                  "density-correlation accumulator grid exceeds size_t")) {}
+
+void RetainedDensityCorrelationAccumulator::observe(const RetainedMeasurementContext &context) {
+  require_matching_measurement_context(grid_, particle_count_, context);
+  const auto updated_sample_count = next_observation_count(sample_count_);
+  const auto observation = retained_density_correlations(context);
+  add_values(connected_density_sums_, observation.connected_density());
+  sample_count_ = updated_sample_count;
+}
+
+ImaginaryTimeDensityCorrelations RetainedDensityCorrelationAccumulator::finish() const {
+  if (sample_count_ == 0) {
+    throw std::logic_error("cannot finish a density-correlation accumulator without samples");
+  }
+  std::vector<double> result = connected_density_sums_;
+  divide_values(result, static_cast<double>(sample_count_));
+  return {grid_, std::move(result)};
 }
 
 MatsubaraDensityCorrelations

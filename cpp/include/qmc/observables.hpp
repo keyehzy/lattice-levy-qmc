@@ -150,6 +150,27 @@ equal_time_observables(const RetainedMeasurementContext &context);
 [[nodiscard]] EqualTimeObservables
 equal_time_observables(const IdealBosonConfiguration &configuration);
 
+// Averages equal-time estimators over compatible retained configurations.
+// Each observed context must have the construction grid and particle count.
+class EqualTimeAccumulator {
+public:
+  EqualTimeAccumulator(RetainedGrid grid, std::size_t particle_count);
+
+  [[nodiscard]] const RetainedGrid &grid() const noexcept { return grid_; }
+  [[nodiscard]] std::size_t particle_count() const noexcept { return particle_count_; }
+  [[nodiscard]] std::size_t sample_count() const noexcept { return sample_count_; }
+
+  void observe(const RetainedMeasurementContext &context);
+  // Throws logic_error when no sample has been observed.
+  [[nodiscard]] EqualTimeObservables finish() const;
+
+private:
+  RetainedGrid grid_;
+  std::size_t particle_count_;
+  std::size_t sample_count_ = 0;
+  EqualTimeObservables sums_;
+};
+
 // Shape-safe connected C_nn(delta, tau_j). The estimator averages all retained
 // time origins and uses periodic imaginary-time differences. Flat storage uses
 // time-major ordering followed by the grid layout's flat displacement.
@@ -181,6 +202,28 @@ retained_density_correlations(const RetainedMeasurementContext &context);
 // evaluating more than one retained observable for the same configuration.
 [[nodiscard]] ImaginaryTimeDensityCorrelations
 retained_density_correlations(const IdealBosonConfiguration &configuration);
+
+// Averages connected density-correlation estimators over compatible retained
+// configurations. Each observed context must have the construction grid and
+// particle count.
+class RetainedDensityCorrelationAccumulator {
+public:
+  RetainedDensityCorrelationAccumulator(RetainedGrid grid, std::size_t particle_count);
+
+  [[nodiscard]] const RetainedGrid &grid() const noexcept { return grid_; }
+  [[nodiscard]] std::size_t particle_count() const noexcept { return particle_count_; }
+  [[nodiscard]] std::size_t sample_count() const noexcept { return sample_count_; }
+
+  void observe(const RetainedMeasurementContext &context);
+  // Throws logic_error when no sample has been observed.
+  [[nodiscard]] ImaginaryTimeDensityCorrelations finish() const;
+
+private:
+  RetainedGrid grid_;
+  std::size_t particle_count_;
+  std::size_t sample_count_ = 0;
+  std::vector<double> connected_density_sums_;
+};
 
 struct MatsubaraDensityCorrelations {
   std::vector<double> frequencies;
