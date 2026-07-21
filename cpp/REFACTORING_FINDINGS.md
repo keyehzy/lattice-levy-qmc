@@ -642,8 +642,23 @@ zero boundary, the transaction rebases from its fully staged occupancy ledger
 before acceptance. Construction/global/time-shift ledger authority, derived
 action, copied-owner, rejection, counter, topology, and action-failure tests
 cover the boundary. The independent full event sweep remains the audit oracle.
-Its production k-way merge and a bundled public interaction measurement remain
-open.
+A bundled public interaction measurement remains open.
+
+K-way event-merge experiment (2026-07-21): reverted. The implementation kept
+one event per path in a deterministic heap instead of flattening and
+stable-sorting every event, but the measured tradeoff did not justify the extra
+machinery as the general production path:
+
+- Sparse workload—256 paths, 8 events/path: k-way merge was about 5.5–7.5%
+  faster and reduced auxiliary event storage from `O(E)` to `O(N)`.
+- Dense workload—256 paths, 2,048 events/path: k-way merge was roughly 60%
+  slower, despite better asymptotic complexity, because the flat stable sort
+  has better locality and lower per-event overhead.
+
+The flat stable sort therefore remains the production implementation. Revisit a
+k-way or hybrid evaluator only if representative workload profiling shows that
+event-buffer memory or sparse-path sorting is a material bottleneck and also
+defines a measured crossover policy.
 
 Numerical follow-up note (2026-07-20): the seeded finite-interaction invariant
 test exposed cancellation at the physical zero boundary. At sweep 11, segment
@@ -690,11 +705,11 @@ Recommendation:
 
 - Use `SiteId` from `TorusLayout` and one occupancy transition helper in both
   paths.
-- Replace the global sort with a small min-heap/k-way merge over the already
-  sorted per-path event spans. This reduces auxiliary event copying and changes
-  sorting from `O(E log E)` to `O(E log N)`. Give the heap an explicit
-  `(time, path index, event index)` tie-break so equal-time transitions retain
-  the existing stable path/event order and remain reproducible.
+- Retain the global stable sort as the production default. Do not replace it
+  wholesale with a k-way heap: the 2026-07-21 experiment improved sparse paths
+  modestly but substantially regressed dense paths. If memory pressure or new
+  workload evidence justifies a hybrid later, preserve the explicit
+  `(time, path index, event index)` ordering and benchmark the crossover.
 - Let an `AcceptedChainState` build its occupancy index once and derive
   `pair_overlap`/`action` from that same index. Keep the independent full sweep as
   an audit/reference implementation.
@@ -712,9 +727,9 @@ Recommendation:
 
 The independent evaluator remains valuable for tests; sharing site reduction and
 event transition semantics does not require sharing the whole algorithm.
-This keeps the porting guide's intended split: merge sorted streams in the
-production evaluator while retaining the global sort as a reference oracle
-(`../docs/CPP_PORT.md:414-431`).
+The k-way/global-sort split proposed by the porting guide
+(`../docs/CPP_PORT.md:414-431`) was tested and is not the current recommendation
+without a workload-specific crossover.
 
 ### 10. P1: make permutation topology authoritative
 
@@ -1079,8 +1094,9 @@ visible at the assertion sites.
    optimize direct correlation kernels from benchmark evidence.
 7. Log-weight categorical draws and adaptive-support numerics completed
    2026-07-20; consolidate canonical derivative recurrences.
-8. Accepted-chain ownership completed 2026-07-20; add the production k-way
-   event merge and bundled interaction measurement separately.
+8. Accepted-chain ownership completed 2026-07-20; a production k-way event
+   merge was benchmarked and reverted 2026-07-21. Add the bundled interaction
+   measurement separately.
 9. Split translation units and demos after responsibilities have stabilized.
 10. GoogleTest exclusion from clang-tidy completed 2026-07-19; add install, CI,
    benchmark support, and an external consumer test.
