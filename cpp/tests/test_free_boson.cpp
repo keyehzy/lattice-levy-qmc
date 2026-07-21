@@ -18,6 +18,8 @@ namespace {
 static_assert(!std::is_aggregate_v<qmc::CanonicalEnsemble>);
 static_assert(std::is_same_v<decltype(std::declval<const qmc::CanonicalEnsemble &>().model()),
                              const qmc::Model &>);
+static_assert(std::is_same_v<decltype(std::declval<const qmc::CanonicalEnsemble &>().spectrum()),
+                             const qmc::OneParticleSpectrum &>);
 
 std::vector<std::size_t> permutation_cycle_lengths(const std::vector<qmc::ParticleId> &values) {
   std::vector<bool> seen(values.size(), false);
@@ -70,6 +72,54 @@ TEST(FreeBosonTest, TorusTraceMatchesPythonAndDirectMomentumSum) {
     direct_1d += std::exp(2.0 * hopping * duration * std::cos(angle));
   }
   EXPECT_NEAR(std::exp(got), direct_1d * direct_1d, 2e-13);
+}
+
+TEST(FreeBosonTest, OneParticleSpectrumOwnsReusableTorusMomentumData) {
+  const qmc::Model model(qmc::ModelParameters{
+      .particle_count = 3,
+      .beta = 0.8,
+      .linear_size = 4,
+      .dimension = 2,
+      .hopping = 0.75,
+  });
+  const qmc::CanonicalEnsemble ensemble(model);
+  const qmc::OneParticleSpectrum &spectrum = ensemble.spectrum();
+
+  EXPECT_EQ(spectrum.layout(), qmc::TorusLayout(4, 2));
+  EXPECT_DOUBLE_EQ(spectrum.hopping(), model.hopping());
+  ASSERT_EQ(spectrum.wavevectors().size(), 4U);
+  ASSERT_EQ(spectrum.cosines().size(), 4U);
+  ASSERT_EQ(spectrum.sines().size(), 4U);
+  for (std::size_t momentum = 0; momentum < spectrum.wavevectors().size(); ++momentum) {
+    const double expected = 2.0 * std::numbers::pi * static_cast<double>(momentum) / 4.0;
+    EXPECT_DOUBLE_EQ(spectrum.wavevectors()[momentum], expected);
+    EXPECT_DOUBLE_EQ(spectrum.cosines()[momentum], std::cos(expected));
+    EXPECT_DOUBLE_EQ(spectrum.sines()[momentum], std::sin(expected));
+  }
+
+  const std::array<std::size_t, 2> minimum{0, 0};
+  const std::array<std::size_t, 2> maximum{2, 2};
+  EXPECT_DOUBLE_EQ(spectrum.energy(minimum), -3.0);
+  EXPECT_DOUBLE_EQ(spectrum.energy(maximum), 3.0);
+  EXPECT_DOUBLE_EQ(qmc::log_one_particle_trace(1.3, spectrum),
+                   qmc::log_one_particle_trace(1.3, model));
+
+  const std::array<std::size_t, 1> wrong_dimension{0};
+  const std::array<std::size_t, 2> invalid_component{0, 4};
+  EXPECT_THROW(static_cast<void>(spectrum.energy(wrong_dimension)), std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(spectrum.energy(invalid_component)), std::out_of_range);
+}
+
+TEST(FreeBosonTest, OneParticleSpectrumRejectsInvalidPhysicalParameters) {
+  EXPECT_THROW(static_cast<void>(qmc::OneParticleSpectrum(0, 1, 1.0)), std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(qmc::OneParticleSpectrum(2, 0, 1.0)), std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(qmc::OneParticleSpectrum(2, 1, -1.0)), std::invalid_argument);
+  EXPECT_THROW(
+      static_cast<void>(qmc::OneParticleSpectrum(2, 1, std::numeric_limits<double>::quiet_NaN())),
+      std::invalid_argument);
+  EXPECT_THROW(
+      static_cast<void>(qmc::OneParticleSpectrum(std::numeric_limits<qmc::Coord>::max(), 2, 1.0)),
+      std::overflow_error);
 }
 
 TEST(FreeBosonTest, CanonicalEnsembleMatchesPythonReference) {
@@ -126,6 +176,8 @@ TEST(FreeBosonTest, CanonicalEnsembleOwnsItsValidatedModel) {
 
   EXPECT_DOUBLE_EQ(ensemble.model().beta(), 0.8);
   EXPECT_DOUBLE_EQ(ensemble.model().hopping(), 0.9);
+  EXPECT_DOUBLE_EQ(ensemble.spectrum().hopping(), 0.9);
+  EXPECT_EQ(ensemble.spectrum().layout(), qmc::TorusLayout(4, 1));
   EXPECT_TRUE(std::isfinite(ensemble.log_partition(3)));
 }
 
@@ -166,6 +218,21 @@ TEST(FreeBosonTest, SampledCyclesPartitionLabels) {
   const auto cycles = ensemble.sample_cycles(random);
 
   EXPECT_TRUE(cycles_partition_labels(cycles, model.particle_count()));
+}
+
+TEST(FreeBosonTest, SpectrumCachingKeepsSeededEnsemblesReproducible) {
+  const qmc::CanonicalEnsemble ensemble(qmc::Model(qmc::ModelParameters{
+      .particle_count = 12,
+      .beta = 0.8,
+      .linear_size = 7,
+      .dimension = 2,
+      .hopping = 0.9,
+  }));
+  const qmc::CanonicalEnsemble copy = ensemble;
+  qmc::Random first_random(271828);
+  qmc::Random second_random(271828);
+
+  EXPECT_EQ(ensemble.sample_cycles(first_random), copy.sample_cycles(second_random));
 }
 
 TEST(FreeBosonTest, CanonicalPrefixReuseIsExplicitAndBounded) {

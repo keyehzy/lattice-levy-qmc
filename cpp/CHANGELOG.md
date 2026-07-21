@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lattice volume, encoding, displacement, shifts, and neighborhood traversal.
 - Add an immutable `CanonicalEnsemble` that binds a validated free model to its
   canonical recursion and supports explicit particle-number prefix reuse.
+- Add an immutable `OneParticleSpectrum`, owned by `CanonicalEnsemble`, with a
+  checked torus layout and reusable one-dimensional momentum, sine, and cosine
+  tables.
 - Add a validated `Permutation` value with authoritative successor storage and
   a deterministic read-only cycle decomposition.
 - Add an owning `RetainedMeasurementContext` so equal-time and retained-density
@@ -60,6 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CanonicalEnsemble`; the ideal demo and interacting sampler now construct the
   canonical recursion once instead of rebuilding or accepting an independently
   supplied table.
+- Reuse ensemble-owned spectrum data in canonical traces, thermodynamic
+  derivatives, momentum energies, one-body density matrices, twisted
+  partitions, and twist curvature without eagerly materializing all `L^d`
+  momentum modes.
 - Exclude GoogleTest translation units from clang-tidy analysis while retaining
   the existing project check profile for library and example targets.
 - Prepare and validate complete sweep, run, and random-seam plans before their

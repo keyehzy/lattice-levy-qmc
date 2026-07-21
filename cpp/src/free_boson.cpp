@@ -79,36 +79,89 @@ SymmetricWindingWeights find_winding_support(const Coord linear_size, const doub
 
 } // namespace
 
+OneParticleSpectrum::OneParticleSpectrum(const Coord linear_size, const std::size_t dimension,
+                                         const double hopping)
+    : layout_(linear_size, dimension), hopping_(hopping) {
+  if (!std::isfinite(hopping_) || hopping_ < 0.0) {
+    throw std::invalid_argument("hopping must be finite and nonnegative");
+  }
+
+  const auto size = static_cast<std::size_t>(layout_.linear_size());
+  wavevectors_.reserve(size);
+  cosines_.reserve(size);
+  sines_.reserve(size);
+  for (std::size_t momentum = 0; momentum < size; ++momentum) {
+    const double wavevector = 2.0 * std::numbers::pi * static_cast<double>(momentum) /
+                              static_cast<double>(layout_.linear_size());
+    wavevectors_.push_back(wavevector);
+    cosines_.push_back(std::cos(wavevector));
+    sines_.push_back(std::sin(wavevector));
+  }
+}
+
+OneParticleSpectrum::OneParticleSpectrum(const Model &model)
+    : OneParticleSpectrum(model.linear_size(), model.dimension(), model.hopping()) {}
+
+double OneParticleSpectrum::energy(const std::span<const std::size_t> momentum_components) const {
+  if (momentum_components.size() != layout_.dimension()) {
+    throw std::invalid_argument("momentum component count does not match the lattice dimension");
+  }
+  double cosine_sum = 0.0;
+  for (const std::size_t component : momentum_components) {
+    if (component >= cosines_.size()) {
+      throw std::out_of_range("momentum component is outside [0, L)");
+    }
+    cosine_sum += cosines_[component];
+  }
+  const double result = -2.0 * hopping_ * cosine_sum;
+  if (!std::isfinite(result)) {
+    throw std::overflow_error("one-particle energy overflowed");
+  }
+  return result;
+}
+
+namespace {
+
+double log_one_particle_trace(const double duration, const OneParticleSpectrum &spectrum,
+                              std::vector<double> &exponents) {
+  if (!std::isfinite(duration) || duration < 0.0) {
+    throw std::invalid_argument("duration must be finite and nonnegative");
+  }
+  const double scale = 2.0 * spectrum.hopping() * duration;
+  if (!std::isfinite(scale)) {
+    throw std::overflow_error("one-particle trace exponent scale overflowed");
+  }
+
+  const auto cosines = spectrum.cosines();
+  if (exponents.size() != cosines.size()) {
+    throw std::logic_error("one-particle trace scratch has the wrong size");
+  }
+  for (std::size_t momentum = 0; momentum < cosines.size(); ++momentum) {
+    exponents[momentum] = scale * cosines[momentum];
+  }
+  return static_cast<double>(spectrum.layout().dimension()) * log_sum_exp(exponents);
+}
+
+} // namespace
+
+double log_one_particle_trace(const double duration, const OneParticleSpectrum &spectrum) {
+  std::vector<double> exponents(spectrum.cosines().size());
+  return log_one_particle_trace(duration, spectrum, exponents);
+}
+
 double log_one_particle_trace(const double duration, const Coord linear_size,
                               const std::size_t dimension, const double hopping) {
   if (!std::isfinite(duration) || duration < 0.0) {
     throw std::invalid_argument("duration must be finite and nonnegative");
   }
-  if (linear_size < 1 || dimension < 1) {
-    throw std::invalid_argument("linear_size and dimension must be positive");
-  }
-  if (!std::isfinite(hopping) || hopping < 0.0) {
-    throw std::invalid_argument("hopping must be finite and nonnegative");
-  }
-  const double scale = 2.0 * hopping * duration;
-  if (!std::isfinite(scale)) {
-    throw std::overflow_error("one-particle trace exponent scale overflowed");
-  }
-
-  std::vector<double> exponents(static_cast<std::size_t>(linear_size));
-  for (Coord momentum = 0; momentum < linear_size; ++momentum) {
-    const double angle =
-        2.0 * std::numbers::pi * static_cast<double>(momentum) / static_cast<double>(linear_size);
-    exponents[static_cast<std::size_t>(momentum)] = scale * std::cos(angle);
-  }
-  return static_cast<double>(dimension) * log_sum_exp(exponents);
+  return log_one_particle_trace(duration, OneParticleSpectrum(linear_size, dimension, hopping));
 }
 
 double log_one_particle_trace(const double duration, const Model &model) {
-  return log_one_particle_trace(duration, model.linear_size(), model.dimension(), model.hopping());
+  return log_one_particle_trace(duration, OneParticleSpectrum(model));
 }
 
-CanonicalEnsemble::CanonicalEnsemble(Model model) : model_(model) {
+CanonicalEnsemble::CanonicalEnsemble(Model model) : model_(model), spectrum_(model_) {
   if (model_.particle_count() == std::numeric_limits<std::size_t>::max()) {
     throw std::overflow_error("canonical table size exceeds size_t");
   }
@@ -118,14 +171,14 @@ CanonicalEnsemble::CanonicalEnsemble(Model model) : model_(model) {
   log_z_.assign(count + 1, negative_infinity);
   log_Z_.assign(count + 1, negative_infinity);
   log_Z_[0] = 0.0;
+  std::vector<double> trace_exponents(spectrum_.cosines().size());
 
   for (std::size_t length = 1; length <= count; ++length) {
     const double duration = static_cast<double>(length) * model_.beta();
     if (!std::isfinite(duration)) {
       throw std::overflow_error("cycle duration overflowed");
     }
-    log_z_[length] = log_one_particle_trace(duration, model_.linear_size(), model_.dimension(),
-                                            model_.hopping());
+    log_z_[length] = log_one_particle_trace(duration, spectrum_, trace_exponents);
     if (!std::isfinite(log_z_[length])) {
       throw std::overflow_error("canonical one-particle trace is non-finite");
     }

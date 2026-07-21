@@ -5,12 +5,43 @@
 #include "qmc/model.hpp"
 #include "qmc/permutation.hpp"
 #include "qmc/random.hpp"
+#include "qmc/torus_layout.hpp"
 
 #include <cstddef>
 #include <span>
 #include <vector>
 
 namespace qmc {
+
+// Immutable one-dimensional momentum data and tight-binding dispersion for a
+// validated L^d torus. The tables contain q=2*pi*k/L and its sine/cosine for
+// k in [0,L); full L^d momentum records remain demand-driven.
+class OneParticleSpectrum {
+public:
+  // Throws invalid_argument for invalid geometry/hopping and overflow_error
+  // when L^d is not representable.
+  OneParticleSpectrum(Coord linear_size, std::size_t dimension, double hopping);
+  explicit OneParticleSpectrum(const Model &model);
+
+  [[nodiscard]] const TorusLayout &layout() const noexcept { return layout_; }
+  [[nodiscard]] double hopping() const noexcept { return hopping_; }
+  [[nodiscard]] std::span<const double> wavevectors() const noexcept { return wavevectors_; }
+  [[nodiscard]] std::span<const double> cosines() const noexcept { return cosines_; }
+  [[nodiscard]] std::span<const double> sines() const noexcept { return sines_; }
+
+  // Returns -2*t*sum_axis cos(q_axis). The component count must equal the
+  // lattice dimension and every component must lie in [0,L).
+  [[nodiscard]] double energy(std::span<const std::size_t> momentum_components) const;
+
+  bool operator==(const OneParticleSpectrum &) const = default;
+
+private:
+  TorusLayout layout_;
+  double hopping_;
+  std::vector<double> wavevectors_;
+  std::vector<double> cosines_;
+  std::vector<double> sines_;
+};
 
 // One validated free model and the canonical recursion derived from it. Prefix
 // queries through any particle count not exceeding model().particle_count() reuse
@@ -20,6 +51,7 @@ public:
   explicit CanonicalEnsemble(Model model);
 
   [[nodiscard]] const Model &model() const noexcept { return model_; }
+  [[nodiscard]] const OneParticleSpectrum &spectrum() const noexcept { return spectrum_; }
   // log Z_1(ell*beta), with index zero unused and set to negative infinity.
   [[nodiscard]] std::span<const double> log_cycle_weights() const noexcept { return log_z_; }
   // Canonical log partitions, with log_partitions()[0] == 0.
@@ -33,11 +65,13 @@ public:
 
 private:
   Model model_;
+  OneParticleSpectrum spectrum_;
   std::vector<double> log_z_;
   std::vector<double> log_Z_;
 };
 
 // Exact finite-momentum log trace for a nonnegative imaginary-time duration.
+[[nodiscard]] double log_one_particle_trace(double duration, const OneParticleSpectrum &spectrum);
 [[nodiscard]] double log_one_particle_trace(double duration, Coord linear_size,
                                             std::size_t dimension, double hopping);
 [[nodiscard]] double log_one_particle_trace(double duration, const Model &model);

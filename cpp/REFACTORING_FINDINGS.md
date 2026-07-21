@@ -515,37 +515,51 @@ retains its per-row nonnegative roundoff handling, while twist propagation
 preserves the signed second derivative until converting it to free-energy
 curvature. Exact Fock-space thermodynamics, twist finite differences, isotropic
 axis equality, invalid-axis handling, and the empty-system boundary cover the
-shared implementation. Spectrum/trigonometric caching, the base/twisted
-partition recurrence, occupation scratch, cycle-label management, and prepared
-path kernels remain open.
+shared implementation. The spectrum/trigonometric slice is also complete. An
+immutable `OneParticleSpectrum` owned by `CanonicalEnsemble` now holds the
+checked torus layout and `O(L)` wavevector, sine, and cosine tables. Complete
+`L^d` momentum records remain demand-driven, so sampling-only ensemble
+construction does not acquire a volume-sized cache. Canonical traces reuse one
+exponent scratch buffer, while thermodynamic derivatives, mode energies,
+one-body kernels, twisted partitions, and twist curvature consume the shared
+tables. Construction/shape/energy failures, exact spectrum values, direct
+one-body Fourier and twisted-angle equivalence, the existing Fock-space and
+twist-curvature regressions, and matching-seed ensemble reproducibility cover
+the boundary. In three warm Apple Clang 17 release-build trials, 80
+repetitions of thermodynamics, momentum distribution, one-body density,
+twisted partition, and twist curvature at `N=64`, `L=64`, `d=1`, `beta=1.25`,
+and `t=0.9` took 0.0709-0.0717 s before the cache and 0.0180-0.0193 s after it.
+This focused result demonstrates the repeated-work reduction; it is not an
+end-to-end sampling benchmark. The base/twisted partition recurrence,
+occupation scratch, cycle-label management, and prepared path kernels remain
+open.
 
 Remaining evidence:
 
-- `canonical_table()` allocates a new `terms` vector for every particle number
-  and revalidates the model through `log_one_particle_trace(duration, model)` for
-  every cycle length (`src/free_boson.cpp:123-151`).
-- `sample_cycle_labels()` allocates log/probability buffers on every cycle, then
-  copies the remaining labels, allocates an `N`-bit selection mask, and erases by
-  scanning the full active set (`src/free_boson.cpp:167-206`). The many
-  one-cycle case is consequently quadratic in label-management work in addition
-  to the required canonical probability work.
+- Canonical construction allocates a new `terms` vector for every particle
+  number even though the maximum row size is known at construction
+  (`src/free_boson.cpp:187-193`).
+- `CanonicalEnsemble::sample_cycles()` allocates log/probability buffers on
+  every cycle, then copies the remaining labels, allocates an `N`-bit selection
+  mask, and erases by scanning the full active set
+  (`src/free_boson.cpp:225-251`). The many one-cycle case is consequently
+  quadratic in label-management work in addition to the required canonical
+  probability work.
 - canonical log recursion is implemented again for twisted boundaries
-  (`src/observables.cpp:474-516`).
-- momentum angles, cosines, and exponential weights are rebuilt in the trace,
-  beta derivatives, mode energies, one-body matrix, twist partition, and twist
-  curvature.
+  (`src/observables.cpp:422-475`).
 - `occupation_moments()` allocates log-term vectors for every momentum mode
-  (`src/observables.cpp:176-203`).
+  (`src/observables.cpp:126-155`).
 - public midpoint/bridge functions repeatedly accept adjacent durations,
   hopping, lattice size, step count, and numerical options as raw positional
   values (`include/qmc/free_numerics.hpp:23-55` and
-  `include/qmc/path.hpp:38-65`). Several are mutually convertible, and every
+  `include/qmc/path.hpp:56-72`). Several are mutually convertible, and every
   call restates parameters that are constant for a model.
 
 Recommendation:
 
-- Add a `OneParticleSpectrum` owned by `CanonicalEnsemble`, with momentum
-  components/energies and reusable one-dimensional trigonometric tables.
+- Completed 2026-07-21: add a `OneParticleSpectrum` owned by
+  `CanonicalEnsemble`, with demand-derived mode energies and reusable
+  one-dimensional trigonometric tables.
 - Add a validated `FreePathKernels` context (owned by the ensemble/sampler) that
   binds hopping, numerical limits, and optional torus layout while continuing
   to take `Random&` explicitly. Use small `BridgeRequest`/`Interval` values at
@@ -1127,8 +1141,8 @@ visible at the assertion sites.
 6. Retained measurement context completed 2026-07-20; add accumulators, then
    optimize direct correlation kernels from benchmark evidence.
 7. Log-weight categorical draws and adaptive-support numerics completed
-   2026-07-20; canonical derivative recurrences completed 2026-07-21. Collect
-   spectrum/trigonometric caching and the remaining reusable free numerics.
+   2026-07-20; canonical derivative recurrences and spectrum/trigonometric
+   caching completed 2026-07-21. Collect the remaining reusable free numerics.
 8. Accepted-chain ownership completed 2026-07-20; a production k-way event
    merge was benchmarked and reverted 2026-07-21. Add the bundled interaction
    measurement separately.

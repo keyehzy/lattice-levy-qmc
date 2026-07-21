@@ -4,6 +4,7 @@
 #include "qmc/random.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <complex>
 #include <cstddef>
@@ -12,6 +13,7 @@
 #include <limits>
 #include <numbers>
 #include <numeric>
+#include <span>
 #include <stdexcept>
 #include <vector>
 
@@ -71,6 +73,36 @@ BruteCanonicalResult enumerate_fock_states(const qmc::Model &model) {
     result.occupation_squared[index] /= result.partition;
   }
   return result;
+}
+
+double direct_twisted_log_partition(const qmc::Model &model, const std::span<const double> twist) {
+  const double negative_infinity = -std::numeric_limits<double>::infinity();
+  std::vector<double> log_cycle_weights(model.particle_count() + 1, negative_infinity);
+  std::vector<double> log_partitions(model.particle_count() + 1, negative_infinity);
+  log_partitions[0] = 0.0;
+  for (std::size_t length = 1; length <= model.particle_count(); ++length) {
+    const double scale = 2.0 * model.hopping() * static_cast<double>(length) * model.beta();
+    double trace = 0.0;
+    for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
+      std::vector<double> exponents(static_cast<std::size_t>(model.linear_size()));
+      for (qmc::Coord momentum = 0; momentum < model.linear_size(); ++momentum) {
+        const double angle =
+            (2.0 * std::numbers::pi * static_cast<double>(momentum) + twist[axis]) /
+            static_cast<double>(model.linear_size());
+        exponents[static_cast<std::size_t>(momentum)] = scale * std::cos(angle);
+      }
+      trace += qmc::log_sum_exp(exponents);
+    }
+    log_cycle_weights[length] = trace;
+  }
+  for (std::size_t particles = 1; particles <= model.particle_count(); ++particles) {
+    std::vector<double> terms(particles);
+    for (std::size_t length = 1; length <= particles; ++length) {
+      terms[length - 1] = log_cycle_weights[length] + log_partitions[particles - length];
+    }
+    log_partitions[particles] = qmc::log_sum_exp(terms) - std::log(static_cast<double>(particles));
+  }
+  return log_partitions.back();
 }
 
 TEST(CanonicalObservablesTest, MatchesFockSpaceEnumeration) {
@@ -139,6 +171,18 @@ TEST(CanonicalObservablesTest, SatisfiesMomentumDensityMatrixAndCycleNormalizati
       density_matrix.begin(), density_matrix.end(), 0.0,
       [](const double sum, const qmc::OneBodyDensityPoint &point) { return sum + point.value; });
   EXPECT_NEAR(density_matrix_sum, momentum.condensate_occupation, 3e-12);
+  for (const qmc::OneBodyDensityPoint &point : density_matrix) {
+    double fourier_value = 0.0;
+    for (const qmc::MomentumMode &mode : momentum.modes) {
+      double phase = 0.0;
+      for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
+        phase += mode.wavevector[axis] * static_cast<double>(point.displacement[axis]);
+      }
+      fourier_value += mode.occupation * std::cos(phase);
+    }
+    fourier_value /= static_cast<double>(model.volume());
+    EXPECT_NEAR(point.value, fourier_value, 4e-13);
+  }
 
   const double expected_particles =
       std::accumulate(cycles.expected_particles.begin(), cycles.expected_particles.end(), 0.0);
@@ -176,6 +220,21 @@ TEST(CanonicalObservablesTest, TwistCurvatureMatchesFiniteDifference) {
       (free_positive + free_negative - (2.0 * free_zero)) / (step * step);
   EXPECT_GT(curvature, 0.0);
   EXPECT_NEAR(curvature, finite_difference, 2e-8);
+}
+
+TEST(CanonicalObservablesTest, TwistedPartitionMatchesDirectMomentumAngles) {
+  const qmc::Model model(qmc::ModelParameters{
+      .particle_count = 4,
+      .beta = 0.65,
+      .linear_size = 5,
+      .dimension = 2,
+      .hopping = 0.8,
+  });
+  const qmc::CanonicalEnsemble canonical(model);
+  const std::array<double, 2> twist{0.23, -0.41};
+
+  EXPECT_NEAR(qmc::log_canonical_partition_twisted(canonical, twist),
+              direct_twisted_log_partition(model, twist), 3e-14);
 }
 
 TEST(ConfigurationObservablesTest, ExactSampleInvariantsHoldOnRetainedGrid) {

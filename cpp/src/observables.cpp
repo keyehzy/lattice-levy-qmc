@@ -21,9 +21,11 @@ struct LogDerivatives {
   double second = 0.0;
 };
 
-LogDerivatives one_particle_beta_derivatives(const Model &model, const std::size_t length) {
+LogDerivatives one_particle_beta_derivatives(const Model &model,
+                                             const OneParticleSpectrum &spectrum,
+                                             const std::size_t length) {
   const double duration = static_cast<double>(length) * model.beta();
-  const double scale = 2.0 * model.hopping() * duration;
+  const double scale = 2.0 * spectrum.hopping() * duration;
   if (!std::isfinite(scale)) {
     throw std::overflow_error("one-particle derivative scale overflowed");
   }
@@ -31,10 +33,7 @@ LogDerivatives one_particle_beta_derivatives(const Model &model, const std::size
   double normalization = 0.0;
   double cosine_sum = 0.0;
   double cosine_square_sum = 0.0;
-  for (Coord momentum = 0; momentum < model.linear_size(); ++momentum) {
-    const double angle = 2.0 * std::numbers::pi * static_cast<double>(momentum) /
-                         static_cast<double>(model.linear_size());
-    const double cosine = std::cos(angle);
+  for (const double cosine : spectrum.cosines()) {
     const double weight = std::exp(scale * (cosine - 1.0));
     normalization += weight;
     cosine_sum += weight * cosine;
@@ -45,9 +44,9 @@ LogDerivatives one_particle_beta_derivatives(const Model &model, const std::size
   cosine_variance = std::max(0.0, cosine_variance);
 
   const auto dimensions = static_cast<double>(model.dimension());
-  const double mean_energy = -2.0 * model.hopping() * dimensions * mean_cosine;
+  const double mean_energy = -2.0 * spectrum.hopping() * dimensions * mean_cosine;
   const double energy_variance =
-      4.0 * model.hopping() * model.hopping() * dimensions * cosine_variance;
+      4.0 * spectrum.hopping() * spectrum.hopping() * dimensions * cosine_variance;
   const auto cycle_length = static_cast<double>(length);
   return LogDerivatives{
       .first = -cycle_length * mean_energy,
@@ -112,20 +111,6 @@ canonical_log_derivatives(const CanonicalEnsemble &ensemble,
     result[particles].second = finalize_second(raw_second - (first * first), raw_second);
   }
   return result;
-}
-
-double mode_energy(const std::vector<std::size_t> &indices, const Model &model) {
-  double cosine_sum = 0.0;
-  for (const std::size_t index : indices) {
-    const double angle = 2.0 * std::numbers::pi * static_cast<double>(index) /
-                         static_cast<double>(model.linear_size());
-    cosine_sum += std::cos(angle);
-  }
-  const double energy = -2.0 * model.hopping() * cosine_sum;
-  if (!std::isfinite(energy)) {
-    throw std::overflow_error("one-particle energy overflowed");
-  }
-  return energy;
 }
 
 double phase_for_indices(std::span<const std::size_t> left, std::span<const std::size_t> right,
@@ -222,6 +207,7 @@ void accumulate_structure_factor(const std::span<const SiteId> positions, const 
 
 CanonicalThermodynamics canonical_thermodynamics(const CanonicalEnsemble &ensemble) {
   const Model &model = ensemble.model();
+  const OneParticleSpectrum &spectrum = ensemble.spectrum();
   const auto log_Z = ensemble.log_partitions();
   if (model.beta() <= 0.0) {
     throw std::invalid_argument("canonical thermodynamics requires beta > 0");
@@ -230,7 +216,7 @@ CanonicalThermodynamics canonical_thermodynamics(const CanonicalEnsemble &ensemb
   const auto count = model.particle_count();
   std::vector<LogDerivatives> log_z_derivatives(count + 1);
   for (std::size_t length = 1; length <= count; ++length) {
-    log_z_derivatives[length] = one_particle_beta_derivatives(model, length);
+    log_z_derivatives[length] = one_particle_beta_derivatives(model, spectrum, length);
   }
   const auto log_Z_derivatives =
       canonical_log_derivatives(ensemble, log_z_derivatives, clamp_nonnegative_roundoff);
@@ -263,7 +249,9 @@ CanonicalThermodynamics canonical_thermodynamics(const Model &model) {
 
 MomentumDistribution momentum_distribution(const CanonicalEnsemble &ensemble) {
   const Model &model = ensemble.model();
-  const TorusLayout layout(model.linear_size(), model.dimension());
+  const OneParticleSpectrum &spectrum = ensemble.spectrum();
+  const TorusLayout &layout = spectrum.layout();
+  const auto wavevectors = spectrum.wavevectors();
   const auto volume = layout.volume();
   MomentumDistribution result;
   result.modes.reserve(volume);
@@ -273,10 +261,9 @@ MomentumDistribution momentum_distribution(const CanonicalEnsemble &ensemble) {
     mode.indices = layout.decode(SiteId(flat));
     mode.wavevector.resize(model.dimension());
     for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
-      mode.wavevector[axis] = 2.0 * std::numbers::pi * static_cast<double>(mode.indices[axis]) /
-                              static_cast<double>(model.linear_size());
+      mode.wavevector[axis] = wavevectors[mode.indices[axis]];
     }
-    mode.energy = mode_energy(mode.indices, model);
+    mode.energy = spectrum.energy(mode.indices);
 
     const auto [occupation, variance] = occupation_moments(mode.energy, ensemble);
     mode.occupation = occupation;
@@ -303,31 +290,33 @@ MomentumDistribution momentum_distribution(const Model &model) {
 
 std::vector<OneBodyDensityPoint> one_body_density_matrix(const CanonicalEnsemble &ensemble) {
   const Model &model = ensemble.model();
+  const OneParticleSpectrum &spectrum = ensemble.spectrum();
   const auto log_z = ensemble.log_cycle_weights();
   const auto log_Z = ensemble.log_partitions();
-  const TorusLayout layout(model.linear_size(), model.dimension());
+  const TorusLayout &layout = spectrum.layout();
   const auto volume = layout.volume();
   const auto linear_size = static_cast<std::size_t>(model.linear_size());
+  const auto cosines = spectrum.cosines();
 
   std::vector<std::vector<double>> kernel_ratios(model.particle_count() + 1,
                                                  std::vector<double>(linear_size));
   for (std::size_t length = 1; length <= model.particle_count(); ++length) {
     const double duration = static_cast<double>(length) * model.beta();
-    const double scale = 2.0 * model.hopping() * duration;
+    const double scale = 2.0 * spectrum.hopping() * duration;
     std::vector<double> weights(linear_size);
     double scaled_trace = 0.0;
     for (std::size_t momentum = 0; momentum < linear_size; ++momentum) {
-      const double angle = 2.0 * std::numbers::pi * static_cast<double>(momentum) /
-                           static_cast<double>(model.linear_size());
-      weights[momentum] = std::exp(scale * (std::cos(angle) - 1.0));
+      weights[momentum] = std::exp(scale * (cosines[momentum] - 1.0));
       scaled_trace += weights[momentum];
     }
     for (std::size_t displacement = 0; displacement < linear_size; ++displacement) {
       double numerator = 0.0;
+      std::size_t phase_index = 0;
       for (std::size_t momentum = 0; momentum < linear_size; ++momentum) {
-        const double angle = 2.0 * std::numbers::pi * static_cast<double>(momentum) /
-                             static_cast<double>(model.linear_size());
-        numerator += weights[momentum] * std::cos(angle * static_cast<double>(displacement));
+        numerator += weights[momentum] * cosines[phase_index];
+        phase_index = phase_index >= linear_size - displacement
+                          ? phase_index - (linear_size - displacement)
+                          : phase_index + displacement;
       }
       const double ratio = numerator / (static_cast<double>(linear_size) * scaled_trace);
       kernel_ratios[length][displacement] = std::max(0.0, ratio);
@@ -433,6 +422,7 @@ Site total_winding(const IdealBosonConfiguration &configuration) {
 double log_canonical_partition_twisted(const CanonicalEnsemble &ensemble,
                                        std::span<const double> twist) {
   const Model &model = ensemble.model();
+  const OneParticleSpectrum &spectrum = ensemble.spectrum();
   if (twist.size() != model.dimension()) {
     throw std::invalid_argument("twist vector has the wrong dimension");
   }
@@ -446,21 +436,30 @@ double log_canonical_partition_twisted(const CanonicalEnsemble &ensemble,
   const double negative_infinity = -std::numeric_limits<double>::infinity();
   std::vector<double> log_z(count + 1, negative_infinity);
   std::vector<double> log_Z(count + 1, negative_infinity);
+  std::vector<double> exponents(spectrum.cosines().size());
+  std::vector<double> twist_cosines(model.dimension());
+  std::vector<double> twist_sines(model.dimension());
+  const double inverse_size = 1.0 / static_cast<double>(model.linear_size());
+  for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
+    const double shift = twist[axis] * inverse_size;
+    twist_cosines[axis] = std::cos(shift);
+    twist_sines[axis] = std::sin(shift);
+  }
+  const auto cosines = spectrum.cosines();
+  const auto sines = spectrum.sines();
   log_Z[0] = 0.0;
   for (std::size_t length = 1; length <= count; ++length) {
     const double duration = static_cast<double>(length) * model.beta();
-    const double scale = 2.0 * model.hopping() * duration;
+    const double scale = 2.0 * spectrum.hopping() * duration;
     if (!std::isfinite(scale)) {
       throw std::overflow_error("twisted trace exponent scale overflowed");
     }
     double value = 0.0;
     for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
-      std::vector<double> exponents(static_cast<std::size_t>(model.linear_size()));
-      for (Coord momentum = 0; momentum < model.linear_size(); ++momentum) {
-        const double angle =
-            (2.0 * std::numbers::pi * static_cast<double>(momentum) + twist[axis]) /
-            static_cast<double>(model.linear_size());
-        exponents[static_cast<std::size_t>(momentum)] = scale * std::cos(angle);
+      for (std::size_t momentum = 0; momentum < cosines.size(); ++momentum) {
+        const double shifted_cosine =
+            (cosines[momentum] * twist_cosines[axis]) - (sines[momentum] * twist_sines[axis]);
+        exponents[momentum] = scale * shifted_cosine;
       }
       value += log_sum_exp(exponents);
     }
@@ -482,6 +481,7 @@ double log_canonical_partition_twisted(const Model &model, std::span<const doubl
 
 double twist_free_energy_curvature(const CanonicalEnsemble &ensemble, const std::size_t axis) {
   const Model &model = ensemble.model();
+  const OneParticleSpectrum &spectrum = ensemble.spectrum();
   if (model.beta() <= 0.0) {
     throw std::invalid_argument("twist free-energy curvature requires beta > 0");
   }
@@ -491,21 +491,21 @@ double twist_free_energy_curvature(const CanonicalEnsemble &ensemble, const std:
 
   std::vector<LogDerivatives> log_z_derivatives(model.particle_count() + 1);
   const double inverse_size = 1.0 / static_cast<double>(model.linear_size());
+  const auto cosines = spectrum.cosines();
+  const auto sines = spectrum.sines();
   for (std::size_t length = 1; length <= model.particle_count(); ++length) {
     const double duration = static_cast<double>(length) * model.beta();
-    const double scale = 2.0 * model.hopping() * duration;
+    const double scale = 2.0 * spectrum.hopping() * duration;
     double normalization = 0.0;
     double sine_sum = 0.0;
     double sine_square_sum = 0.0;
     double cosine_sum = 0.0;
-    for (Coord momentum = 0; momentum < model.linear_size(); ++momentum) {
-      const double angle = 2.0 * std::numbers::pi * static_cast<double>(momentum) /
-                           static_cast<double>(model.linear_size());
-      const double weight = std::exp(scale * (std::cos(angle) - 1.0));
+    for (std::size_t momentum = 0; momentum < cosines.size(); ++momentum) {
+      const double weight = std::exp(scale * (cosines[momentum] - 1.0));
       normalization += weight;
-      sine_sum += weight * std::sin(angle);
-      sine_square_sum += weight * std::sin(angle) * std::sin(angle);
-      cosine_sum += weight * std::cos(angle);
+      sine_sum += weight * sines[momentum];
+      sine_square_sum += weight * sines[momentum] * sines[momentum];
+      cosine_sum += weight * cosines[momentum];
     }
     const double mean_sine = sine_sum / normalization;
     const double mean_sine_square = sine_square_sum / normalization;
