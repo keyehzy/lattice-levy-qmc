@@ -3,6 +3,7 @@
 #include "qmc/free_numerics.hpp"
 #include "qmc/observables.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -10,9 +11,31 @@
 #include <gtest/gtest.h>
 #include <limits>
 #include <numeric>
+#include <span>
 #include <vector>
 
 namespace {
+
+std::vector<qmc::ParticleId> cycle_successors(const std::vector<qmc::Cycle> &cycles,
+                                              const std::size_t particle_count) {
+  std::vector<qmc::ParticleId> successors(particle_count,
+                                          std::numeric_limits<qmc::ParticleId>::max());
+  for (const qmc::Cycle &cycle : cycles) {
+    for (std::size_t index = 0; index < cycle.size(); ++index) {
+      successors[cycle[index]] = cycle[(index + 1) % cycle.size()];
+    }
+  }
+  return successors;
+}
+
+std::size_t encode_successors(const std::span<const qmc::ParticleId> successors,
+                              const std::size_t radix) {
+  std::size_t result = 0;
+  for (const qmc::ParticleId successor : successors) {
+    result = (result * radix) + successor;
+  }
+  return result;
+}
 
 TEST(LogWeightDistributionTest, MatchesCategoricalLawWithExtremeCommonOffset) {
   constexpr std::size_t sample_count = 60'000;
@@ -163,6 +186,51 @@ TEST(CycleDistributionTest, MatchesCanonicalLengthProbabilities) {
   for (std::size_t index = 0; index < exact.size(); ++index) {
     const double empirical = static_cast<double>(counts[index]) / sample_count;
     EXPECT_NEAR(empirical, exact[index], 0.007);
+  }
+}
+
+TEST(CycleDistributionTest, MatchesCompleteLabeledPermutationLaw) {
+  constexpr std::size_t particle_count = 4;
+  constexpr std::size_t encoded_permutation_count =
+      particle_count * particle_count * particle_count * particle_count;
+  constexpr std::size_t sample_count = 120'000;
+  const qmc::CanonicalEnsemble ensemble(qmc::Model(qmc::ModelParameters{
+      .particle_count = particle_count,
+      .beta = 0.8,
+      .linear_size = 4,
+      .dimension = 1,
+      .hopping = 0.9,
+  }));
+  const auto log_z = ensemble.log_cycle_weights();
+
+  std::array<double, encoded_permutation_count> exact{};
+  std::array<qmc::ParticleId, particle_count> successors{0, 1, 2, 3};
+  double normalization = 0.0;
+  do {
+    const qmc::Permutation topology(
+        std::vector<qmc::ParticleId>(successors.begin(), successors.end()));
+    double weight = 1.0;
+    for (const qmc::Cycle &cycle : topology.cycles()) {
+      weight *= std::exp(log_z[cycle.size()]);
+    }
+    exact[encode_successors(topology.successors(), particle_count)] = weight;
+    normalization += weight;
+  } while (std::ranges::next_permutation(successors).found);
+  for (double &probability : exact) {
+    probability /= normalization;
+  }
+
+  std::array<std::size_t, encoded_permutation_count> counts{};
+  qmc::Random random(20'260'721);
+  for (std::size_t sample = 0; sample < sample_count; ++sample) {
+    const auto cycles = ensemble.sample_cycles(random);
+    const qmc::Permutation topology(cycle_successors(cycles, particle_count));
+    ++counts[encode_successors(topology.successors(), particle_count)];
+  }
+
+  for (std::size_t index = 0; index < exact.size(); ++index) {
+    const double empirical = static_cast<double>(counts[index]) / sample_count;
+    EXPECT_NEAR(empirical, exact[index], 0.004);
   }
 }
 

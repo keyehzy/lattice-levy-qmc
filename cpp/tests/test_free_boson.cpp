@@ -218,9 +218,14 @@ TEST(FreeBosonTest, SampledCyclesPartitionLabels) {
   });
   const qmc::CanonicalEnsemble ensemble(model);
   qmc::Random random(2026);
-  const auto cycles = ensemble.sample_cycles(random);
 
-  EXPECT_TRUE(cycles_partition_labels(cycles, model.particle_count()));
+  for (std::size_t sample = 0; sample < 256; ++sample) {
+    const auto cycles = ensemble.sample_cycles(random);
+    EXPECT_TRUE(cycles_partition_labels(cycles, model.particle_count())) << "sample " << sample;
+    for (const qmc::Cycle &cycle : cycles) {
+      EXPECT_EQ(cycle.front(), *std::ranges::min_element(cycle)) << "sample " << sample;
+    }
+  }
 }
 
 TEST(FreeBosonTest, SpectrumCachingKeepsSeededEnsemblesReproducible) {

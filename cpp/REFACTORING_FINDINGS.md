@@ -72,7 +72,7 @@ type collects one invariant that is currently spread across several files.
 | P0 | Make paths/configurations valid-by-construction (done 2026-07-21) | Ownership clarity and removal of nested validation | Large |
 | P1 | Path cursor/slice migration (done 2026-07-20) | Simpler boundary semantics and faster path surgery | Medium |
 | P1 | Add a retained-measurement context (done 2026-07-20); add accumulators | Less repeated work and a smaller demo | Medium |
-| P1 | Collect reusable free-particle numerics (spectrum, path-kernel, and partition-recurrence slices done 2026-07-21) | Numerical clarity and less repeated setup | Medium |
+| P1 | Collect reusable free-particle numerics (spectrum, path-kernel, partition-recurrence, and cycle-sampling slices done 2026-07-21) | Numerical clarity and less repeated setup | Medium |
 | P1 | Unify discrete log-weight draws and bounded-tail sampling (done 2026-07-20) | One truncation policy and fewer allocations | Medium |
 | P1 | Unify full/incremental action around accepted state (ownership slice done 2026-07-20) | One source of truth and faster full evaluation | Medium |
 | P1 | Make permutation topology authoritative (continuous and retained ideal done 2026-07-20) | Remove duplicated state and synchronization code | Medium |
@@ -546,17 +546,25 @@ it instead of maintaining separate recursions and allocating one terms vector
 per row. Direct base-case, closed-form prefix, zero-weight, and invalid-result
 tests cover the kernel; the Python reference, permutation enumeration, and
 twisted direct-angle tests retain end-to-end coverage, with an explicit
-zero-twist/untwisted equivalence regression. Occupation scratch and cycle-label
-management remain open.
+zero-twist/untwisted equivalence regression. The cycle-sampling workspace slice
+is also complete. `CanonicalEnsemble::sample_cycles()` now allocates one active
+label array and one maximum-sized log-weight scratch buffer per complete sample.
+Partial Fisher-Yates selection forms each directed cycle in place, and bounded
+unordered compaction removes the selected labels without a per-cycle pool,
+full-sized mask, or full surviving-label scan. Repeated partition checks and a
+complete four-particle labeled-permutation distribution regression cover the
+canonical minimum-label root, directed-cycle, and compaction laws. Active-label
+ordering, and thus labeled results for a fixed seed, may change; the cycle-length
+and complete labeled-permutation laws are unchanged. In five alternating warm
+Apple Clang 17 release-build trials, 1,000 samples in a many-singleton workload
+at `N=512`, `L=16384`, `d=1`, `beta=0.01`, and `t=1` took 0.3576-0.3905 s
+before the change and 0.2851-0.2926 s after it. This focused workload exercises
+the previous worst-case label-management path; it is not an end-to-end sampling
+benchmark.
+Occupation-moment scratch remains open.
 
 Remaining evidence:
 
-- `CanonicalEnsemble::sample_cycles()` allocates log/probability buffers on
-  every cycle, then copies the remaining labels, allocates an `N`-bit selection
-  mask, and erases by scanning the full active set
-  (`src/free_boson.cpp:225-251`). The many one-cycle case is consequently
-  quadratic in label-management work in addition to the required canonical
-  probability work.
 - `occupation_moments()` allocates log-term vectors for every momentum mode
   (`src/observables.cpp:126-155`).
 
@@ -579,10 +587,11 @@ Recommendation:
   preferable to a general automatic-differentiation framework.
 - Compute isotropic per-axis twist curvature once; the demo currently repeats
   the full calculation for every axis (`examples/ideal_demo.cpp:801-807`).
-- Maintain one active-label array during cycle construction: sample selected
-  labels into a prefix with swaps and remove that prefix without a full-size
-  mask/copy. Keep the anchor and directed-cycle law explicit in tests because a
-  changed label ordering may intentionally change the seeded stream.
+- Completed 2026-07-21: maintain one active-label array during cycle
+  construction, sample selected labels into a prefix with swaps, and remove
+  that prefix without a full-size mask/copy. Canonical minimum-label rooting and
+  the complete directed labeled-permutation law are explicit in tests; changed
+  active-label ordering intentionally permits a changed labeled seeded stream.
 
 This refactor should precede low-level optimization because it establishes the
 cache boundaries and removes repeated trigonometry naturally.
@@ -1148,9 +1157,8 @@ visible at the assertion sites.
    optimize direct correlation kernels from benchmark evidence.
 7. Log-weight categorical draws and adaptive-support numerics completed
    2026-07-20; canonical derivative and partition recurrences,
-   spectrum/trigonometric caching, and reusable free-path kernels completed
-   2026-07-21. Collect the remaining occupation scratch and cycle-label
-   numerics.
+   spectrum/trigonometric caching, reusable free-path kernels, and cycle-label
+   sampling completed 2026-07-21. Collect the remaining occupation scratch.
 8. Accepted-chain ownership completed 2026-07-20; a production k-way event
    merge was benchmarked and reverted 2026-07-21. Add the bundled interaction
    measurement separately.

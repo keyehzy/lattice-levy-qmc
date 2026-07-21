@@ -207,39 +207,43 @@ std::vector<Cycle> CanonicalEnsemble::sample_cycles(const std::size_t particle_c
     return {};
   }
 
-  std::vector<ParticleId> remaining(particle_count);
+  std::vector<ParticleId> active_labels(particle_count);
   for (std::size_t index = 0; index < particle_count; ++index) {
-    remaining[index] = static_cast<ParticleId>(index);
+    active_labels[index] = static_cast<ParticleId>(index);
   }
+  std::vector<double> log_weights(particle_count);
   std::vector<Cycle> cycles;
 
-  while (!remaining.empty()) {
-    const auto remaining_count = remaining.size();
-    std::vector<double> log_weights(remaining_count);
+  while (!active_labels.empty()) {
+    const auto remaining_count = active_labels.size();
     for (std::size_t length = 1; length <= remaining_count; ++length) {
       log_weights[length - 1] = log_z_[length] + log_Z_[remaining_count - length];
     }
-    const std::size_t length = random.discrete_log_index(log_weights) + 1;
+    const std::size_t length =
+        random.discrete_log_index(std::span<const double>(log_weights).first(remaining_count)) + 1;
 
-    Cycle cycle;
-    cycle.reserve(length);
-    cycle.push_back(remaining.front());
-    if (length > 1) {
-      std::vector<ParticleId> pool(remaining.begin() + 1, remaining.end());
-      for (std::size_t selected = 0; selected < length - 1; ++selected) {
-        const auto choices = static_cast<std::uint64_t>(pool.size() - selected);
-        const auto offset = static_cast<std::size_t>(random.uniform_index(choices));
-        std::swap(pool[selected], pool[selected + offset]);
-        cycle.push_back(pool[selected]);
-      }
+    // The first active label anchors the directed cycle. Partial Fisher-Yates
+    // selection makes every ordered choice of the other labels equiprobable.
+    for (std::size_t selected = 1; selected < length; ++selected) {
+      const auto choices = static_cast<std::uint64_t>(remaining_count - selected);
+      const auto offset = static_cast<std::size_t>(random.uniform_index(choices));
+      std::swap(active_labels[selected], active_labels[selected + offset]);
     }
+    auto selected_labels = std::span<ParticleId>(active_labels).first(length);
+    // Permutation exposes cycles rooted at their minimum label. Match that
+    // convention so covering-space builders place the winding seam consistently.
+    std::ranges::rotate(selected_labels, std::ranges::min_element(selected_labels));
+    cycles.emplace_back(selected_labels.begin(), selected_labels.end());
 
-    std::vector<bool> chosen(particle_count, false);
-    for (const ParticleId label : cycle) {
-      chosen[label] = true;
+    // Selected labels occupy the prefix. Fill its surviving part from the
+    // unselected suffix, then shrink without scanning all remaining labels.
+    const std::size_t next_count = remaining_count - length;
+    const std::size_t moved_count = std::min(length, next_count);
+    const std::size_t source = std::max(length, next_count);
+    for (std::size_t index = 0; index < moved_count; ++index) {
+      active_labels[index] = active_labels[source + index];
     }
-    std::erase_if(remaining, [&chosen](const ParticleId label) { return chosen[label]; });
-    cycles.push_back(std::move(cycle));
+    active_labels.resize(next_count);
   }
   return cycles;
 }
