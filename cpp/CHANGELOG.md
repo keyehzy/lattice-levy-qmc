@@ -88,6 +88,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Route two-strand and collective stitch matchings through the same validated
   permanent recursion and row-major weight evaluation, removing the legacy
   pair-only draw while preserving its exact proposal law.
+- Cache prepared torus-bridge winding distributions by physical displacement
+  within each fixed-seam stitch sweep, sharing exact matching normalizations
+  and covering-endpoint draws without changing the proposal law or seeded
+  stream.
 
 ### Removed
 

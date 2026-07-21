@@ -1,5 +1,6 @@
 #include "path_cursor.hpp"
 #include "qmc/path.hpp"
+#include "torus_bridge_distribution.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -232,6 +233,29 @@ TEST(ContinuousPathTest, FreePathContextMatchesOneOffBridgeAndKernelWrappers) {
   EXPECT_DOUBLE_EQ(log_torus_kernel_scaled({0, 0}, {2, 3}, 1.3, kernels),
                    log_torus_kernel_scaled({0, 0}, {2, 3}, 1.3, 6, 1.1, numerical));
   EXPECT_DOUBLE_EQ(context_random.uniform_open(), wrapper_random.uniform_open());
+}
+
+TEST(ContinuousPathTest, PreparedTorusDistributionMatchesSeededBridgePathAndRandomStream) {
+  const FreePathKernels kernels(TorusLayout(6, 2), 1.1);
+  const TorusLayout &layout = *kernels.torus_layout();
+  const Site start{7, -3};
+  const Site physical_end{1, 4};
+  constexpr double duration = 0.7;
+  const SiteId displacement =
+      layout.flat_displacement(layout.encode_covering(start), layout.encode_covering(physical_end));
+  const detail::TorusBridgeDistribution prepared(displacement, duration, kernels);
+  Random prepared_random(17'021);
+  Random wrapper_random(17'021);
+
+  for (std::size_t sample = 0; sample < 40; ++sample) {
+    const Site covering_end = prepared.sample_covering_endpoint(start, prepared_random);
+    const ContinuousPath prepared_path =
+        sample_continuous_bridge(start, covering_end, duration, kernels, prepared_random);
+    const ContinuousPath wrapper_path =
+        sample_continuous_bridge_torus(start, physical_end, duration, kernels, wrapper_random);
+    EXPECT_EQ(prepared_path, wrapper_path);
+  }
+  EXPECT_DOUBLE_EQ(prepared_random.uniform_open(), wrapper_random.uniform_open());
 }
 
 TEST(ContinuousPathTest, SplitsCutEventsIntoTheLeftPiece) {

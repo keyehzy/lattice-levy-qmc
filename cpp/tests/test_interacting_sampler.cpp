@@ -2,6 +2,7 @@
 #include "qmc/interacting_sampler.hpp"
 #include "qmc/interaction.hpp"
 #include "stitch_matching.hpp"
+#include "stitch_seam_context.hpp"
 
 #include <algorithm>
 #include <array>
@@ -33,6 +34,10 @@ struct InteractingSamplerTestAccess {
 
   static void set_segment_accepts(InteractingSampler &sampler, const std::uint64_t accepts) {
     sampler.statistics_[static_cast<std::size_t>(MoveKind::SegmentMove)].accepts = accepts;
+  }
+
+  static const FreePathKernels &free_path_kernels(const InteractingSampler &sampler) {
+    return sampler.free_ensemble_.free_path_kernels();
   }
 
   static bool try_invalid_topology_proposal(InteractingSampler &sampler) {
@@ -364,6 +369,63 @@ TEST(InteractingSamplerTest, CollectiveStitchMixtureKeepsActionCacheExact) {
   const MoveStatistics &statistics = sampler.statistics(MoveKind::StitchMove);
   EXPECT_GT(statistics.topology_changes, 0U);
   EXPECT_GT(statistics.successor_changes, 2U * statistics.topology_changes);
+}
+
+TEST(InteractingSamplerTest, FixedSeamContextCachesDisplacementsAndSurvivesAcceptedStitches) {
+  InteractingSampler sampler(sampler_model(0.0), 71'204);
+  const TorusLayout layout(sampler.model().free.linear_size(), sampler.model().free.dimension());
+  const FreePathKernels &kernels = detail::InteractingSamplerTestAccess::free_path_kernels(sampler);
+  constexpr double tau0 = 0.2;
+  constexpr double tau1 = 0.8;
+  detail::StitchSeamContext seam(sampler.state(), tau0, tau1, layout, kernels);
+
+  EXPECT_TRUE(seam.matches_left_positions(sampler.state()));
+  EXPECT_EQ(seam.left_site_ids().size(), sampler.model().free.particle_count());
+  std::size_t bucketed_labels = 0;
+  for (const auto &[site, labels] : seam.partner_buckets()) {
+    static_cast<void>(site);
+    bucketed_labels += labels.size();
+  }
+  EXPECT_EQ(bucketed_labels, sampler.model().free.particle_count());
+
+  const Site left = sampler.state().path(0).position_at(tau0);
+  const Site right = sampler.state().path(1).position_at(tau1);
+  const detail::TorusBridgeDistribution &first = seam.bridge_distribution(left, right);
+  EXPECT_EQ(seam.cached_distribution_count(), 1U);
+  Site translated_left = left;
+  Site translated_right = right;
+  for (std::size_t axis = 0; axis < translated_left.size(); ++axis) {
+    translated_left[axis] += sampler.model().free.linear_size();
+    translated_right[axis] += sampler.model().free.linear_size();
+  }
+  const detail::TorusBridgeDistribution &same_displacement =
+      seam.bridge_distribution(translated_left, translated_right);
+  EXPECT_EQ(&first, &same_displacement);
+  EXPECT_EQ(seam.cached_distribution_count(), 1U);
+  for (std::size_t axis = 0; axis < translated_left.size(); ++axis) {
+    ++translated_left[axis];
+    ++translated_right[axis];
+  }
+  EXPECT_EQ(&first, &seam.bridge_distribution(translated_left, translated_right));
+  EXPECT_EQ(seam.cached_distribution_count(), 1U);
+  EXPECT_DOUBLE_EQ(first.log_normalization(),
+                   kernels.log_torus_kernel_scaled(left, right, tau1 - tau0));
+
+  for (const std::vector<ParticleId> &strands :
+       {std::vector<ParticleId>{0, 1}, std::vector<ParticleId>{2, 3},
+        std::vector<ParticleId>{1, 4}}) {
+    EXPECT_TRUE(sampler.stitch_update(StitchUpdateOptions{
+        .strand_count = strands.size(),
+        .anchor = std::nullopt,
+        .strands = strands,
+        .interval = std::pair<double, double>{tau0, tau1},
+        .fraction = 0.25,
+        .locality_radius = 1,
+        .global_partner_probability = 0.05,
+    }));
+    EXPECT_TRUE(seam.matches_left_positions(sampler.state()));
+    EXPECT_TRUE(detail::InteractingSamplerTestAccess::occupancy_matches_state(sampler));
+  }
 }
 
 TEST(InteractingSamplerTest, ExplicitCollectiveStitchValidatesStrands) {

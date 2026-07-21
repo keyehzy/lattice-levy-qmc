@@ -1,4 +1,5 @@
 #include "qmc/free_numerics.hpp"
+#include "torus_bridge_distribution.hpp"
 
 #include <array>
 #include <cmath>
@@ -99,6 +100,54 @@ TEST(FreePathKernelsTest, CoveringMethodsMatchOneOffWrappersAndRandomStream) {
   EXPECT_EQ(kernels.sample_bridge_covering({1, -1}, {5, 2}, 1.3, 13, context_random),
             qmc::sample_bridge_covering({1, -1}, {5, 2}, 1.3, 13, 0.8, wrapper_random, numerical));
   EXPECT_DOUBLE_EQ(context_random.uniform_open(), wrapper_random.uniform_open());
+}
+
+TEST(FreePathKernelsTest, PreparedTorusBridgeReusesNormalizationAndSeededWindingLaw) {
+  const qmc::Model model(qmc::ModelParameters{
+      .particle_count = 3,
+      .beta = 1.2,
+      .linear_size = 6,
+      .dimension = 2,
+      .hopping = 1.1,
+  });
+  const qmc::FreePathKernels kernels(model);
+  const qmc::TorusLayout &layout = *kernels.torus_layout();
+  const qmc::Site start{7, -3};
+  const qmc::Site physical_end{1, 4};
+  constexpr double duration = 0.7;
+  const qmc::SiteId displacement =
+      layout.flat_displacement(layout.encode_covering(start), layout.encode_covering(physical_end));
+  const qmc::detail::TorusBridgeDistribution prepared(displacement, duration, kernels);
+
+  const double expected_log_normalization =
+      std::log(kernels.periodic_kernel_scaled_1d(0, duration)) +
+      std::log(kernels.periodic_kernel_scaled_1d(1, duration));
+  EXPECT_NEAR(prepared.log_normalization(), expected_log_normalization, 2e-14);
+  EXPECT_DOUBLE_EQ(prepared.log_normalization(),
+                   kernels.log_torus_kernel_scaled(start, physical_end, duration));
+
+  qmc::Random prepared_random(27'104);
+  qmc::Random one_off_random(27'104);
+  for (std::size_t sample = 0; sample < 100; ++sample) {
+    EXPECT_EQ(
+        prepared.sample_covering_endpoint(start, prepared_random),
+        kernels.sample_torus_covering_endpoint(start, physical_end, duration, one_off_random));
+  }
+  EXPECT_DOUBLE_EQ(prepared_random.uniform_open(), one_off_random.uniform_open());
+}
+
+TEST(FreePathKernelsTest, PreparedTorusBridgeRejectsZeroWeightWithoutDrawing) {
+  const qmc::FreePathKernels kernels(qmc::TorusLayout(5, 1), 0.0);
+  const qmc::detail::TorusBridgeDistribution prepared(qmc::SiteId(1), 0.8, kernels);
+  EXPECT_EQ(prepared.log_normalization(), -std::numeric_limits<double>::infinity());
+
+  qmc::Random random(92);
+  qmc::Random control(92);
+  EXPECT_THROW(static_cast<void>(prepared.sample_covering_endpoint({0}, random)),
+               std::invalid_argument);
+  EXPECT_DOUBLE_EQ(random.uniform_unit(), control.uniform_unit());
+  EXPECT_THROW(static_cast<void>(prepared.sample_covering_endpoint({0, 0}, random)),
+               std::invalid_argument);
 }
 
 TEST(FreeNumericsTest, ExactMidpointPmfMatchesPythonReference) {

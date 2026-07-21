@@ -2,6 +2,7 @@
 
 #include "adaptive_discrete_support.hpp"
 #include "checked_math.hpp"
+#include "torus_bridge_distribution.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -50,6 +51,14 @@ Coord apply_jump_counts(const Coord start, const std::uint64_t plus, const std::
 
 const TorusLayout &require_torus_layout(const std::optional<TorusLayout> &layout) {
   if (!layout.has_value()) {
+    throw std::invalid_argument("free path kernel operation requires a torus layout");
+  }
+  return *layout;
+}
+
+const TorusLayout &require_torus_layout(const FreePathKernels &kernels) {
+  const TorusLayout *const layout = kernels.torus_layout();
+  if (layout == nullptr) {
     throw std::invalid_argument("free path kernel operation requires a torus layout");
   }
   return *layout;
@@ -197,15 +206,61 @@ DisplacedWindingWeights displaced_winding_weights_1d(Coord delta, const Coord li
   }
 }
 
-Coord reduced_endpoint_delta(const Coord left, const Coord right, const TorusLayout &layout) {
-  const Coord reduced_left = layout.reduce(left);
-  const Coord reduced_right = layout.reduce(right);
-  const Coord delta = reduced_right >= reduced_left ? reduced_right - reduced_left
-                                                    : -(reduced_left - reduced_right);
-  return centered_torus_displacement(delta, layout.linear_size());
+} // namespace
+
+namespace detail {
+
+TorusBridgeDistribution::TorusBridgeDistribution(const SiteId displacement, const double duration,
+                                                 const FreePathKernels &kernels)
+    : linear_size_(require_torus_layout(kernels).linear_size()),
+      dimension_(require_torus_layout(kernels).dimension()) {
+  const TorusLayout &layout = require_torus_layout(kernels);
+  const std::vector<std::size_t> components = layout.decode(displacement);
+  axes_.reserve(dimension_);
+  for (const std::size_t component : components) {
+    auto delta = static_cast<Coord>(component);
+    if (delta > linear_size_ / 2) {
+      delta -= linear_size_;
+    }
+    DisplacedWindingWeights winding_weights = displaced_winding_weights_1d(
+        delta, linear_size_, duration, kernels.hopping(), kernels.numerical());
+    const double weight =
+        std::accumulate(winding_weights.weights.begin(), winding_weights.weights.end(), 0.0);
+    if (weight <= 0.0) {
+      log_normalization_ = -std::numeric_limits<double>::infinity();
+      axes_.clear();
+      return;
+    }
+    log_normalization_ += std::log(weight);
+    axes_.push_back(AxisDistribution{
+        .displacement = delta,
+        .windings = std::move(winding_weights.windings),
+        .weights = std::move(winding_weights.weights),
+    });
+  }
 }
 
-} // namespace
+Site TorusBridgeDistribution::sample_covering_endpoint(const Site &start, Random &random) const {
+  if (start.size() != dimension_) {
+    throw std::invalid_argument("torus bridge start dimension does not match the distribution");
+  }
+  if (axes_.size() != dimension_) {
+    throw std::invalid_argument("the requested torus bridge has zero free weight");
+  }
+
+  Site covering_end(dimension_);
+  for (std::size_t axis = 0; axis < dimension_; ++axis) {
+    const AxisDistribution &distribution = axes_[axis];
+    const std::size_t selected = random.discrete_index(distribution.weights);
+    const Coord displacement = displaced_winding_coordinate(distribution.displacement, linear_size_,
+                                                            distribution.windings[selected]);
+    covering_end[axis] = checked_add(start[axis], displacement,
+                                     "torus bridge covering endpoint exceeds int64 range");
+  }
+  return covering_end;
+}
+
+} // namespace detail
 
 FreePathKernels::FreePathKernels(const double hopping, NumericalOptions numerical)
     : hopping_(hopping), numerical_(numerical), layout_(std::nullopt) {
@@ -565,21 +620,10 @@ Site FreePathKernels::sample_torus_covering_endpoint(const Site &a, const Site &
     throw std::invalid_argument("torus bridge endpoint dimension does not match the layout");
   }
 
-  Site covering_end(a.size());
-  for (std::size_t axis = 0; axis < a.size(); ++axis) {
-    const Coord delta = reduced_endpoint_delta(a[axis], b[axis], layout);
-    const DisplacedWindingWeights winding_weights =
-        displaced_winding_weights_1d(delta, layout.linear_size(), duration, hopping_, numerical_);
-    if (winding_weights.weights.empty()) {
-      throw std::invalid_argument("the requested torus bridge has zero free weight");
-    }
-    const std::size_t selected = random.discrete_index(winding_weights.weights);
-    const Coord displacement = displaced_winding_coordinate(delta, layout.linear_size(),
-                                                            winding_weights.windings[selected]);
-    covering_end[axis] = detail::checked_add(a[axis], displacement,
-                                             "torus bridge covering endpoint exceeds int64 range");
-  }
-  return covering_end;
+  const SiteId displacement =
+      layout.flat_displacement(layout.encode_covering(a), layout.encode_covering(b));
+  return detail::TorusBridgeDistribution(displacement, duration, *this)
+      .sample_covering_endpoint(a, random);
 }
 
 double FreePathKernels::log_torus_kernel_scaled(const Site &a, const Site &b,
@@ -596,19 +640,9 @@ double FreePathKernels::log_torus_kernel_scaled(const Site &a, const Site &b,
     throw std::invalid_argument("torus kernel endpoint dimension does not match the layout");
   }
 
-  double result = 0.0;
-  for (std::size_t axis = 0; axis < a.size(); ++axis) {
-    const Coord delta = reduced_endpoint_delta(a[axis], b[axis], layout);
-    const DisplacedWindingWeights winding_weights =
-        displaced_winding_weights_1d(delta, layout.linear_size(), duration, hopping_, numerical_);
-    const double weight =
-        std::accumulate(winding_weights.weights.begin(), winding_weights.weights.end(), 0.0);
-    if (weight <= 0.0) {
-      return -std::numeric_limits<double>::infinity();
-    }
-    result += std::log(weight);
-  }
-  return result;
+  const SiteId displacement =
+      layout.flat_displacement(layout.encode_covering(a), layout.encode_covering(b));
+  return detail::TorusBridgeDistribution(displacement, duration, *this).log_normalization();
 }
 
 std::vector<double>

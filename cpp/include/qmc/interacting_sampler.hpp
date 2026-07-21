@@ -22,6 +22,7 @@ namespace qmc {
 
 namespace detail {
 class AcceptedChainState;
+class StitchSeamContext;
 struct InteractingSamplerTestAccess;
 } // namespace detail
 
@@ -215,9 +216,9 @@ private:
   bool try_path_replacements(std::vector<LabeledPath> replacements, MoveKind move);
   bool try_proposal(LocalProposal proposal, MoveStatistics &move_statistics);
   [[nodiscard]] StitchProposal sample_stitch_proposal(std::span<const ParticleId> strands,
-                                                      double tau0, double tau1);
-  [[nodiscard]] bool try_stitch_strands(std::span<const ParticleId> strands, double tau0,
-                                        double tau1);
+                                                      detail::StitchSeamContext &seam);
+  [[nodiscard]] bool try_stitch_strands(std::span<const ParticleId> strands,
+                                        detail::StitchSeamContext &seam);
   [[nodiscard]] bool metropolis_accept(double delta_action);
   void validate_segment_update_options(const SegmentUpdateOptions &options) const;
   void validate_stitch_update_options(const StitchUpdateOptions &options) const;

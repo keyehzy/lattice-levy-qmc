@@ -5,13 +5,13 @@
 #include "interaction_detail.hpp"
 #include "path_cursor.hpp"
 #include "stitch_matching.hpp"
+#include "stitch_seam_context.hpp"
 
 #include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
-#include <unordered_map>
 #include <utility>
 
 namespace qmc {
@@ -79,27 +79,6 @@ void validate_stitch_controls(const double fraction, const double global_partner
   }
 }
 
-using PartnerBuckets = std::unordered_map<SiteId, std::vector<ParticleId>, SiteIdHash>;
-
-std::vector<SiteId> encode_positions(const std::vector<Site> &positions,
-                                     const TorusLayout &layout) {
-  std::vector<SiteId> site_ids;
-  site_ids.reserve(positions.size());
-  for (const Site &position : positions) {
-    site_ids.push_back(layout.encode(position));
-  }
-  return site_ids;
-}
-
-PartnerBuckets build_partner_buckets(const std::vector<SiteId> &positions) {
-  PartnerBuckets buckets;
-  buckets.reserve(positions.size());
-  for (std::size_t label = 0; label < positions.size(); ++label) {
-    buckets[positions[label]].push_back(static_cast<ParticleId>(label));
-  }
-  return buckets;
-}
-
 bool neighborhood_is_small(const TorusLayout &layout, const std::size_t locality_radius,
                            const std::size_t occupied_sites) {
   const auto linear_size = static_cast<std::size_t>(layout.linear_size());
@@ -121,7 +100,7 @@ bool neighborhood_is_small(const TorusLayout &layout, const std::size_t locality
 }
 
 std::vector<ParticleId> same_site_candidates(const ParticleId particle, const SiteId position,
-                                             const PartnerBuckets &buckets) {
+                                             const detail::StitchPartnerBuckets &buckets) {
   std::vector<ParticleId> candidates;
   const auto bucket = buckets.find(position);
   if (bucket == buckets.end()) {
@@ -136,7 +115,7 @@ std::vector<ParticleId> same_site_candidates(const ParticleId particle, const Si
 }
 
 std::vector<ParticleId> scan_neighbor_candidates(const ParticleId particle, const SiteId position,
-                                                 const PartnerBuckets &buckets,
+                                                 const detail::StitchPartnerBuckets &buckets,
                                                  const TorusLayout &layout,
                                                  const std::size_t locality_radius) {
   std::vector<ParticleId> candidates;
@@ -154,8 +133,8 @@ std::vector<ParticleId> scan_neighbor_candidates(const ParticleId particle, cons
 }
 
 std::vector<ParticleId> local_stitch_candidates(const ParticleId particle,
-                                                const std::vector<SiteId> &positions,
-                                                const PartnerBuckets &buckets,
+                                                const std::span<const SiteId> positions,
+                                                const detail::StitchPartnerBuckets &buckets,
                                                 const TorusLayout &layout,
                                                 const std::size_t locality_radius) {
   if (locality_radius == 0) {
@@ -210,10 +189,12 @@ ParticleId draw_uniform_unselected(const std::vector<bool> &selected,
   throw std::logic_error("failed to draw an unselected stitch strand");
 }
 
-std::vector<ParticleId> select_stitch_strands(
-    const ParticleId anchor, const std::size_t strand_count, const std::vector<SiteId> &positions,
-    const PartnerBuckets &buckets, const TorusLayout &layout, const Model &model,
-    const std::size_t locality_radius, const double global_partner_probability, Random &random) {
+std::vector<ParticleId>
+select_stitch_strands(const ParticleId anchor, const std::size_t strand_count,
+                      const std::span<const SiteId> positions,
+                      const detail::StitchPartnerBuckets &buckets, const TorusLayout &layout,
+                      const Model &model, const std::size_t locality_radius,
+                      const double global_partner_probability, Random &random) {
   assert(std::isfinite(global_partner_probability) && global_partner_probability >= 0.0 &&
          global_partner_probability <= 1.0);
   assert(strand_count >= 2 && strand_count <= detail::kMaxStitchStrands &&
@@ -257,20 +238,6 @@ sample_stitch_window(const Model &model, Random &random,
       duration == model.beta() ? 0.0 : random.uniform_unit() * (model.beta() - duration);
   const double tau1 = std::min(model.beta(), tau0 + duration);
   return {tau0, tau1};
-}
-
-std::vector<double> stitch_log_weights(const std::vector<Site> &left,
-                                       const std::vector<Site> &right, const double duration,
-                                       const FreePathKernels &kernels) {
-  const std::size_t strand_count = left.size();
-  std::vector<double> weights(strand_count * strand_count);
-  for (std::size_t row = 0; row < strand_count; ++row) {
-    for (std::size_t column = 0; column < strand_count; ++column) {
-      weights[(row * strand_count) + column] =
-          log_torus_kernel_scaled(left[row], right[column], duration, kernels);
-    }
-  }
-  return weights;
 }
 
 detail::StitchMatching sample_stitch_matching(const std::span<const double> log_weights,
@@ -656,14 +623,10 @@ bool InteractingSampler::cycle_update(const std::optional<std::size_t> cycle_ind
 
 InteractingSampler::StitchProposal
 InteractingSampler::sample_stitch_proposal(const std::span<const ParticleId> strands,
-                                           const double tau0, const double tau1) {
+                                           detail::StitchSeamContext &seam) {
   const std::size_t strand_count = strands.size();
   if (strand_count < 2 || strand_count > detail::kMaxStitchStrands) {
     throw std::invalid_argument("a stitch must contain between 2 and 8 strands");
-  }
-  const double duration = tau1 - tau0;
-  if (!std::isfinite(duration) || duration <= 0.0) {
-    throw std::invalid_argument("stitch duration must be positive");
   }
   std::vector<bool> selected(state().worldlines().size(), false);
   std::vector<detail::PathSlice> path_slices;
@@ -679,15 +642,20 @@ InteractingSampler::sample_stitch_proposal(const std::span<const ParticleId> str
     selected[label] = true;
     const ContinuousPath &path = state().path(label);
     detail::PathCursor cursor(path);
-    const detail::PathCut left_cut = cursor.cut(tau0);
-    const detail::PathCut right_cut = cursor.cut(tau1);
+    const detail::PathCut left_cut = cursor.cut(seam.tau0());
+    const detail::PathCut right_cut = cursor.cut(seam.tau1());
     path_slices.push_back(cursor.slice(left_cut, right_cut));
     left.push_back(path_slices.back().start);
     right.push_back(path_slices.back().end);
   }
 
-  const std::vector<double> log_weights =
-      stitch_log_weights(left, right, duration, free_ensemble_.free_path_kernels());
+  std::vector<double> log_weights(strand_count * strand_count);
+  for (std::size_t row = 0; row < strand_count; ++row) {
+    for (std::size_t column = 0; column < strand_count; ++column) {
+      log_weights[(row * strand_count) + column] =
+          seam.bridge_distribution(left[row], right[column]).log_normalization();
+    }
+  }
   const detail::StitchMatching matching =
       sample_stitch_matching(log_weights, strand_count, random_);
 
@@ -695,8 +663,11 @@ InteractingSampler::sample_stitch_proposal(const std::span<const ParticleId> str
   proposal.replacements.reserve(strand_count);
   for (std::size_t row = 0; row < strand_count; ++row) {
     const std::size_t column = matching[row];
-    const ContinuousPath bridge = sample_continuous_bridge_torus(
-        left[row], right[column], duration, free_ensemble_.free_path_kernels(), random_);
+    const detail::TorusBridgeDistribution &distribution =
+        seam.bridge_distribution(left[row], right[column]);
+    const Site covering_end = distribution.sample_covering_endpoint(left[row], random_);
+    const ContinuousPath bridge = sample_continuous_bridge(
+        left[row], covering_end, seam.duration(), free_ensemble_.free_path_kernels(), random_);
     proposal.replacements.emplace_back(strands[row],
                                        splice_path_interval(path_slices[row], path_slices[column],
                                                             bridge, model_.free.linear_size()));
@@ -719,10 +690,10 @@ InteractingSampler::sample_stitch_proposal(const std::span<const ParticleId> str
 }
 
 bool InteractingSampler::try_stitch_strands(const std::span<const ParticleId> strands,
-                                            const double tau0, const double tau1) {
+                                            detail::StitchSeamContext &seam) {
   MoveStatistics &move_statistics = statistics_[move_index(MoveKind::StitchMove)];
   increment_counter(move_statistics.attempts);
-  StitchProposal proposal = sample_stitch_proposal(strands, tau0, tau1);
+  StitchProposal proposal = sample_stitch_proposal(strands, seam);
   return try_proposal(
       LocalProposal{
           .replacements = std::move(proposal.replacements),
@@ -743,23 +714,21 @@ bool InteractingSampler::execute_stitch_update(const StitchUpdateOptions &option
   }
   const auto [tau0, tau1] =
       sample_stitch_window(model_.free, random_, options.interval, options.fraction);
+  detail::StitchSeamContext seam(state(), tau0, tau1, layout_, free_ensemble_.free_path_kernels());
 
   std::vector<ParticleId> strands;
   if (options.strands.empty()) {
-    const std::vector<Site> positions = state().positions_at(tau0);
-    const std::vector<SiteId> site_ids = encode_positions(positions, layout_);
-    const PartnerBuckets buckets = build_partner_buckets(site_ids);
     const ParticleId anchor = options.anchor.has_value()
                                   ? *options.anchor
                                   : static_cast<ParticleId>(random_.uniform_index(
                                         static_cast<std::uint64_t>(model_.free.particle_count())));
-    strands =
-        select_stitch_strands(anchor, options.strand_count, site_ids, buckets, layout_, model_.free,
-                              options.locality_radius, options.global_partner_probability, random_);
+    strands = select_stitch_strands(
+        anchor, options.strand_count, seam.left_site_ids(), seam.partner_buckets(), layout_,
+        model_.free, options.locality_radius, options.global_partner_probability, random_);
   } else {
     strands = options.strands;
   }
-  return try_stitch_strands(strands, tau0, tau1);
+  return try_stitch_strands(strands, seam);
 }
 
 void InteractingSampler::stitch_sweep(const StitchSweepOptions &options) {
@@ -778,19 +747,17 @@ void InteractingSampler::execute_stitch_sweep(const PreparedStitchSweep &options
   }
   const double tau1 = std::min(model_.free.beta(), tau0 + options.duration);
 
-  const std::vector<Site> positions = state().positions_at(tau0);
-  const std::vector<SiteId> site_ids = encode_positions(positions, layout_);
-  const PartnerBuckets buckets = build_partner_buckets(site_ids);
+  detail::StitchSeamContext seam(state(), tau0, tau1, layout_, free_ensemble_.free_path_kernels());
   for (std::size_t update = 0; update < options.updates; ++update) {
     const std::size_t mixture_index =
         options.mixture.counts.size() == 1 ? 0 : random_.discrete_index(options.mixture.weights);
     const std::size_t strand_count = options.mixture.counts[mixture_index];
     const auto anchor = static_cast<ParticleId>(
         random_.uniform_index(static_cast<std::uint64_t>(model_.free.particle_count())));
-    const std::vector<ParticleId> strands =
-        select_stitch_strands(anchor, strand_count, site_ids, buckets, layout_, model_.free,
-                              options.locality_radius, options.global_partner_probability, random_);
-    static_cast<void>(try_stitch_strands(strands, tau0, tau1));
+    const std::vector<ParticleId> strands = select_stitch_strands(
+        anchor, strand_count, seam.left_site_ids(), seam.partner_buckets(), layout_, model_.free,
+        options.locality_radius, options.global_partner_probability, random_);
+    static_cast<void>(try_stitch_strands(strands, seam));
   }
 }
 
