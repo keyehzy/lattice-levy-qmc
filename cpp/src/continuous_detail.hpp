@@ -12,8 +12,9 @@ namespace qmc::detail {
 
 // Returned paths have the same order as labels.
 [[nodiscard]] std::vector<ContinuousPath> sample_paths_for_cycle(const Cycle &labels,
-                                                                 const Model &model, Random &random,
-                                                                 const NumericalOptions &options);
+                                                                 const Model &model,
+                                                                 const FreePathKernels &kernels,
+                                                                 Random &random);
 
 } // namespace qmc::detail
 

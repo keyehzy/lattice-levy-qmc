@@ -186,13 +186,13 @@ void IdealBosonConfiguration::validate() const {
   validate_configuration(*this, ValidationBoundary::Audit);
 }
 
-IdealBosonConfiguration sample_ideal_boson_configuration(const CanonicalEnsemble &ensemble,
-                                                         const std::size_t time_links_per_beta,
-                                                         Random &random,
-                                                         const NumericalOptions &options) {
+namespace {
+
+IdealBosonConfiguration
+sample_ideal_boson_configuration_with_kernels(const CanonicalEnsemble &ensemble,
+                                              const std::size_t time_links_per_beta, Random &random,
+                                              const FreePathKernels &kernels) {
   const Model &model = ensemble.model();
-  static_cast<void>(TorusLayout(model.linear_size(), model.dimension()));
-  options.validate();
   if (time_links_per_beta < 1) {
     throw std::invalid_argument("time_links_per_beta must be positive");
   }
@@ -216,8 +216,7 @@ IdealBosonConfiguration sample_ideal_boson_configuration(const CanonicalEnsemble
     for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
       base[axis] =
           static_cast<Coord>(random.uniform_index(static_cast<std::uint64_t>(model.linear_size())));
-      winding[axis] =
-          sample_winding_1d(model.linear_size(), duration, model.hopping(), random, options);
+      winding[axis] = kernels.sample_winding_1d(duration, random);
       endpoint[axis] =
           detail::checked_add(base[axis],
                               detail::checked_scale(model.linear_size(), winding[axis],
@@ -228,7 +227,7 @@ IdealBosonConfiguration sample_ideal_boson_configuration(const CanonicalEnsemble
     const auto steps = detail::checked_product(length, time_links_per_beta,
                                                "cycle skeleton length exceeds size_t");
     const CoveringPath covering =
-        sample_bridge_covering(base, endpoint, duration, steps, model.hopping(), random, options);
+        kernels.sample_bridge_covering(base, endpoint, duration, steps, random);
 
     for (std::size_t cycle_index = 0; cycle_index < length; ++cycle_index) {
       const ParticleId label = labels[cycle_index];
@@ -246,12 +245,29 @@ IdealBosonConfiguration sample_ideal_boson_configuration(const CanonicalEnsemble
           std::move(covering_worldlines)};
 }
 
+} // namespace
+
+IdealBosonConfiguration sample_ideal_boson_configuration(const CanonicalEnsemble &ensemble,
+                                                         const std::size_t time_links_per_beta,
+                                                         Random &random) {
+  return sample_ideal_boson_configuration_with_kernels(ensemble, time_links_per_beta, random,
+                                                       ensemble.free_path_kernels());
+}
+
+IdealBosonConfiguration sample_ideal_boson_configuration(const CanonicalEnsemble &ensemble,
+                                                         const std::size_t time_links_per_beta,
+                                                         Random &random,
+                                                         const NumericalOptions &options) {
+  return sample_ideal_boson_configuration_with_kernels(ensemble, time_links_per_beta, random,
+                                                       FreePathKernels(ensemble.model(), options));
+}
+
 IdealBosonConfiguration sample_ideal_boson_configuration(const Model &model,
                                                          const std::size_t time_links_per_beta,
                                                          Random &random,
                                                          const NumericalOptions &options) {
-  return sample_ideal_boson_configuration(CanonicalEnsemble(model), time_links_per_beta, random,
-                                          options);
+  return sample_ideal_boson_configuration(CanonicalEnsemble(model, options), time_links_per_beta,
+                                          random);
 }
 
 } // namespace qmc

@@ -260,12 +260,12 @@ sample_stitch_window(const Model &model, Random &random,
 
 std::vector<double> stitch_log_weights(const std::vector<Site> &left,
                                        const std::vector<Site> &right, const double duration,
-                                       const Model &model, const NumericalOptions &numerical) {
+                                       const FreePathKernels &kernels) {
   const std::size_t strand_count = left.size();
   std::vector<double> weights(strand_count * strand_count);
   const auto evaluate = [&](const std::size_t row, const std::size_t column) {
-    weights[(row * strand_count) + column] = log_torus_kernel_scaled(
-        left[row], right[column], duration, model.linear_size(), model.hopping(), numerical);
+    weights[(row * strand_count) + column] =
+        log_torus_kernel_scaled(left[row], right[column], duration, kernels);
   };
   if (strand_count == 2) {
     // Retain the legacy evaluation order for the default pair kernel.
@@ -511,20 +511,18 @@ InteractingSampler::prepare_sweep(const SweepOptions &options) const {
 
 InteractingSampler::InteractingSampler(InteractingModel model, NumericalOptions numerical,
                                        const std::uint64_t seed)
-    : model_(model), layout_(model_.free.linear_size(), model_.free.dimension()),
-      numerical_(numerical), random_(seed), free_ensemble_(model_.free) {
+    : model_(model), layout_(model_.free.linear_size(), model_.free.dimension()), random_(seed),
+      free_ensemble_(model_.free, numerical) {
   model_.validate();
-  numerical_.validate();
-  ContinuousConfiguration initial =
-      sample_ideal_continuous_configuration(free_ensemble_, random_, numerical_);
+  ContinuousConfiguration initial = sample_ideal_continuous_configuration(free_ensemble_, random_);
   accepted_state_ = std::make_unique<detail::AcceptedChainState>(std::move(initial));
   static_cast<void>(checked_action(model_.interaction, pair_overlap()));
 }
 
 InteractingSampler::~InteractingSampler() = default;
 InteractingSampler::InteractingSampler(const InteractingSampler &other)
-    : model_(other.model_), layout_(other.layout_), numerical_(other.numerical_),
-      random_(other.random_), free_ensemble_(other.free_ensemble_),
+    : model_(other.model_), layout_(other.layout_), random_(other.random_),
+      free_ensemble_(other.free_ensemble_),
       accepted_state_(std::make_unique<detail::AcceptedChainState>(*other.accepted_state_)),
       statistics_(other.statistics_) {}
 
@@ -644,7 +642,7 @@ bool InteractingSampler::execute_segment_update(const SegmentUpdateOptions &opti
   }
 
   ContinuousPath proposal = resample_path_interval(state().path(label), tau0, tau1,
-                                                   model_.free.hopping(), random_, numerical_);
+                                                   free_ensemble_.free_path_kernels(), random_);
   std::vector<LabeledPath> replacements;
   replacements.emplace_back(label, std::move(proposal));
   return try_path_replacements(std::move(replacements), MoveKind::SegmentMove);
@@ -670,7 +668,8 @@ bool InteractingSampler::cycle_update(const std::optional<std::size_t> cycle_ind
     throw std::invalid_argument("cycle index is out of range");
   }
   const Cycle &cycle = cycles[selected];
-  auto proposed_paths = detail::sample_paths_for_cycle(cycle, model_.free, random_, numerical_);
+  auto proposed_paths = detail::sample_paths_for_cycle(cycle, model_.free,
+                                                       free_ensemble_.free_path_kernels(), random_);
   std::vector<LabeledPath> replacements;
   replacements.reserve(cycle.size());
   for (std::size_t index = 0; index < cycle.size(); ++index) {
@@ -712,7 +711,7 @@ InteractingSampler::sample_stitch_proposal(const std::span<const ParticleId> str
   }
 
   const std::vector<double> log_weights =
-      stitch_log_weights(left, right, duration, model_.free, numerical_);
+      stitch_log_weights(left, right, duration, free_ensemble_.free_path_kernels());
   const detail::StitchMatching matching =
       sample_stitch_matching(log_weights, strand_count, random_);
 
@@ -721,8 +720,7 @@ InteractingSampler::sample_stitch_proposal(const std::span<const ParticleId> str
   for (std::size_t row = 0; row < strand_count; ++row) {
     const std::size_t column = matching[row];
     const ContinuousPath bridge = sample_continuous_bridge_torus(
-        left[row], right[column], duration, model_.free.linear_size(), model_.free.hopping(),
-        random_, numerical_);
+        left[row], right[column], duration, free_ensemble_.free_path_kernels(), random_);
     proposal.replacements.emplace_back(strands[row],
                                        splice_path_interval(path_slices[row], path_slices[column],
                                                             bridge, model_.free.linear_size()));
@@ -849,8 +847,7 @@ void InteractingSampler::random_seam_stitch_sweep(const RandomSeamStitchOptions 
 }
 
 bool InteractingSampler::global_update() {
-  ContinuousConfiguration proposal =
-      sample_ideal_continuous_configuration(free_ensemble_, random_, numerical_);
+  ContinuousConfiguration proposal = sample_ideal_continuous_configuration(free_ensemble_, random_);
   auto proposed_state = std::make_unique<detail::AcceptedChainState>(std::move(proposal));
   const double new_overlap = proposed_state->pair_overlap();
   const double new_action = checked_action(model_.interaction, new_overlap);

@@ -100,13 +100,17 @@ const auto correlations = qmc::retained_density_correlations(measurements);
 ```
 
 `CanonicalEnsemble` owns the validated model and its matching canonical
-recursion together with an immutable `OneParticleSpectrum`. The spectrum owns
-the checked torus layout and `O(L)` one-dimensional momentum, sine, and cosine
-tables; full `L^d` momentum records are produced only when requested. Retain the
-ensemble when drawing multiple samples or evaluating several exact observables;
-model-only overloads remain available for one-off calls. Its read-only
-recursion views and cycle/statistics overloads may also reuse any particle-number
-prefix through the ensemble's configured maximum.
+recursion together with immutable `OneParticleSpectrum` and `FreePathKernels`
+values. The spectrum owns the checked torus layout and `O(L)` one-dimensional
+momentum, sine, and cosine tables; full `L^d` momentum records are produced only
+when requested. The path kernels bind hopping, numerical work limits, and torus
+provenance once for retained and continuous bridge operations. Pass custom
+`NumericalOptions` to the ensemble constructor when those limits should be
+reused across samples. Retain the ensemble when drawing multiple samples or
+evaluating several exact observables; model-only and scalar-heavy overloads
+remain available for one-off calls. Its read-only recursion views and
+cycle/statistics overloads may also reuse any particle-number prefix through
+the ensemble's configured maximum.
 
 `configuration.covering_worldlines()` exposes the retained unwrapped
 coordinates through a read-only, shape-safe buffer;

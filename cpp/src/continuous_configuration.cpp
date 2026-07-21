@@ -64,10 +64,8 @@ void validate_configuration_components(const Model &model, const Permutation &to
 namespace detail {
 
 std::vector<ContinuousPath> sample_paths_for_cycle(const Cycle &labels, const Model &model,
-                                                   Random &random,
-                                                   const NumericalOptions &options) {
+                                                   const FreePathKernels &kernels, Random &random) {
   validate_continuous_model(model);
-  options.validate();
   if (labels.empty()) {
     throw std::invalid_argument("cannot sample paths for an empty cycle");
   }
@@ -81,16 +79,14 @@ std::vector<ContinuousPath> sample_paths_for_cycle(const Cycle &labels, const Mo
   for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
     base[axis] =
         static_cast<Coord>(random.uniform_index(static_cast<std::uint64_t>(model.linear_size())));
-    const Coord winding =
-        sample_winding_1d(model.linear_size(), duration, model.hopping(), random, options);
+    const Coord winding = kernels.sample_winding_1d(duration, random);
     const Coord winding_displacement = checked_scale(
         model.linear_size(), winding, "continuous winding displacement exceeds int64 range");
     endpoint[axis] = checked_add(base[axis], winding_displacement,
                                  "continuous cycle endpoint exceeds int64 range");
   }
 
-  ContinuousPath long_path =
-      sample_continuous_bridge(base, endpoint, duration, model.hopping(), random, options);
+  ContinuousPath long_path = sample_continuous_bridge(base, endpoint, duration, kernels, random);
   std::vector<double> cuts;
   cuts.reserve(labels.size() - 1);
   for (std::size_t index = 1; index < labels.size(); ++index) {
@@ -261,19 +257,20 @@ Site ContinuousConfiguration::total_winding() const {
   return displacement;
 }
 
-ContinuousConfiguration sample_ideal_continuous_configuration(const CanonicalEnsemble &ensemble,
-                                                              Random &random,
-                                                              const NumericalOptions &options) {
+namespace {
+
+ContinuousConfiguration
+sample_ideal_continuous_configuration_with_kernels(const CanonicalEnsemble &ensemble,
+                                                   Random &random, const FreePathKernels &kernels) {
   const Model &model = ensemble.model();
   validate_continuous_model(model);
-  options.validate();
 
   const std::vector<Cycle> cycles = ensemble.sample_cycles(random);
   std::vector<ParticleId> permutation(model.particle_count());
   std::vector<std::optional<ContinuousPath>> staged_paths(model.particle_count());
 
   for (const Cycle &cycle : cycles) {
-    auto paths = detail::sample_paths_for_cycle(cycle, model, random, options);
+    auto paths = detail::sample_paths_for_cycle(cycle, model, kernels, random);
     for (std::size_t index = 0; index < cycle.size(); ++index) {
       const ParticleId label = cycle[index];
       permutation[label] = cycle[(index + 1) % cycle.size()];
@@ -293,9 +290,24 @@ ContinuousConfiguration sample_ideal_continuous_configuration(const CanonicalEns
   return {model, Permutation(std::move(permutation)), std::move(worldlines)};
 }
 
+} // namespace
+
+ContinuousConfiguration sample_ideal_continuous_configuration(const CanonicalEnsemble &ensemble,
+                                                              Random &random) {
+  return sample_ideal_continuous_configuration_with_kernels(ensemble, random,
+                                                            ensemble.free_path_kernels());
+}
+
+ContinuousConfiguration sample_ideal_continuous_configuration(const CanonicalEnsemble &ensemble,
+                                                              Random &random,
+                                                              const NumericalOptions &options) {
+  return sample_ideal_continuous_configuration_with_kernels(
+      ensemble, random, FreePathKernels(ensemble.model(), options));
+}
+
 ContinuousConfiguration sample_ideal_continuous_configuration(const Model &model, Random &random,
                                                               const NumericalOptions &options) {
-  return sample_ideal_continuous_configuration(CanonicalEnsemble(model), random, options);
+  return sample_ideal_continuous_configuration(CanonicalEnsemble(model, options), random);
 }
 
 } // namespace qmc

@@ -202,6 +202,38 @@ TEST(ContinuousPathTest, TorusBridgeHonorsTheWindingWorkLimitBeforeDrawing) {
   EXPECT_DOUBLE_EQ(random.uniform_unit(), control.uniform_unit());
 }
 
+TEST(ContinuousPathTest, FreePathContextMatchesOneOffBridgeAndKernelWrappers) {
+  const NumericalOptions numerical{
+      .tail_tolerance = 1e-12,
+      .max_bessel_terms = 50'000,
+      .max_winding = 20'000,
+  };
+  const FreePathKernels kernels(TorusLayout(6, 2), 1.1, numerical);
+  Random context_random(1701);
+  Random wrapper_random(1701);
+
+  const ContinuousPath context_covering =
+      sample_continuous_bridge({0, -2}, {5, 3}, 1.4, kernels, context_random);
+  const ContinuousPath wrapper_covering =
+      sample_continuous_bridge({0, -2}, {5, 3}, 1.4, 1.1, wrapper_random, numerical);
+  EXPECT_EQ(context_covering, wrapper_covering);
+
+  const ContinuousPath context_resampled =
+      resample_path_interval(context_covering, 0.2, 1.0, kernels, context_random);
+  const ContinuousPath wrapper_resampled =
+      resample_path_interval(wrapper_covering, 0.2, 1.0, 1.1, wrapper_random, numerical);
+  EXPECT_EQ(context_resampled, wrapper_resampled);
+
+  const ContinuousPath context_torus =
+      sample_continuous_bridge_torus({7, -3}, {1, 4}, 0.7, kernels, context_random);
+  const ContinuousPath wrapper_torus =
+      sample_continuous_bridge_torus({7, -3}, {1, 4}, 0.7, 6, 1.1, wrapper_random, numerical);
+  EXPECT_EQ(context_torus, wrapper_torus);
+  EXPECT_DOUBLE_EQ(log_torus_kernel_scaled({0, 0}, {2, 3}, 1.3, kernels),
+                   log_torus_kernel_scaled({0, 0}, {2, 3}, 1.3, 6, 1.1, numerical));
+  EXPECT_DOUBLE_EQ(context_random.uniform_open(), wrapper_random.uniform_open());
+}
+
 TEST(ContinuousPathTest, SplitsCutEventsIntoTheLeftPiece) {
   const ContinuousPath path(
       1.0, {0}, {0},

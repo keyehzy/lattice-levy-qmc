@@ -51,6 +51,56 @@ TEST(FreeNumericsTest, ScaledBesselReturnsUnderflowInsteadOfAbortingProcess) {
   EXPECT_DOUBLE_EQ(qmc::scaled_modified_bessel_i(10'000, 4.0), 0.0);
 }
 
+TEST(FreePathKernelsTest, OwnsValidatedNumericsAndOptionalTorusProvenance) {
+  const qmc::NumericalOptions numerical{
+      .tail_tolerance = 1e-12,
+      .max_bessel_terms = 20'000,
+      .max_winding = 10'000,
+  };
+  const qmc::Model model(qmc::ModelParameters{
+      .particle_count = 3,
+      .beta = 0.8,
+      .linear_size = 7,
+      .dimension = 2,
+      .hopping = 0.9,
+  });
+  const qmc::FreePathKernels covering_only(model.hopping(), numerical);
+  const qmc::FreePathKernels torus(model, numerical);
+
+  EXPECT_DOUBLE_EQ(torus.hopping(), model.hopping());
+  EXPECT_EQ(torus.numerical(), numerical);
+  ASSERT_NE(torus.torus_layout(), nullptr);
+  EXPECT_EQ(*torus.torus_layout(), qmc::TorusLayout(model.linear_size(), model.dimension()));
+  EXPECT_EQ(covering_only.torus_layout(), nullptr);
+  EXPECT_THROW(static_cast<void>(covering_only.periodic_kernel_scaled_1d(0, 1.0)),
+               std::invalid_argument);
+
+  EXPECT_THROW(static_cast<void>(qmc::FreePathKernels(-0.1)), std::invalid_argument);
+  qmc::NumericalOptions invalid = numerical;
+  invalid.max_bessel_terms = 0;
+  EXPECT_THROW(static_cast<void>(qmc::FreePathKernels(model, invalid)), std::invalid_argument);
+}
+
+TEST(FreePathKernelsTest, CoveringMethodsMatchOneOffWrappersAndRandomStream) {
+  const qmc::NumericalOptions numerical{
+      .tail_tolerance = 1e-12,
+      .max_bessel_terms = 20'000,
+      .max_winding = 10'000,
+  };
+  const qmc::FreePathKernels kernels(0.8, numerical);
+  qmc::Random context_random(9173);
+  qmc::Random wrapper_random(9173);
+
+  EXPECT_EQ(kernels.sample_bessel_pair_count(3, 1.7, context_random),
+            qmc::sample_bessel_pair_count(3, 1.7, wrapper_random, numerical));
+  EXPECT_EQ(
+      kernels.sample_midpoint_covering({0, -2}, {4, 3}, 0.4, 0.9, context_random),
+      qmc::sample_midpoint_covering({0, -2}, {4, 3}, 0.4, 0.9, 0.8, wrapper_random, numerical));
+  EXPECT_EQ(kernels.sample_bridge_covering({1, -1}, {5, 2}, 1.3, 13, context_random),
+            qmc::sample_bridge_covering({1, -1}, {5, 2}, 1.3, 13, 0.8, wrapper_random, numerical));
+  EXPECT_DOUBLE_EQ(context_random.uniform_open(), wrapper_random.uniform_open());
+}
+
 TEST(FreeNumericsTest, ExactMidpointPmfMatchesPythonReference) {
   std::vector<qmc::Coord> coordinates;
   for (qmc::Coord coordinate = -8; coordinate <= 10; ++coordinate) {

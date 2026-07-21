@@ -159,14 +159,29 @@ TEST(ContinuousConfigurationTest, ReusableEnsembleMatchesOneOffWrapperForTheSame
       .dimension = 2,
       .hopping = 0.7,
   });
-  const CanonicalEnsemble ensemble(model);
+  const NumericalOptions numerical{
+      .tail_tolerance = 1e-12,
+      .max_bessel_terms = 50'000,
+      .max_winding = 20'000,
+  };
+  const CanonicalEnsemble ensemble(model, numerical);
+  const CanonicalEnsemble default_ensemble(model);
   Random one_off_random(1907);
   Random retained_random(1907);
+  Random compatibility_random(1907);
 
-  const auto one_off = sample_ideal_continuous_configuration(model, one_off_random);
+  const auto one_off = sample_ideal_continuous_configuration(model, one_off_random, numerical);
   const auto retained = sample_ideal_continuous_configuration(ensemble, retained_random);
+  const auto compatibility =
+      sample_ideal_continuous_configuration(default_ensemble, compatibility_random, numerical);
 
   EXPECT_EQ(one_off, retained);
+  EXPECT_EQ(retained, compatibility);
+  const double one_off_next = one_off_random.uniform_open();
+  const double retained_next = retained_random.uniform_open();
+  const double compatibility_next = compatibility_random.uniform_open();
+  EXPECT_DOUBLE_EQ(one_off_next, retained_next);
+  EXPECT_DOUBLE_EQ(retained_next, compatibility_next);
 }
 
 TEST(ContinuousConfigurationTest, ConstructionRejectsInvalidShapeDurationAndConnectivity) {

@@ -231,7 +231,6 @@ private:
 
   InteractingModel model_;
   TorusLayout layout_;
-  NumericalOptions numerical_;
   Random random_;
   CanonicalEnsemble free_ensemble_;
   std::unique_ptr<detail::AcceptedChainState> accepted_state_;

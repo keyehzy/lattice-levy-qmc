@@ -76,8 +76,13 @@ private:
 // Samples an exact canonical ideal-boson skeleton. time_links_per_beta is output resolution.
 [[nodiscard]] IdealBosonConfiguration
 sample_ideal_boson_configuration(const CanonicalEnsemble &ensemble, std::size_t time_links_per_beta,
-                                 Random &random,
-                                 const NumericalOptions &options = NumericalOptions{});
+                                 Random &random);
+
+// Compatibility overload for a one-off numerical policy. Repeated workflows
+// should bind that policy when constructing CanonicalEnsemble.
+[[nodiscard]] IdealBosonConfiguration
+sample_ideal_boson_configuration(const CanonicalEnsemble &ensemble, std::size_t time_links_per_beta,
+                                 Random &random, const NumericalOptions &options);
 
 // One-off convenience overload; repeated workflows should retain a CanonicalEnsemble.
 [[nodiscard]] IdealBosonConfiguration

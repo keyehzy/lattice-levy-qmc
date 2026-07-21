@@ -198,13 +198,28 @@ TEST(IdealConfigurationTest, ReusableEnsembleMatchesOneOffWrapperForTheSameSeed)
       .dimension = 2,
       .hopping = 1.1,
   });
-  const qmc::CanonicalEnsemble ensemble(model);
+  const qmc::NumericalOptions numerical{
+      .tail_tolerance = 1e-12,
+      .max_bessel_terms = 50'000,
+      .max_winding = 20'000,
+  };
+  const qmc::CanonicalEnsemble ensemble(model, numerical);
+  const qmc::CanonicalEnsemble default_ensemble(model);
   qmc::Random first_random(8128);
   qmc::Random second_random(8128);
-  const auto first = qmc::sample_ideal_boson_configuration(model, 11, first_random);
+  qmc::Random third_random(8128);
+  const auto first = qmc::sample_ideal_boson_configuration(model, 11, first_random, numerical);
   const auto second = qmc::sample_ideal_boson_configuration(ensemble, 11, second_random);
+  const auto third =
+      qmc::sample_ideal_boson_configuration(default_ensemble, 11, third_random, numerical);
 
   EXPECT_EQ(first, second);
+  EXPECT_EQ(second, third);
+  const double first_next = first_random.uniform_open();
+  const double second_next = second_random.uniform_open();
+  const double third_next = third_random.uniform_open();
+  EXPECT_DOUBLE_EQ(first_next, second_next);
+  EXPECT_DOUBLE_EQ(second_next, third_next);
 }
 
 TEST(IdealConfigurationTest, RepeatedSamplingHandlesNegativeUnitWinding) {

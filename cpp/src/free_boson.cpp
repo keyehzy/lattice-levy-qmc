@@ -161,7 +161,8 @@ double log_one_particle_trace(const double duration, const Model &model) {
   return log_one_particle_trace(duration, OneParticleSpectrum(model));
 }
 
-CanonicalEnsemble::CanonicalEnsemble(Model model) : model_(model), spectrum_(model_) {
+CanonicalEnsemble::CanonicalEnsemble(Model model, NumericalOptions numerical)
+    : model_(model), free_path_kernels_(model_, numerical), spectrum_(model_) {
   if (model_.particle_count() == std::numeric_limits<std::size_t>::max()) {
     throw std::overflow_error("canonical table size exceeds size_t");
   }
@@ -253,20 +254,17 @@ std::vector<Cycle> CanonicalEnsemble::sample_cycles(const std::size_t particle_c
   return cycles;
 }
 
-Coord sample_winding_1d(const Coord linear_size, const double duration, const double hopping,
-                        Random &random, const NumericalOptions &options) {
-  if (linear_size < 1) {
-    throw std::invalid_argument("linear_size must be positive");
+Coord FreePathKernels::sample_winding_1d(const double duration, Random &random) const {
+  const TorusLayout *const layout = torus_layout();
+  if (layout == nullptr) {
+    throw std::invalid_argument("winding sampling requires a torus layout");
   }
   if (!std::isfinite(duration) || duration < 0.0) {
     throw std::invalid_argument("duration must be finite and nonnegative");
   }
-  if (!std::isfinite(hopping) || hopping < 0.0) {
-    throw std::invalid_argument("hopping must be finite and nonnegative");
-  }
-  options.validate();
+  const Coord linear_size = layout->linear_size();
 
-  const double argument = 2.0 * hopping * duration;
+  const double argument = 2.0 * hopping() * duration;
   if (!std::isfinite(argument)) {
     throw std::overflow_error("winding Bessel argument overflowed");
   }
@@ -280,8 +278,9 @@ Coord sample_winding_1d(const Coord linear_size, const double duration, const do
       initial > static_cast<double>(std::numeric_limits<std::size_t>::max())) {
     throw std::overflow_error("initial winding support overflowed");
   }
-  const SymmetricWindingWeights winding_weights = find_winding_support(
-      linear_size, argument, options, std::max<std::size_t>(4, static_cast<std::size_t>(initial)));
+  const SymmetricWindingWeights winding_weights =
+      find_winding_support(linear_size, argument, numerical(),
+                           std::max<std::size_t>(4, static_cast<std::size_t>(initial)));
   const std::size_t support = winding_weights.support;
 
   if (support > static_cast<std::size_t>(std::numeric_limits<Coord>::max()) ||
@@ -298,6 +297,12 @@ Coord sample_winding_1d(const Coord linear_size, const double duration, const do
     return static_cast<Coord>(selected - support);
   }
   return -static_cast<Coord>(support - selected);
+}
+
+Coord sample_winding_1d(const Coord linear_size, const double duration, const double hopping,
+                        Random &random, const NumericalOptions &options) {
+  return FreePathKernels(TorusLayout(linear_size, 1), hopping, options)
+      .sample_winding_1d(duration, random);
 }
 
 } // namespace qmc

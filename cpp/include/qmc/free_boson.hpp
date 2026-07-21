@@ -43,15 +43,18 @@ private:
   std::vector<double> sines_;
 };
 
-// One validated free model and the canonical recursion derived from it. Prefix
-// queries through any particle count not exceeding model().particle_count() reuse
-// the same physical parameters and recursion.
+// One validated free model, numerical path policy, and canonical recursion
+// derived from them. Prefix queries through any particle count not exceeding
+// model().particle_count() reuse the same physical parameters and recursion.
 class CanonicalEnsemble {
 public:
-  explicit CanonicalEnsemble(Model model);
+  explicit CanonicalEnsemble(Model model, NumericalOptions numerical = NumericalOptions{});
 
   [[nodiscard]] const Model &model() const noexcept { return model_; }
   [[nodiscard]] const OneParticleSpectrum &spectrum() const noexcept { return spectrum_; }
+  [[nodiscard]] const FreePathKernels &free_path_kernels() const noexcept {
+    return free_path_kernels_;
+  }
   // log Z_1(ell*beta), with index zero unused and set to negative infinity.
   [[nodiscard]] std::span<const double> log_cycle_weights() const noexcept { return log_z_; }
   // Canonical log partitions, with log_partitions()[0] == 0.
@@ -65,6 +68,7 @@ public:
 
 private:
   Model model_;
+  FreePathKernels free_path_kernels_;
   OneParticleSpectrum spectrum_;
   std::vector<double> log_z_;
   std::vector<double> log_Z_;

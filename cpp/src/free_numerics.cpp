@@ -1,6 +1,7 @@
 #include "qmc/free_numerics.hpp"
 
 #include "adaptive_discrete_support.hpp"
+#include "checked_math.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -9,6 +10,7 @@
 #include <limits>
 #include <mutex>
 #include <numbers>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -28,30 +30,8 @@ void validate_hopping(const double hopping) {
   }
 }
 
-std::uint64_t coordinate_offset(const Coord value) {
-  constexpr auto minimum = std::numeric_limits<Coord>::min();
-  return static_cast<std::uint64_t>(value) - static_cast<std::uint64_t>(minimum);
-}
-
-Coord coordinate_from_offset(const std::uint64_t offset) {
-  constexpr auto sign_offset = std::uint64_t{1} << 63U;
-  if (offset < sign_offset) {
-    return std::numeric_limits<Coord>::min() + static_cast<Coord>(offset);
-  }
-  return static_cast<Coord>(offset - sign_offset);
-}
-
-std::pair<bool, std::uint64_t> displacement(const Coord a, const Coord b) {
-  const auto a_offset = coordinate_offset(a);
-  const auto b_offset = coordinate_offset(b);
-  if (b_offset >= a_offset) {
-    return {true, b_offset - a_offset};
-  }
-  return {false, a_offset - b_offset};
-}
-
 Coord apply_jump_counts(const Coord start, const std::uint64_t plus, const std::uint64_t minus) {
-  auto offset = coordinate_offset(start);
+  auto offset = detail::coordinate_offset(start);
   if (plus >= minus) {
     const auto increase = plus - minus;
     if (increase > std::numeric_limits<std::uint64_t>::max() - offset) {
@@ -65,10 +45,184 @@ Coord apply_jump_counts(const Coord start, const std::uint64_t plus, const std::
     }
     offset -= decrease;
   }
-  return coordinate_from_offset(offset);
+  return detail::coordinate_from_offset(offset);
+}
+
+const TorusLayout &require_torus_layout(const std::optional<TorusLayout> &layout) {
+  if (!layout.has_value()) {
+    throw std::invalid_argument("free path kernel operation requires a torus layout");
+  }
+  return *layout;
+}
+
+struct DisplacedWindingWeights {
+  std::vector<Coord> windings;
+  std::vector<double> weights;
+};
+
+Coord centered_torus_displacement(const Coord delta, const Coord linear_size) {
+  Coord result = torus_mod(delta, linear_size);
+  if (result > linear_size / 2) {
+    result -= linear_size;
+  }
+  return result;
+}
+
+Coord displaced_winding_coordinate(const Coord delta, const Coord linear_size,
+                                   const Coord winding) {
+  const Coord winding_displacement = detail::checked_scale(
+      linear_size, winding, "torus bridge winding displacement exceeds int64 range");
+  return detail::checked_add(delta, winding_displacement,
+                             "torus bridge displacement exceeds int64 range");
+}
+
+double displaced_winding_weight(const Coord delta, const Coord linear_size, const Coord winding,
+                                const double argument) {
+  const Coord covering_displacement = displaced_winding_coordinate(delta, linear_size, winding);
+  const auto [unused_sign, order] = detail::displacement(0, covering_displacement);
+  static_cast<void>(unused_sign);
+  return scaled_modified_bessel_i(order, argument);
+}
+
+std::size_t initial_displaced_winding_support(const double argument, const Coord linear_size) {
+  const double estimate =
+      std::ceil(8.0 * std::sqrt(std::max(argument, 1.0)) / static_cast<double>(linear_size)) + 4.0;
+  if (!std::isfinite(estimate) || estimate < 0.0 ||
+      estimate > static_cast<double>(std::numeric_limits<Coord>::max())) {
+    throw std::overflow_error("torus bridge winding support overflowed");
+  }
+  return std::max<std::size_t>(4, static_cast<std::size_t>(estimate));
+}
+
+std::optional<double> displaced_winding_log_tail_bound(const Coord delta, const Coord linear_size,
+                                                       const double argument,
+                                                       const std::size_t support) {
+  if (support > static_cast<std::size_t>(std::numeric_limits<Coord>::max()) - 2) {
+    throw std::overflow_error("displaced winding tail index overflowed");
+  }
+  double tail_bound = 0.0;
+  for (const Coord sign : {Coord{-1}, Coord{1}}) {
+    const Coord first_winding = sign * static_cast<Coord>(support + 1);
+    const Coord second_winding = sign * static_cast<Coord>(support + 2);
+    const double first = displaced_winding_weight(delta, linear_size, first_winding, argument);
+    if (first == 0.0) {
+      continue;
+    }
+    const double second = displaced_winding_weight(delta, linear_size, second_winding, argument);
+    const double ratio = second / first;
+    if (!std::isfinite(ratio) || ratio >= 1.0) {
+      return std::nullopt;
+    }
+    tail_bound += first / (1.0 - ratio);
+  }
+  if (tail_bound == 0.0) {
+    return -std::numeric_limits<double>::infinity();
+  }
+  return std::log(tail_bound);
+}
+
+DisplacedWindingWeights
+materialize_displaced_winding_weights(const double zero_weight,
+                                      const std::vector<double> &negative_weights,
+                                      const std::vector<double> &positive_weights) {
+  if (negative_weights.size() != positive_weights.size() ||
+      negative_weights.size() > (std::numeric_limits<std::size_t>::max() - 1) / 2) {
+    throw std::overflow_error("displaced winding support size overflowed");
+  }
+  DisplacedWindingWeights result;
+  const std::size_t support = negative_weights.size();
+  result.windings.reserve((2 * support) + 1);
+  result.weights.reserve((2 * support) + 1);
+  for (std::size_t magnitude = support; magnitude > 0; --magnitude) {
+    result.windings.push_back(-static_cast<Coord>(magnitude));
+    result.weights.push_back(negative_weights[magnitude - 1]);
+  }
+  result.windings.push_back(0);
+  result.weights.push_back(zero_weight);
+  for (std::size_t magnitude = 1; magnitude <= support; ++magnitude) {
+    result.windings.push_back(static_cast<Coord>(magnitude));
+    result.weights.push_back(positive_weights[magnitude - 1]);
+  }
+  return result;
+}
+
+DisplacedWindingWeights displaced_winding_weights_1d(Coord delta, const Coord linear_size,
+                                                     const double duration, const double hopping,
+                                                     const NumericalOptions &options) {
+  validate_nonnegative_time(duration, "duration");
+  delta = centered_torus_displacement(delta, linear_size);
+
+  const double argument = 2.0 * hopping * duration;
+  if (!std::isfinite(argument)) {
+    throw std::overflow_error("torus bridge Bessel argument overflowed");
+  }
+  if (argument == 0.0) {
+    if (delta != 0) {
+      return {};
+    }
+    return DisplacedWindingWeights{.windings = {0}, .weights = {1.0}};
+  }
+
+  const std::size_t maximum_support =
+      std::min(options.max_winding, static_cast<std::size_t>(std::numeric_limits<Coord>::max()));
+  detail::AdaptiveDiscreteSupport support(
+      initial_displaced_winding_support(argument, linear_size), maximum_support,
+      options.tail_tolerance, "displaced winding support exceeded max_winding",
+      "displaced winding support overflowed", "failed to evaluate displaced winding weights");
+  const double zero_weight = displaced_winding_weight(delta, linear_size, 0, argument);
+  support.add_weight(zero_weight);
+  std::vector<double> negative_weights;
+  std::vector<double> positive_weights;
+
+  while (true) {
+    negative_weights.reserve(support.support());
+    positive_weights.reserve(support.support());
+    while (negative_weights.size() < support.support()) {
+      const std::size_t magnitude = negative_weights.size() + 1;
+      const auto signed_magnitude = static_cast<Coord>(magnitude);
+      const double negative =
+          displaced_winding_weight(delta, linear_size, -signed_magnitude, argument);
+      const double positive =
+          displaced_winding_weight(delta, linear_size, signed_magnitude, argument);
+      negative_weights.push_back(negative);
+      positive_weights.push_back(positive);
+      support.add_weight(negative);
+      support.add_weight(positive);
+    }
+    if (support.tail_is_controlled(
+            displaced_winding_log_tail_bound(delta, linear_size, argument, support.support()))) {
+      return materialize_displaced_winding_weights(zero_weight, negative_weights, positive_weights);
+    }
+    support.grow(detail::SupportGrowth{.minimum = 8, .factor = 1.5});
+  }
+}
+
+Coord reduced_endpoint_delta(const Coord left, const Coord right, const TorusLayout &layout) {
+  const Coord reduced_left = layout.reduce(left);
+  const Coord reduced_right = layout.reduce(right);
+  const Coord delta = reduced_right >= reduced_left ? reduced_right - reduced_left
+                                                    : -(reduced_left - reduced_right);
+  return centered_torus_displacement(delta, layout.linear_size());
 }
 
 } // namespace
+
+FreePathKernels::FreePathKernels(const double hopping, NumericalOptions numerical)
+    : hopping_(hopping), numerical_(numerical), layout_(std::nullopt) {
+  validate_hopping(hopping_);
+  numerical_.validate();
+}
+
+FreePathKernels::FreePathKernels(TorusLayout layout, const double hopping,
+                                 NumericalOptions numerical)
+    : hopping_(hopping), numerical_(numerical), layout_(std::move(layout)) {
+  validate_hopping(hopping_);
+  numerical_.validate();
+}
+
+FreePathKernels::FreePathKernels(const Model &model, NumericalOptions numerical)
+    : FreePathKernels(TorusLayout(model.linear_size(), model.dimension()), model.hopping(),
+                      numerical) {}
 
 double scaled_modified_bessel_i(const std::uint64_t order, const double argument) {
   if (!std::isfinite(argument) || argument < 0.0) {
@@ -142,9 +296,8 @@ double log_sum_exp(const std::span<const double> values) {
   return maximum + std::log(scaled_sum);
 }
 
-std::uint64_t sample_bessel_pair_count(const std::uint64_t abs_delta, const double lambda,
-                                       Random &random, const NumericalOptions &options) {
-  options.validate();
+std::uint64_t FreePathKernels::sample_bessel_pair_count(const std::uint64_t abs_delta,
+                                                        const double lambda, Random &random) const {
   if (!std::isfinite(lambda) || lambda < 0.0) {
     throw std::invalid_argument("lambda must be finite and nonnegative");
   }
@@ -173,7 +326,7 @@ std::uint64_t sample_bessel_pair_count(const std::uint64_t abs_delta, const doub
 
   const double log_lambda = std::log(lambda);
   detail::AdaptiveDiscreteSupport support(
-      initial_support, options.max_bessel_terms, options.tail_tolerance,
+      initial_support, numerical_.max_bessel_terms, numerical_.tail_tolerance,
       "Bessel-count support exceeded max_bessel_terms", "discrete support size overflowed",
       "failed to evaluate Bessel-count weights");
   std::vector<double> log_weights;
@@ -220,13 +373,16 @@ std::uint64_t sample_bessel_pair_count(const std::uint64_t abs_delta, const doub
   }
 }
 
-Coord sample_midpoint_covering_1d(const Coord a, const Coord b, const double tau_left,
-                                  const double tau_right, const double hopping, Random &random,
-                                  const NumericalOptions &options) {
+std::uint64_t sample_bessel_pair_count(const std::uint64_t abs_delta, const double lambda,
+                                       Random &random, const NumericalOptions &options) {
+  return FreePathKernels(0.0, options).sample_bessel_pair_count(abs_delta, lambda, random);
+}
+
+Coord FreePathKernels::sample_midpoint_covering_1d(const Coord a, const Coord b,
+                                                   const double tau_left, const double tau_right,
+                                                   Random &random) const {
   validate_nonnegative_time(tau_left, "tau_left");
   validate_nonnegative_time(tau_right, "tau_right");
-  validate_hopping(hopping);
-  options.validate();
 
   const double total = tau_left + tau_right;
   if (!std::isfinite(total)) {
@@ -245,8 +401,8 @@ Coord sample_midpoint_covering_1d(const Coord a, const Coord b, const double tau
     return b;
   }
 
-  const auto [positive, abs_delta] = displacement(a, b);
-  const double lambda = hopping * total;
+  const auto [positive, abs_delta] = detail::displacement(a, b);
+  const double lambda = hopping_ * total;
   if (!std::isfinite(lambda)) {
     throw std::overflow_error("hopping times bridge duration overflowed");
   }
@@ -257,7 +413,7 @@ Coord sample_midpoint_covering_1d(const Coord a, const Coord b, const double tau
     return a;
   }
 
-  const std::uint64_t pairs = sample_bessel_pair_count(abs_delta, lambda, random, options);
+  const std::uint64_t pairs = sample_bessel_pair_count(abs_delta, lambda, random);
   const std::uint64_t larger = checked_count_sum(pairs, abs_delta);
   const std::uint64_t plus = positive ? larger : pairs;
   const std::uint64_t minus = positive ? pairs : larger;
@@ -266,26 +422,37 @@ Coord sample_midpoint_covering_1d(const Coord a, const Coord b, const double tau
                            random.binomial(minus, fraction_left));
 }
 
-Site sample_midpoint_covering(const Site &a, const Site &b, const double tau_left,
-                              const double tau_right, const double hopping, Random &random,
-                              const NumericalOptions &options) {
+Coord sample_midpoint_covering_1d(const Coord a, const Coord b, const double tau_left,
+                                  const double tau_right, const double hopping, Random &random,
+                                  const NumericalOptions &options) {
+  return FreePathKernels(hopping, options)
+      .sample_midpoint_covering_1d(a, b, tau_left, tau_right, random);
+}
+
+Site FreePathKernels::sample_midpoint_covering(const Site &a, const Site &b, const double tau_left,
+                                               const double tau_right, Random &random) const {
   if (a.size() != b.size()) {
     throw std::invalid_argument("a and b must have equal dimensions");
   }
   Site midpoint(a.size());
   for (std::size_t axis = 0; axis < a.size(); ++axis) {
-    midpoint[axis] = sample_midpoint_covering_1d(a[axis], b[axis], tau_left, tau_right, hopping,
-                                                 random, options);
+    midpoint[axis] = sample_midpoint_covering_1d(a[axis], b[axis], tau_left, tau_right, random);
   }
   return midpoint;
 }
 
-CoveringPath sample_bridge_covering(const Site &a, const Site &b, const double total_time,
-                                    const std::size_t steps, const double hopping, Random &random,
-                                    const NumericalOptions &options) {
+Site sample_midpoint_covering(const Site &a, const Site &b, const double tau_left,
+                              const double tau_right, const double hopping, Random &random,
+                              const NumericalOptions &options) {
+  return FreePathKernels(hopping, options)
+      .sample_midpoint_covering(a, b, tau_left, tau_right, random);
+}
+
+CoveringPath FreePathKernels::sample_bridge_covering(const Site &a, const Site &b,
+                                                     const double total_time,
+                                                     const std::size_t steps,
+                                                     Random &random) const {
   validate_nonnegative_time(total_time, "total_time");
-  validate_hopping(hopping);
-  options.validate();
   if (steps < 1) {
     throw std::invalid_argument("steps must be at least one");
   }
@@ -316,22 +483,24 @@ CoveringPath sample_bridge_covering(const Site &a, const Site &b, const double t
     const auto middle = left + (width / 2);
     const double tau_left = static_cast<double>(middle - left) * time_step;
     const double tau_right = static_cast<double>(right - middle) * time_step;
-    path[middle] = sample_midpoint_covering(path[left], path[right], tau_left, tau_right, hopping,
-                                            random, options);
+    path[middle] = sample_midpoint_covering(path[left], path[right], tau_left, tau_right, random);
     stack.emplace_back(middle, right);
     stack.emplace_back(left, middle);
   }
   return path;
 }
 
-double periodic_kernel_scaled_1d(const Coord delta, const double duration, const Coord linear_size,
-                                 const double hopping) {
+CoveringPath sample_bridge_covering(const Site &a, const Site &b, const double total_time,
+                                    const std::size_t steps, const double hopping, Random &random,
+                                    const NumericalOptions &options) {
+  return FreePathKernels(hopping, options).sample_bridge_covering(a, b, total_time, steps, random);
+}
+
+double FreePathKernels::periodic_kernel_scaled_1d(const Coord delta, const double duration) const {
   validate_nonnegative_time(duration, "duration");
-  validate_hopping(hopping);
-  if (linear_size < 1) {
-    throw std::invalid_argument("linear_size must be positive");
-  }
-  const double exponent_scale = 2.0 * hopping * duration;
+  const TorusLayout &layout = require_torus_layout(layout_);
+  const Coord linear_size = layout.linear_size();
+  const double exponent_scale = 2.0 * hopping_ * duration;
   if (!std::isfinite(exponent_scale)) {
     throw std::overflow_error("kernel exponent scale overflowed");
   }
@@ -346,18 +515,21 @@ double periodic_kernel_scaled_1d(const Coord delta, const double duration, const
   return std::max(0.0, sum / static_cast<double>(linear_size));
 }
 
-Coord sample_midpoint_torus_1d(const Coord a, const Coord b, const double tau_left,
-                               const double tau_right, const Coord linear_size,
-                               const double hopping, Random &random) {
-  if (linear_size < 1) {
-    throw std::invalid_argument("linear_size must be positive");
-  }
+double periodic_kernel_scaled_1d(const Coord delta, const double duration, const Coord linear_size,
+                                 const double hopping) {
+  return FreePathKernels(TorusLayout(linear_size, 1), hopping)
+      .periodic_kernel_scaled_1d(delta, duration);
+}
+
+Coord FreePathKernels::sample_midpoint_torus_1d(const Coord a, const Coord b, const double tau_left,
+                                                const double tau_right, Random &random) const {
+  const Coord linear_size = require_torus_layout(layout_).linear_size();
   const auto site_count = static_cast<std::size_t>(linear_size);
   std::vector<double> weights(site_count);
   for (std::size_t index = 0; index < site_count; ++index) {
     const auto site = static_cast<Coord>(index);
-    const auto [left_positive, left_delta] = displacement(a, site);
-    const auto [right_positive, right_delta] = displacement(site, b);
+    const auto [left_positive, left_delta] = detail::displacement(a, site);
+    const auto [right_positive, right_delta] = detail::displacement(site, b);
     if (left_delta > static_cast<std::uint64_t>(std::numeric_limits<Coord>::max()) ||
         right_delta > static_cast<std::uint64_t>(std::numeric_limits<Coord>::max())) {
       throw std::overflow_error("torus midpoint displacement exceeds int64 range");
@@ -366,21 +538,88 @@ Coord sample_midpoint_torus_1d(const Coord a, const Coord b, const double tau_le
         left_positive ? static_cast<Coord>(left_delta) : -static_cast<Coord>(left_delta);
     const Coord signed_right =
         right_positive ? static_cast<Coord>(right_delta) : -static_cast<Coord>(right_delta);
-    weights[index] = periodic_kernel_scaled_1d(signed_left, tau_left, linear_size, hopping) *
-                     periodic_kernel_scaled_1d(signed_right, tau_right, linear_size, hopping);
+    weights[index] = periodic_kernel_scaled_1d(signed_left, tau_left) *
+                     periodic_kernel_scaled_1d(signed_right, tau_right);
   }
   return static_cast<Coord>(random.discrete_index(weights));
 }
 
-std::vector<double> exact_midpoint_pmf_window(const Coord a, const Coord b, const double tau_left,
-                                              const double tau_right, const double hopping,
-                                              const std::span<const Coord> coordinates) {
+Coord sample_midpoint_torus_1d(const Coord a, const Coord b, const double tau_left,
+                               const double tau_right, const Coord linear_size,
+                               const double hopping, Random &random) {
+  return FreePathKernels(TorusLayout(linear_size, 1), hopping)
+      .sample_midpoint_torus_1d(a, b, tau_left, tau_right, random);
+}
+
+Site FreePathKernels::sample_torus_covering_endpoint(const Site &a, const Site &b,
+                                                     const double duration, Random &random) const {
+  if (a.size() != b.size()) {
+    throw std::invalid_argument("torus bridge endpoints must have equal dimensions");
+  }
+  const TorusLayout &layout = require_torus_layout(layout_);
+  if (a.empty()) {
+    validate_nonnegative_time(duration, "duration");
+    return {};
+  }
+  if (a.size() != layout.dimension()) {
+    throw std::invalid_argument("torus bridge endpoint dimension does not match the layout");
+  }
+
+  Site covering_end(a.size());
+  for (std::size_t axis = 0; axis < a.size(); ++axis) {
+    const Coord delta = reduced_endpoint_delta(a[axis], b[axis], layout);
+    const DisplacedWindingWeights winding_weights =
+        displaced_winding_weights_1d(delta, layout.linear_size(), duration, hopping_, numerical_);
+    if (winding_weights.weights.empty()) {
+      throw std::invalid_argument("the requested torus bridge has zero free weight");
+    }
+    const std::size_t selected = random.discrete_index(winding_weights.weights);
+    const Coord displacement = displaced_winding_coordinate(delta, layout.linear_size(),
+                                                            winding_weights.windings[selected]);
+    covering_end[axis] = detail::checked_add(a[axis], displacement,
+                                             "torus bridge covering endpoint exceeds int64 range");
+  }
+  return covering_end;
+}
+
+double FreePathKernels::log_torus_kernel_scaled(const Site &a, const Site &b,
+                                                const double duration) const {
+  if (a.size() != b.size()) {
+    throw std::invalid_argument("torus kernel endpoints must have equal dimensions");
+  }
+  const TorusLayout &layout = require_torus_layout(layout_);
+  if (a.empty()) {
+    validate_nonnegative_time(duration, "duration");
+    return 0.0;
+  }
+  if (a.size() != layout.dimension()) {
+    throw std::invalid_argument("torus kernel endpoint dimension does not match the layout");
+  }
+
+  double result = 0.0;
+  for (std::size_t axis = 0; axis < a.size(); ++axis) {
+    const Coord delta = reduced_endpoint_delta(a[axis], b[axis], layout);
+    const DisplacedWindingWeights winding_weights =
+        displaced_winding_weights_1d(delta, layout.linear_size(), duration, hopping_, numerical_);
+    const double weight =
+        std::accumulate(winding_weights.weights.begin(), winding_weights.weights.end(), 0.0);
+    if (weight <= 0.0) {
+      return -std::numeric_limits<double>::infinity();
+    }
+    result += std::log(weight);
+  }
+  return result;
+}
+
+std::vector<double>
+FreePathKernels::exact_midpoint_pmf_window(const Coord a, const Coord b, const double tau_left,
+                                           const double tau_right,
+                                           const std::span<const Coord> coordinates) const {
   validate_nonnegative_time(tau_left, "tau_left");
   validate_nonnegative_time(tau_right, "tau_right");
-  validate_hopping(hopping);
 
-  const double left_argument = 2.0 * hopping * tau_left;
-  const double right_argument = 2.0 * hopping * tau_right;
+  const double left_argument = 2.0 * hopping_ * tau_left;
+  const double right_argument = 2.0 * hopping_ * tau_right;
   const double total_argument = left_argument + right_argument;
   std::vector<double> probabilities(coordinates.size(), 0.0);
   if (total_argument == 0.0) {
@@ -392,7 +631,7 @@ std::vector<double> exact_midpoint_pmf_window(const Coord a, const Coord b, cons
     return probabilities;
   }
 
-  const auto [unused_sign, endpoint_order] = displacement(a, b);
+  const auto [unused_sign, endpoint_order] = detail::displacement(a, b);
   static_cast<void>(unused_sign);
   const double denominator = scaled_modified_bessel_i(endpoint_order, total_argument);
   if (denominator <= 0.0) {
@@ -400,14 +639,20 @@ std::vector<double> exact_midpoint_pmf_window(const Coord a, const Coord b, cons
   }
 
   for (std::size_t index = 0; index < coordinates.size(); ++index) {
-    const auto [unused_left_sign, left_order] = displacement(a, coordinates[index]);
-    const auto [unused_right_sign, right_order] = displacement(coordinates[index], b);
+    const auto [unused_left_sign, left_order] = detail::displacement(a, coordinates[index]);
+    const auto [unused_right_sign, right_order] = detail::displacement(coordinates[index], b);
     static_cast<void>(unused_left_sign);
     static_cast<void>(unused_right_sign);
     probabilities[index] = scaled_modified_bessel_i(left_order, left_argument) *
                            scaled_modified_bessel_i(right_order, right_argument) / denominator;
   }
   return probabilities;
+}
+
+std::vector<double> exact_midpoint_pmf_window(const Coord a, const Coord b, const double tau_left,
+                                              const double tau_right, const double hopping,
+                                              const std::span<const Coord> coordinates) {
+  return FreePathKernels(hopping).exact_midpoint_pmf_window(a, b, tau_left, tau_right, coordinates);
 }
 
 } // namespace qmc

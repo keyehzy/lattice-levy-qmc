@@ -59,8 +59,13 @@ rotate_configuration_time_origin(const ContinuousConfiguration &state, double sh
 
 // Samples the continuous event representation of a retained canonical ensemble.
 [[nodiscard]] ContinuousConfiguration
+sample_ideal_continuous_configuration(const CanonicalEnsemble &ensemble, Random &random);
+
+// Compatibility overload for a one-off numerical policy. Repeated workflows
+// should bind that policy when constructing CanonicalEnsemble.
+[[nodiscard]] ContinuousConfiguration
 sample_ideal_continuous_configuration(const CanonicalEnsemble &ensemble, Random &random,
-                                      const NumericalOptions &options = NumericalOptions{});
+                                      const NumericalOptions &options);
 
 // One-off convenience overload; repeated workflows should retain a CanonicalEnsemble.
 [[nodiscard]] ContinuousConfiguration

@@ -170,6 +170,13 @@ The other labels in that cycle are selected uniformly without replacement and
 shuffled to choose the directed cyclic order. Removing the chosen labels and
 repeating produces a labeled permutation with its exact canonical weight.
 
+The ensemble also owns immutable `FreePathKernels`, which bind hopping,
+bounded-tail numerical controls, and the torus layout used by its exact path
+draws. Retained skeletons, continuous bridges, interval replacements, and
+finite-`U` stitch proposals consume that owner directly. Free functions taking
+raw hopping, layout, and numerical values remain one-off wrappers and do not
+define a second numerical policy for a retained sampler.
+
 ### 4.3 Winding
 
 For a closed one-dimensional ring path of duration `s`,

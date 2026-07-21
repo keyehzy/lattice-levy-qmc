@@ -68,11 +68,11 @@ type collects one invariant that is currently spread across several files.
 | --- | --- | --- | --- |
 | P0 | Make occupancy replacement transactional (done 2026-07-19) | Correctness and simpler move code | Medium |
 | P0/P1 | Checked flat extents and `TorusLayout`/`SiteId` (done 2026-07-19); retained-grid provenance (done 2026-07-20) | Memory safety, shared geometry, and fewer allocations | Medium |
-| P0 | Bind model and canonical table (done 2026-07-19); add reusable free numerics | Correctness and large repeated-work reduction | Medium |
+| P0 | Bind model and canonical table (done 2026-07-19); reusable path kernels (done 2026-07-21) | Correctness and large repeated-work reduction | Medium |
 | P0 | Make paths/configurations valid-by-construction (done 2026-07-21) | Ownership clarity and removal of nested validation | Large |
 | P1 | Path cursor/slice migration (done 2026-07-20) | Simpler boundary semantics and faster path surgery | Medium |
 | P1 | Add a retained-measurement context (done 2026-07-20); add accumulators | Less repeated work and a smaller demo | Medium |
-| P1 | Collect reusable free-particle numerics | Numerical clarity and less repeated setup | Medium |
+| P1 | Collect reusable free-particle numerics (path-kernel slice done 2026-07-21) | Numerical clarity and less repeated setup | Medium |
 | P1 | Unify discrete log-weight draws and bounded-tail sampling (done 2026-07-20) | One truncation policy and fewer allocations | Medium |
 | P1 | Unify full/incremental action around accepted state (ownership slice done 2026-07-20) | One source of truth and faster full evaluation | Medium |
 | P1 | Make permutation topology authoritative (continuous and retained ideal done 2026-07-20) | Remove duplicated state and synchronization code | Medium |
@@ -530,8 +530,15 @@ repetitions of thermodynamics, momentum distribution, one-body density,
 twisted partition, and twist curvature at `N=64`, `L=64`, `d=1`, `beta=1.25`,
 and `t=0.9` took 0.0709-0.0717 s before the cache and 0.0180-0.0193 s after it.
 This focused result demonstrates the repeated-work reduction; it is not an
-end-to-end sampling benchmark. The base/twisted partition recurrence,
-occupation scratch, cycle-label management, and prepared path kernels remain
+end-to-end sampling benchmark. The reusable free-path-kernel slice is also
+complete. Immutable `FreePathKernels` now bind hopping, bounded-tail controls,
+and optional torus layout provenance once; `CanonicalEnsemble` owns that value,
+and retained, continuous, segment, cycle, stitch, and global sampling consume
+it directly. One-off scalar-heavy APIs remain wrappers. Exact matching-seed
+tests cover Bessel counts, midpoint and retained bridges, winding, covering and
+torus continuous bridges, torus kernel weights, complete configurations, and
+subsequent RNG position under both owned and wrapper paths. The base/twisted
+partition recurrence, occupation scratch, and cycle-label management remain
 open.
 
 Remaining evidence:
@@ -549,22 +556,18 @@ Remaining evidence:
   (`src/observables.cpp:422-475`).
 - `occupation_moments()` allocates log-term vectors for every momentum mode
   (`src/observables.cpp:126-155`).
-- public midpoint/bridge functions repeatedly accept adjacent durations,
-  hopping, lattice size, step count, and numerical options as raw positional
-  values (`include/qmc/free_numerics.hpp:23-55` and
-  `include/qmc/path.hpp:56-72`). Several are mutually convertible, and every
-  call restates parameters that are constant for a model.
 
 Recommendation:
 
 - Completed 2026-07-21: add a `OneParticleSpectrum` owned by
   `CanonicalEnsemble`, with demand-derived mode energies and reusable
   one-dimensional trigonometric tables.
-- Add a validated `FreePathKernels` context (owned by the ensemble/sampler) that
-  binds hopping, numerical limits, and optional torus layout while continuing
-  to take `Random&` explicitly. Use small `BridgeRequest`/`Interval` values at
-  the longest public call sites instead of strings of convertible scalars; keep
-  concise free-function wrappers for one-off use.
+- Context portion completed 2026-07-21: add a validated `FreePathKernels`
+  context (owned by the ensemble/sampler) that binds hopping, numerical limits,
+  and optional torus layout while continuing to take `Random&` explicitly.
+  Concise free-function wrappers remain for one-off use. Small
+  `BridgeRequest`/`Interval` values remain a possible follow-up if the longest
+  public wrapper call sites prove error-prone.
 - Implement one canonical recursion taking a span or callback of log cycle
   weights; reuse a scratch buffer or streaming `log_add_exp` rather than allocate
   one vector per row.
@@ -1141,8 +1144,9 @@ visible at the assertion sites.
 6. Retained measurement context completed 2026-07-20; add accumulators, then
    optimize direct correlation kernels from benchmark evidence.
 7. Log-weight categorical draws and adaptive-support numerics completed
-   2026-07-20; canonical derivative recurrences and spectrum/trigonometric
-   caching completed 2026-07-21. Collect the remaining reusable free numerics.
+   2026-07-20; canonical derivative recurrences, spectrum/trigonometric caching,
+   and reusable free-path kernels completed 2026-07-21. Collect the remaining
+   canonical recursion scratch and cycle-label numerics.
 8. Accepted-chain ownership completed 2026-07-20; a production k-way event
    merge was benchmarked and reverted 2026-07-21. Add the bundled interaction
    measurement separately.

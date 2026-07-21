@@ -54,6 +54,11 @@ private:
 };
 
 // Exact conditioned continuous-time free bridge on the covering lattice Z^d.
+[[nodiscard]] ContinuousPath sample_continuous_bridge(const Site &a, const Site &b, double duration,
+                                                      const FreePathKernels &kernels,
+                                                      Random &random);
+
+// One-off convenience overload.
 [[nodiscard]] ContinuousPath
 sample_continuous_bridge(const Site &a, const Site &b, double duration, double hopping,
                          Random &random, const NumericalOptions &options = NumericalOptions{});
@@ -61,6 +66,12 @@ sample_continuous_bridge(const Site &a, const Site &b, double duration, double h
 // Exact continuous-time free bridge from covering representative a to the
 // physical torus site b modulo linear_size. The covering endpoint, including
 // its winding sector, is sampled as part of the bridge.
+[[nodiscard]] ContinuousPath sample_continuous_bridge_torus(const Site &a, const Site &b,
+                                                            double duration,
+                                                            const FreePathKernels &kernels,
+                                                            Random &random);
+
+// One-off convenience overload.
 [[nodiscard]] ContinuousPath
 sample_continuous_bridge_torus(const Site &a, const Site &b, double duration, Coord linear_size,
                                double hopping, Random &random,
@@ -68,6 +79,10 @@ sample_continuous_bridge_torus(const Site &a, const Site &b, double duration, Co
 
 // Log of exp(-2*hopping*duration*dimension) times the factorized torus kernel.
 // The common exponential scale cancels in endpoint-matching probabilities.
+[[nodiscard]] double log_torus_kernel_scaled(const Site &a, const Site &b, double duration,
+                                             const FreePathKernels &kernels);
+
+// One-off convenience overload.
 [[nodiscard]] double log_torus_kernel_scaled(const Site &a, const Site &b, double duration,
                                              Coord linear_size, double hopping,
                                              const NumericalOptions &options = NumericalOptions{});
@@ -78,6 +93,11 @@ sample_continuous_bridge_torus(const Site &a, const Site &b, double duration, Co
                                                                 std::span<const double> cut_times);
 
 // Replaces (tau0, tau1] by an exact free bridge with its covering endpoints fixed.
+[[nodiscard]] ContinuousPath resample_path_interval(const ContinuousPath &path, double tau0,
+                                                    double tau1, const FreePathKernels &kernels,
+                                                    Random &random);
+
+// One-off convenience overload.
 [[nodiscard]] ContinuousPath
 resample_path_interval(const ContinuousPath &path, double tau0, double tau1, double hopping,
                        Random &random, const NumericalOptions &options = NumericalOptions{});

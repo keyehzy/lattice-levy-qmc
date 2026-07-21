@@ -139,14 +139,18 @@ private:
 
 class CanonicalEnsemble {
 public:
-  explicit CanonicalEnsemble(Model);
+  explicit CanonicalEnsemble(Model, NumericalOptions = {});
   const Model& model() const noexcept;
+  const OneParticleSpectrum& spectrum() const noexcept;
+  const FreePathKernels& free_path_kernels() const noexcept;
   std::span<const double> log_cycle_weights() const noexcept;
   std::span<const double> log_partitions() const noexcept;
   std::vector<Cycle> sample_cycles(Random&) const;
 
 private:
   Model model_;
+  OneParticleSpectrum spectrum_;
+  FreePathKernels free_path_kernels_;
   std::vector<double> log_z_; // index 0 unused/-infinity
   std::vector<double> log_Z_; // log_Z_[0] == 0
 };
@@ -234,9 +238,25 @@ explicit `numpy.random.Generator`. Exact cross-language sample streams are not
 a useful default requirement because standard-library distribution algorithms
 are implementation dependent.
 
-Recommended free-function surface:
+Reusable free-path context and one-off wrapper surface:
 
 ```cpp
+class FreePathKernels {
+public:
+  explicit FreePathKernels(double hopping, NumericalOptions = {});
+  FreePathKernels(TorusLayout, double hopping, NumericalOptions = {});
+  explicit FreePathKernels(const Model&, NumericalOptions = {});
+
+  std::uint64_t sample_bessel_pair_count(
+      std::uint64_t abs_delta, double lambda, Random&) const;
+  Coord sample_midpoint_covering_1d(
+      Coord a, Coord b, double tau_left, double tau_right, Random&) const;
+  std::vector<Site> sample_bridge_covering(
+      const Site& a, const Site& b, double duration, std::size_t steps,
+      Random&) const;
+  Coord sample_winding_1d(double duration, Random&) const;
+};
+
 std::uint64_t sample_bessel_pair_count(
     std::uint64_t abs_delta, double lambda, Random&,
     const NumericalOptions&);
@@ -266,9 +286,10 @@ ContinuousPath resample_path_interval(
     Random&, const NumericalOptions&);
 ```
 
-The model-level functions can be wrapped by stateful classes later if
-profiling shows a benefit from cached momentum grids or Bessel workspaces.
-Starting with pure functions keeps their probability contracts testable.
+`CanonicalEnsemble` retains one `FreePathKernels` value, and repeated retained
+or continuous sampling uses its validated numerical policy. The free functions
+construct one-off contexts so their probability contracts remain independently
+testable and existing concise call sites remain available.
 
 ## 5. Sampler interface
 
@@ -325,11 +346,9 @@ class InteractingSampler {
 
  private:
   InteractingModel model_;
-  NumericalOptions numerical_;
   Random random_;
-  ContinuousConfiguration state_;
-  double pair_overlap_;
-  double action_;
+  CanonicalEnsemble free_ensemble_;
+  AcceptedChainState accepted_state_;
 };
 ```
 

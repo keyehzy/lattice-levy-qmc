@@ -16,6 +16,7 @@ struct NumericalOptions {
   std::size_t max_winding = 1'000'000;
 
   void validate() const;
+  bool operator==(const NumericalOptions &) const = default;
 };
 
 // Public construction parameters for an ideal canonical system on an L^d torus.

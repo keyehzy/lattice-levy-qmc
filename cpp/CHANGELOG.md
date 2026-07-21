@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add an immutable `OneParticleSpectrum`, owned by `CanonicalEnsemble`, with a
   checked torus layout and reusable one-dimensional momentum, sine, and cosine
   tables.
+- Add immutable `FreePathKernels`, owned by `CanonicalEnsemble`, to bind
+  hopping, numerical work limits, and optional torus provenance for retained
+  and continuous exact free-path operations.
 - Add a validated `Permutation` value with authoritative successor storage and
   a deterministic read-only cycle decomposition.
 - Add an owning `RetainedMeasurementContext` so equal-time and retained-density
@@ -67,6 +70,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   derivatives, momentum energies, one-body density matrices, twisted
   partitions, and twist curvature without eagerly materializing all `L^d`
   momentum modes.
+- Route retained bridges, continuous bridges, winding draws, interval updates,
+  and stitch weights through ensemble-owned free-path kernels; scalar-heavy
+  free functions remain available as one-off compatibility wrappers.
 - Exclude GoogleTest translation units from clang-tidy analysis while retaining
   the existing project check profile for library and example targets.
 - Prepare and validate complete sweep, run, and random-seam plans before their

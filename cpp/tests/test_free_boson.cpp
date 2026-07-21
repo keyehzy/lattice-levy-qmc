@@ -20,6 +20,9 @@ static_assert(std::is_same_v<decltype(std::declval<const qmc::CanonicalEnsemble 
                              const qmc::Model &>);
 static_assert(std::is_same_v<decltype(std::declval<const qmc::CanonicalEnsemble &>().spectrum()),
                              const qmc::OneParticleSpectrum &>);
+static_assert(
+    std::is_same_v<decltype(std::declval<const qmc::CanonicalEnsemble &>().free_path_kernels()),
+                   const qmc::FreePathKernels &>);
 
 std::vector<std::size_t> permutation_cycle_lengths(const std::vector<qmc::ParticleId> &values) {
   std::vector<bool> seen(values.size(), false);
@@ -289,6 +292,35 @@ TEST(FreeBosonTest, EmptyCanonicalSystemIsValid) {
   EXPECT_DOUBLE_EQ(ensemble.log_partition(0), 0.0);
   qmc::Random random(4);
   EXPECT_TRUE(ensemble.sample_cycles(random).empty());
+}
+
+TEST(FreeBosonTest, CanonicalEnsembleOwnsItsFreePathNumericalPolicy) {
+  const qmc::NumericalOptions numerical{
+      .tail_tolerance = 1e-12,
+      .max_bessel_terms = 50'000,
+      .max_winding = 20'000,
+  };
+  const qmc::Model model(qmc::ModelParameters{
+      .particle_count = 2,
+      .beta = 0.7,
+      .linear_size = 5,
+      .dimension = 2,
+      .hopping = 0.9,
+  });
+  const qmc::CanonicalEnsemble ensemble(model, numerical);
+  const qmc::FreePathKernels &kernels = ensemble.free_path_kernels();
+
+  EXPECT_DOUBLE_EQ(kernels.hopping(), model.hopping());
+  EXPECT_EQ(kernels.numerical(), numerical);
+  ASSERT_NE(kernels.torus_layout(), nullptr);
+  EXPECT_EQ(*kernels.torus_layout(), ensemble.spectrum().layout());
+
+  qmc::Random context_random(611);
+  qmc::Random wrapper_random(611);
+  EXPECT_EQ(
+      kernels.sample_winding_1d(1.4, context_random),
+      qmc::sample_winding_1d(model.linear_size(), 1.4, model.hopping(), wrapper_random, numerical));
+  EXPECT_DOUBLE_EQ(context_random.uniform_open(), wrapper_random.uniform_open());
 }
 
 TEST(FreeBosonTest, WindingHandlesZeroWeightAndLimits) {
