@@ -24,27 +24,37 @@ bool nearly_equal_time(const double left, const double right) {
 }
 
 void validate_continuous_model(const Model &model) {
+  model.validate();
   if (model.beta <= 0.0) {
     throw std::invalid_argument("continuous configurations require positive beta");
   }
 }
 
-void validate_worldlines(const ContinuousConfiguration &configuration, const Model &model,
-                         const TorusLayout &layout) {
-  if (configuration.worldlines.size() != model.particle_count) {
-    throw std::logic_error("continuous worldline count does not match particle_count");
+void validate_configuration_components(const Model &model, const Permutation &topology,
+                                       const std::span<const ContinuousPath> worldlines,
+                                       const bool audit_paths) {
+  validate_continuous_model(model);
+  if (topology.size() != model.particle_count) {
+    throw std::invalid_argument("continuous topology size does not match particle_count");
   }
+  if (worldlines.size() != model.particle_count) {
+    throw std::invalid_argument("continuous worldline count does not match particle_count");
+  }
+  const TorusLayout layout(model.linear_size, model.dimension);
   for (std::size_t particle = 0; particle < model.particle_count; ++particle) {
-    const ContinuousPath &path = configuration.worldlines[particle];
-    path.validate(model.dimension);
+    const ContinuousPath &path = worldlines[particle];
+    if (audit_paths) {
+      path.validate(model.dimension);
+    } else if (path.dimension() != model.dimension) {
+      throw std::invalid_argument("continuous path endpoint dimension mismatch");
+    }
     if (!nearly_equal_time(path.duration(), model.beta)) {
-      throw std::logic_error("continuous worldline duration does not match beta");
+      throw std::invalid_argument("continuous worldline duration does not match beta");
     }
     const ContinuousPath &successor =
-        configuration
-            .worldlines[configuration.topology().successor(static_cast<ParticleId>(particle))];
+        worldlines[topology.successor(static_cast<ParticleId>(particle))];
     if (layout.encode_covering(path.end()) != layout.encode_covering(successor.start())) {
-      throw std::logic_error(
+      throw std::invalid_argument(
           "continuous worldline endpoint does not join its permutation successor");
     }
   }
@@ -116,8 +126,8 @@ std::vector<ContinuousPath> sample_paths_for_cycle(const Cycle &labels, const Mo
 } // namespace detail
 
 ContinuousConfiguration rotate_configuration_time_origin(const ContinuousConfiguration &state,
-                                                         const Model &model, const double shift) {
-  state.validate(model);
+                                                         const double shift) {
+  const Model &model = state.model();
   if (!std::isfinite(shift) || shift < 0.0 || shift >= model.beta) {
     throw std::invalid_argument("time-origin shift must lie in [0, beta)");
   }
@@ -127,9 +137,9 @@ ContinuousConfiguration rotate_configuration_time_origin(const ContinuousConfigu
 
   std::vector<detail::PathSlice> prefixes;
   std::vector<detail::PathSlice> suffixes;
-  prefixes.reserve(state.worldlines.size());
-  suffixes.reserve(state.worldlines.size());
-  for (const ContinuousPath &path : state.worldlines) {
+  prefixes.reserve(state.worldlines().size());
+  suffixes.reserve(state.worldlines().size());
+  for (const ContinuousPath &path : state.worldlines()) {
     detail::PathCursor cursor(path);
     const detail::PathCut start_cut = cursor.cut(0.0);
     detail::PathCut seam_cut;
@@ -155,12 +165,12 @@ ContinuousConfiguration rotate_configuration_time_origin(const ContinuousConfigu
   }
 
   std::vector<ContinuousPath> paths;
-  paths.reserve(state.worldlines.size());
-  for (std::size_t particle = 0; particle < state.worldlines.size(); ++particle) {
-    const ContinuousPath &path = state.worldlines[particle];
+  paths.reserve(state.worldlines().size());
+  for (std::size_t particle = 0; particle < state.worldlines().size(); ++particle) {
+    const ContinuousPath &path = state.path(static_cast<ParticleId>(particle));
     const ParticleId successor_label =
         state.topology().successor(static_cast<ParticleId>(particle));
-    const ContinuousPath &successor = state.worldlines[successor_label];
+    const ContinuousPath &successor = state.path(successor_label);
     Site successor_translation(model.dimension);
     for (std::size_t axis = 0; axis < successor_translation.size(); ++axis) {
       successor_translation[axis] =
@@ -175,35 +185,34 @@ ContinuousConfiguration rotate_configuration_time_origin(const ContinuousConfigu
                                                     successor_translation, model.beta));
   }
 
-  ContinuousConfiguration rotated(state.topology(), std::move(paths), state.log_Z0_N);
-  rotated.validate(model);
-  return rotated;
+  return {model, state.topology(), std::move(paths)};
 }
 
-ContinuousConfiguration::ContinuousConfiguration(Permutation topology_value,
-                                                 std::vector<ContinuousPath> worldline_values,
-                                                 const double log_partition)
-    : worldlines(std::move(worldline_values)), log_Z0_N(log_partition),
-      topology_(std::move(topology_value)) {}
+ContinuousConfiguration::ContinuousConfiguration(Model model, Permutation topology,
+                                                 std::vector<ContinuousPath> worldlines)
+    : model_(model), topology_(std::move(topology)), worldlines_(std::move(worldlines)) {
+  validate_configuration_components(model_, topology_, worldlines_, false);
+}
 
 void ContinuousConfiguration::replace_topology(Permutation topology_value) noexcept {
   topology_ = std::move(topology_value);
 }
 
-void ContinuousConfiguration::validate(const Model &model) const {
-  validate_continuous_model(model);
-  if (!std::isfinite(log_Z0_N)) {
-    throw std::logic_error("continuous log_Z0_N must be finite");
+const ContinuousPath &ContinuousConfiguration::path(const ParticleId label) const {
+  return worldlines_.at(static_cast<std::size_t>(label));
+}
+
+void ContinuousConfiguration::validate() const {
+  try {
+    validate_configuration_components(model_, topology_, worldlines_, true);
+  } catch (const std::invalid_argument &error) {
+    throw std::logic_error(error.what());
   }
-  if (topology_.size() != model.particle_count) {
-    throw std::logic_error("continuous topology size does not match particle_count");
-  }
-  validate_worldlines(*this, model, TorusLayout(model.linear_size, model.dimension));
 }
 
 std::size_t ContinuousConfiguration::event_count() const {
   std::size_t count = 0;
-  for (const ContinuousPath &path : worldlines) {
+  for (const ContinuousPath &path : worldlines_) {
     count = detail::checked_add_size(count, path.event_count(),
                                      "continuous configuration event count exceeds size_t");
   }
@@ -219,16 +228,14 @@ std::vector<std::size_t> ContinuousConfiguration::cycle_lengths() const {
   return lengths;
 }
 
-std::vector<Site> ContinuousConfiguration::positions_at(const double tau,
-                                                        const Model &model) const {
-  validate(model);
-  if (!std::isfinite(tau) || tau < 0.0 || tau > model.beta) {
+std::vector<Site> ContinuousConfiguration::positions_at(const double tau) const {
+  if (!std::isfinite(tau) || tau < 0.0 || tau > model_.beta) {
     throw std::invalid_argument("tau must lie in [0, beta]");
   }
-  const TorusLayout layout(model.linear_size, model.dimension);
+  const TorusLayout layout(model_.linear_size, model_.dimension);
   std::vector<Site> positions;
-  positions.reserve(worldlines.size());
-  for (const ContinuousPath &path : worldlines) {
+  positions.reserve(worldlines_.size());
+  for (const ContinuousPath &path : worldlines_) {
     Site position = path.position_at(std::min(tau, path.duration()));
     layout.reduce_into(position, position);
     positions.push_back(std::move(position));
@@ -236,11 +243,10 @@ std::vector<Site> ContinuousConfiguration::positions_at(const double tau,
   return positions;
 }
 
-Site ContinuousConfiguration::total_winding(const Model &model) const {
-  validate(model);
-  Site displacement(model.dimension, 0);
-  for (const ContinuousPath &path : worldlines) {
-    for (std::size_t axis = 0; axis < model.dimension; ++axis) {
+Site ContinuousConfiguration::total_winding() const {
+  Site displacement(model_.dimension, 0);
+  for (const ContinuousPath &path : worldlines_) {
+    for (std::size_t axis = 0; axis < model_.dimension; ++axis) {
       const Coord path_displacement = detail::checked_subtract(
           path.end()[axis], path.start()[axis], "path displacement exceeds int64 range");
       displacement[axis] = detail::checked_add(displacement[axis], path_displacement,
@@ -248,10 +254,10 @@ Site ContinuousConfiguration::total_winding(const Model &model) const {
     }
   }
   for (Coord &coordinate : displacement) {
-    if (coordinate % model.linear_size != 0) {
+    if (coordinate % model_.linear_size != 0) {
       throw std::logic_error("total covering displacement is not an integer winding");
     }
-    coordinate /= model.linear_size;
+    coordinate /= model_.linear_size;
   }
   return displacement;
 }
@@ -285,10 +291,7 @@ ContinuousConfiguration sample_ideal_continuous_configuration(const CanonicalEns
     worldlines.push_back(std::move(*path));
   }
 
-  ContinuousConfiguration configuration(Permutation(std::move(permutation)), std::move(worldlines),
-                                        ensemble.log_partition(model.particle_count));
-  configuration.validate(model);
-  return configuration;
+  return {model, Permutation(std::move(permutation)), std::move(worldlines)};
 }
 
 ContinuousConfiguration sample_ideal_continuous_configuration(const Model &model, Random &random,

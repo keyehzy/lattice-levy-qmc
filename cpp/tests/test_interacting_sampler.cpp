@@ -37,8 +37,8 @@ struct InteractingSamplerTestAccess {
 
   static bool try_invalid_topology_proposal(InteractingSampler &sampler) {
     std::vector<InteractingSampler::LabeledPath> replacements;
-    replacements.emplace_back(0, sampler.state().worldlines[0]);
-    std::vector<ParticleId> invalid_permutation(sampler.state().worldlines.size(), 0);
+    replacements.emplace_back(0, sampler.state().path(0));
+    std::vector<ParticleId> invalid_permutation(sampler.state().worldlines().size(), 0);
     return sampler.try_proposal(
         InteractingSampler::LocalProposal{
             .replacements = std::move(replacements),
@@ -58,21 +58,6 @@ InteractingModel sampler_model(const double interaction) {
       .free = {.particle_count = 6, .beta = 1.1, .linear_size = 5, .dimension = 2, .hopping = 0.8},
       .interaction = interaction,
   };
-}
-
-bool equal_path(const ContinuousPath &left, const ContinuousPath &right) { return left == right; }
-
-bool equal_state(const ContinuousConfiguration &left, const ContinuousConfiguration &right) {
-  if (left.topology() != right.topology() || left.worldlines.size() != right.worldlines.size() ||
-      left.log_Z0_N != right.log_Z0_N) {
-    return false;
-  }
-  for (std::size_t index = 0; index < left.worldlines.size(); ++index) {
-    if (!equal_path(left.worldlines[index], right.worldlines[index])) {
-      return false;
-    }
-  }
-  return true;
 }
 
 struct BruteMatchingLaw {
@@ -191,8 +176,8 @@ TEST(InteractingSamplerTest, FiniteInteractionPreservesStateAndCacheInvariants) 
   };
   for (int sweep = 0; sweep < 20; ++sweep) {
     sampler.sweep(options);
-    EXPECT_NO_THROW(sampler.state().validate(sampler.model().free));
-    const double recomputed = pair_overlap_time(sampler.state(), sampler.model().free);
+    EXPECT_NO_THROW(sampler.state().validate());
+    const double recomputed = pair_overlap_time(sampler.state());
     EXPECT_NEAR(sampler.pair_overlap(), recomputed, 1e-12);
     EXPECT_NEAR(sampler.action(), sampler.model().interaction * recomputed, 1e-12);
     EXPECT_GE(sampler.pair_overlap(), 0.0);
@@ -205,7 +190,7 @@ TEST(InteractingSamplerTest, FiniteInteractionPreservesStateAndCacheInvariants) 
   EXPECT_DOUBLE_EQ(value.action, sampler.action());
   EXPECT_DOUBLE_EQ(value.pair_overlap_time, sampler.pair_overlap());
   EXPECT_EQ(value.event_count, sampler.state().event_count());
-  EXPECT_EQ(value.winding, sampler.state().total_winding(sampler.model().free));
+  EXPECT_EQ(value.winding, sampler.state().total_winding());
   EXPECT_EQ(value.cycle_lengths, sampler.state().cycle_lengths());
   EXPECT_NEAR(value.total_energy, value.kinetic_energy + value.interaction_energy, 1e-14);
 }
@@ -246,7 +231,7 @@ TEST(InteractingSamplerTest, CopiesRetainAnAuthoritativeAcceptedState) {
                               .stitch_mixture = {}});
 
   InteractingSampler copy(original);
-  EXPECT_TRUE(equal_state(copy.state(), original.state()));
+  EXPECT_EQ(copy.state(), original.state());
   EXPECT_DOUBLE_EQ(copy.pair_overlap(), original.pair_overlap());
   EXPECT_DOUBLE_EQ(copy.action(), original.action());
   EXPECT_TRUE(detail::InteractingSamplerTestAccess::occupancy_matches_state(copy));
@@ -264,8 +249,8 @@ TEST(InteractingSamplerTest, StitchUpdatesChangeTopologyAndKeepActionCacheExact)
     static_cast<void>(
         sampler.stitch_update(std::nullopt, std::nullopt, std::nullopt, 0.25, 2, 0.1));
     if (step % 10 == 0) {
-      EXPECT_NO_THROW(sampler.state().validate(model.free));
-      const double recomputed = pair_overlap_time(sampler.state(), model.free);
+      EXPECT_NO_THROW(sampler.state().validate());
+      const double recomputed = pair_overlap_time(sampler.state());
       EXPECT_NEAR(sampler.pair_overlap(), recomputed, 2e-11);
       EXPECT_NEAR(sampler.action(), model.interaction * recomputed, 2e-11);
     }
@@ -289,8 +274,8 @@ TEST(InteractingSamplerTest, CollectiveStitchMixtureKeepsActionCacheExact) {
   for (int step = 0; step < 120; ++step) {
     sampler.stitch_sweep(1, 0.55, std::nullopt, 2, 0.1, mixture);
     if (step % 9 == 0) {
-      EXPECT_NO_THROW(sampler.state().validate(model.free));
-      const double recomputed = pair_overlap_time(sampler.state(), model.free);
+      EXPECT_NO_THROW(sampler.state().validate());
+      const double recomputed = pair_overlap_time(sampler.state());
       EXPECT_NEAR(sampler.pair_overlap(), recomputed, 2e-11);
       EXPECT_NEAR(sampler.action(), model.interaction * recomputed, 2e-11);
     }
@@ -304,7 +289,7 @@ TEST(InteractingSamplerTest, ExplicitCollectiveStitchValidatesStrands) {
   InteractingSampler sampler(sampler_model(0.0), 818);
   const std::array<ParticleId, 4> strands{0, 1, 2, 3};
   EXPECT_TRUE(sampler.k_stitch_update(4, strands, std::pair<double, double>{0.1, 0.7}));
-  EXPECT_NO_THROW(sampler.state().validate(sampler.model().free));
+  EXPECT_NO_THROW(sampler.state().validate());
   EXPECT_THROW(static_cast<void>(sampler.k_stitch_update(1)), std::invalid_argument);
   EXPECT_THROW(static_cast<void>(sampler.k_stitch_update(7)), std::invalid_argument);
   EXPECT_THROW(static_cast<void>(sampler.k_stitch_update(3, strands)), std::invalid_argument);
@@ -332,7 +317,7 @@ TEST(InteractingSamplerTest, RejectedGlobalMoveLeavesAcceptedStateUntouched) {
     const double action_before = sampler.action();
     if (!sampler.global_update()) {
       observed_rejection = true;
-      EXPECT_TRUE(equal_state(sampler.state(), before));
+      EXPECT_EQ(sampler.state(), before);
       EXPECT_DOUBLE_EQ(sampler.pair_overlap(), overlap_before);
       EXPECT_DOUBLE_EQ(sampler.action(), action_before);
     }
@@ -346,8 +331,8 @@ TEST(InteractingSamplerTest, RejectedLocalMovesLeaveStateCachesAndCountersUntouc
       .interaction = 100.0,
   };
 
-  const auto expect_rejection = [&model](InteractingSampler &sampler, const MoveKind move,
-                                         const auto &attempt) {
+  const auto expect_rejection = [](InteractingSampler &sampler, const MoveKind move,
+                                   const auto &attempt) {
     bool observed_rejection = false;
     for (int trial = 0; trial < 400 && !observed_rejection; ++trial) {
       const ContinuousConfiguration before = sampler.state();
@@ -356,10 +341,10 @@ TEST(InteractingSamplerTest, RejectedLocalMovesLeaveStateCachesAndCountersUntouc
       const MoveStatistics statistics_before = sampler.statistics(move);
       if (!attempt()) {
         observed_rejection = true;
-        EXPECT_TRUE(equal_state(sampler.state(), before));
+        EXPECT_EQ(sampler.state(), before);
         EXPECT_DOUBLE_EQ(sampler.pair_overlap(), overlap_before);
         EXPECT_DOUBLE_EQ(sampler.action(), action_before);
-        EXPECT_DOUBLE_EQ(pair_overlap_time(sampler.state(), model.free), overlap_before);
+        EXPECT_DOUBLE_EQ(pair_overlap_time(sampler.state()), overlap_before);
         EXPECT_TRUE(detail::InteractingSamplerTestAccess::occupancy_matches_state(sampler));
 
         const MoveStatistics &statistics_after = sampler.statistics(move);
@@ -398,7 +383,7 @@ TEST(InteractingSamplerTest, ActionFailureAbandonsPreparedOccupancyReplacement) 
 
   EXPECT_THROW(static_cast<void>(sampler.whole_worldline_update(0)), std::overflow_error);
   detail::InteractingSamplerTestAccess::set_interaction(sampler, model.interaction);
-  EXPECT_TRUE(equal_state(sampler.state(), before));
+  EXPECT_EQ(sampler.state(), before);
   EXPECT_DOUBLE_EQ(sampler.pair_overlap(), overlap_before);
   EXPECT_DOUBLE_EQ(sampler.action(), action_before);
   EXPECT_TRUE(detail::InteractingSamplerTestAccess::occupancy_matches_state(sampler));
@@ -416,7 +401,7 @@ TEST(InteractingSamplerTest, TopologyPreparationFailureAbandonsPreparedReplaceme
   EXPECT_THROW(static_cast<void>(
                    detail::InteractingSamplerTestAccess::try_invalid_topology_proposal(sampler)),
                std::invalid_argument);
-  EXPECT_TRUE(equal_state(sampler.state(), before));
+  EXPECT_EQ(sampler.state(), before);
   EXPECT_DOUBLE_EQ(sampler.pair_overlap(), overlap_before);
   EXPECT_DOUBLE_EQ(sampler.action(), action_before);
   EXPECT_TRUE(detail::InteractingSamplerTestAccess::occupancy_matches_state(sampler));
@@ -434,7 +419,7 @@ TEST(InteractingSamplerTest, AcceptedCounterOverflowCannotPublishPreparedReplace
       sampler, std::numeric_limits<std::uint64_t>::max());
 
   EXPECT_THROW(static_cast<void>(sampler.whole_worldline_update(0)), std::overflow_error);
-  EXPECT_TRUE(equal_state(sampler.state(), before));
+  EXPECT_EQ(sampler.state(), before);
   EXPECT_DOUBLE_EQ(sampler.pair_overlap(), overlap_before);
   EXPECT_DOUBLE_EQ(sampler.action(), action_before);
   EXPECT_TRUE(detail::InteractingSamplerTestAccess::occupancy_matches_state(sampler));
@@ -510,7 +495,7 @@ TEST(InteractingSamplerTest, SupportsAttractiveInteractionAndZeroHopping) {
                                .stitch_mixture = {}});
   }
   EXPECT_EQ(sampler.state().event_count(), 0U);
-  EXPECT_NO_THROW(sampler.state().validate(model.free));
+  EXPECT_NO_THROW(sampler.state().validate());
   EXPECT_NEAR(sampler.action(), model.interaction * sampler.pair_overlap(), 1e-14);
 }
 

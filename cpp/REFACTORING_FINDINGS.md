@@ -69,7 +69,7 @@ type collects one invariant that is currently spread across several files.
 | P0 | Make occupancy replacement transactional (done 2026-07-19) | Correctness and simpler move code | Medium |
 | P0/P1 | Checked flat extents and `TorusLayout`/`SiteId` (done 2026-07-19); retained-grid provenance (done 2026-07-20) | Memory safety, shared geometry, and fewer allocations | Medium |
 | P0 | Bind model and canonical table (done 2026-07-19); add reusable free numerics | Correctness and large repeated-work reduction | Medium |
-| P0 | Make paths/configurations valid-by-construction (`ContinuousPath` and retained ideal configuration done 2026-07-20) | Ownership clarity and removal of nested validation | Large |
+| P0 | Make paths/configurations valid-by-construction (path and both configuration types done 2026-07-21; `Model` remains) | Ownership clarity and removal of nested validation | Large |
 | P1 | Path cursor/slice migration (done 2026-07-20) | Simpler boundary semantics and faster path surgery | Medium |
 | P1 | Add a retained-measurement context (done 2026-07-20); add accumulators | Less repeated work and a smaller demo | Medium |
 | P1 | Collect reusable free-particle numerics | Numerical clarity and less repeated setup | Medium |
@@ -239,8 +239,8 @@ Verification:
 
 ### 3. P0: replace mutable record bags with valid-by-construction values
 
-Status (2026-07-20): the `ContinuousPath` and retained ideal-configuration
-slices are complete. `ContinuousPath` construction now
+Status (2026-07-21): the `ContinuousPath`, retained ideal-configuration, and
+continuous-configuration slices are complete. `ContinuousPath` construction now
 owns and validates duration, endpoint dimensions, sorted event times, axes,
 directions, coordinate range, and endpoint consistency. Path storage is private;
 callers receive read-only endpoint references and an event span, and structural
@@ -251,9 +251,17 @@ storage, and `IdealBosonConfiguration` validates its private model, retained-gri
 size, topology, covering geometry, endpoint joining, and representable winding
 at construction. Its `validate()` remains an explicit diagnostic audit. Torus
 positions and cycle geometry are derived from the read-only covering buffer.
-Construction-failure tests and the existing boundary, surgery, sampling,
-topology, observable, action, and cache tests cover the migrations. `Model` and
-the remaining `ContinuousConfiguration` storage remain open.
+`ContinuousConfiguration` now likewise owns its validated model provenance,
+authoritative topology, and private path vector; it has no default invalid state,
+exposes only read-only views, and defines structural equality. Construction
+checks shape, duration, and endpoint connectivity once, while `validate()`
+retains the complete path audit. Geometry queries and time rotation consume the
+owned model, interaction estimators reject mismatched interacting-model
+provenance, and `AcceptedChainState` is the only path/topology mutation boundary.
+The unused per-sample `log_Z0_N` copy is removed in favor of the normalization
+owned by `CanonicalEnsemble`. Construction-failure tests and the existing
+boundary, surgery, sampling, topology, observable, action, and cache tests cover
+the migrations. The mutable public `Model` parameter bag remains open.
 
 Pre-refactor evidence:
 
@@ -733,14 +741,16 @@ without a workload-specific crossover.
 
 ### 10. P1: make permutation topology authoritative
 
-Status (2026-07-20): the continuous and retained ideal slices are complete. A validated
-`Permutation` now owns authoritative successors and a private deterministic
-cycle cache, exposing both only through read-only views. `ContinuousConfiguration`
-stores one private topology value instead of parallel public cycle and successor
-vectors. Sampling, time rotation, cycle updates, and stitch construction consume
-that value. Stitch preparation validates the complete proposed permutation while
-the occupancy replacement is staged, and acceptance publishes topology with one
-non-throwing move. Construction, deterministic decomposition, invalid-successor,
+Status (2026-07-21): the continuous and retained ideal slices are complete. A
+validated `Permutation` now owns authoritative successors and a private
+deterministic cycle cache, exposing both only through read-only views.
+`ContinuousConfiguration` stores one private topology value instead of parallel
+public cycle and successor vectors; its path storage is also private as of the
+valid-by-construction configuration slice. Sampling, time rotation, cycle
+updates, and stitch construction consume that value. Stitch preparation
+validates the complete proposed permutation while the occupancy replacement is
+staged, and acceptance publishes topology with one non-throwing move.
+Construction, deterministic decomposition, invalid-successor,
 endpoint-connectivity, accepted/rejected stitch, and transaction-failure tests
 cover the migration. `IdealBosonConfiguration` now uses the same authoritative
 topology and stores only one private covering-space retained-worldline buffer.
@@ -1087,9 +1097,10 @@ visible at the assertion sites.
 4. Completed 2026-07-20: `PathCursor`/`PathSlice` migration for split,
    resample, stitch, and time-origin rotation, with exact traversal and boundary
    equivalence tests.
-5. Completed 2026-07-20: `ContinuousPath` and retained dense/configuration
-   encapsulation, plus authoritative continuous and retained `Permutation`
-   topology; full validation remains available as an explicit diagnostic audit.
+5. Completed 2026-07-21: `ContinuousPath`, retained dense/configuration, and
+   `ContinuousConfiguration` encapsulation, plus authoritative continuous and
+   retained `Permutation` topology; full validation remains available as an
+   explicit diagnostic audit. Immutable `Model` preparation remains separate.
 6. Retained measurement context completed 2026-07-20; add accumulators, then
    optimize direct correlation kernels from benchmark evidence.
 7. Log-weight categorical draws and adaptive-support numerics completed

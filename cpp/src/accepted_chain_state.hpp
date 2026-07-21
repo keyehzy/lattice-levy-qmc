@@ -3,7 +3,6 @@
 
 #include "occupancy_index.hpp"
 #include "qmc/continuous_configuration.hpp"
-#include "qmc/model.hpp"
 #include "qmc/permutation.hpp"
 #include "qmc/torus_layout.hpp"
 
@@ -50,7 +49,7 @@ public:
     OccupancyIndex::ReplacementTransaction occupancy_transaction_;
   };
 
-  AcceptedChainState(const Model &model, ContinuousConfiguration configuration);
+  explicit AcceptedChainState(ContinuousConfiguration configuration);
 
   AcceptedChainState(const AcceptedChainState &) = default;
   AcceptedChainState &operator=(const AcceptedChainState &) = default;
@@ -82,9 +81,8 @@ private:
                                   const std::optional<Permutation> &topology) const;
   void publish(ReplacementTransaction &transaction) noexcept;
 
-  Model model_;
-  TorusLayout layout_;
   ContinuousConfiguration configuration_;
+  TorusLayout layout_;
   OccupancyIndex occupancy_;
   double pair_overlap_ = 0.0;
 };

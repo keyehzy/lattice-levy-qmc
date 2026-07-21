@@ -52,12 +52,11 @@ void AcceptedChainState::ReplacementTransaction::commit() noexcept {
   owner_ = nullptr;
 }
 
-AcceptedChainState::AcceptedChainState(const Model &model, ContinuousConfiguration configuration)
-    : model_(model), layout_(model_.linear_size, model_.dimension),
-      configuration_(std::move(configuration)), occupancy_(model_) {
-  model_.validate();
-  configuration_.validate(model_);
-  occupancy_.rebuild(configuration_.worldlines);
+AcceptedChainState::AcceptedChainState(ContinuousConfiguration configuration)
+    : configuration_(std::move(configuration)),
+      layout_(configuration_.model().linear_size, configuration_.model().dimension),
+      occupancy_(configuration_.model()) {
+  occupancy_.rebuild(configuration_.worldlines_);
   pair_overlap_ = occupancy_.pair_overlap();
   validate_overlap(pair_overlap_);
 }
@@ -70,21 +69,21 @@ AcceptedChainState::path_after_replacement(const ParticleId label,
   if (replacement != replacements.end() && replacement->label == label) {
     return replacement->path;
   }
-  return configuration_.worldlines[label];
+  return configuration_.worldlines_[label];
 }
 
 void AcceptedChainState::validate_replacement_inputs(
     const std::vector<PathReplacement> &replacements) const {
   for (std::size_t index = 0; index < replacements.size(); ++index) {
     const PathReplacement &replacement = replacements[index];
-    if (static_cast<std::size_t>(replacement.label) >= configuration_.worldlines.size() ||
+    if (static_cast<std::size_t>(replacement.label) >= configuration_.worldlines_.size() ||
         (index != 0 && replacements[index - 1].label == replacement.label)) {
       throw std::logic_error("path replacements contain an invalid or duplicate label");
     }
-    if (replacement.path.dimension() != model_.dimension) {
+    if (replacement.path.dimension() != configuration_.model_.dimension) {
       throw std::invalid_argument("replacement path dimension does not match the model");
     }
-    if (!nearly_equal_time(replacement.path.duration(), model_.beta)) {
+    if (!nearly_equal_time(replacement.path.duration(), configuration_.model_.beta)) {
       throw std::invalid_argument("replacement path duration does not match beta");
     }
   }
@@ -93,7 +92,7 @@ void AcceptedChainState::validate_replacement_inputs(
 bool AcceptedChainState::replacement_endpoints_unchanged(
     const std::vector<PathReplacement> &replacements) const {
   return std::ranges::all_of(replacements, [this](const PathReplacement &replacement) {
-    const ContinuousPath &accepted = configuration_.worldlines[replacement.label];
+    const ContinuousPath &accepted = configuration_.worldlines_[replacement.label];
     return layout_.encode_covering(replacement.path.start()) ==
                layout_.encode_covering(accepted.start()) &&
            layout_.encode_covering(replacement.path.end()) ==
@@ -104,10 +103,10 @@ bool AcceptedChainState::replacement_endpoints_unchanged(
 void AcceptedChainState::validate_replacement_connectivity(
     const std::vector<PathReplacement> &replacements, const Permutation &topology,
     const bool topology_changed) const {
-  if (topology.size() != configuration_.worldlines.size()) {
+  if (topology.size() != configuration_.worldlines_.size()) {
     throw std::logic_error("replacement topology size does not match the accepted state");
   }
-  for (std::size_t particle = 0; particle < configuration_.worldlines.size(); ++particle) {
+  for (std::size_t particle = 0; particle < configuration_.worldlines_.size(); ++particle) {
     const auto label = static_cast<ParticleId>(particle);
     const ParticleId successor_label = topology.successor(label);
     if (!topology_changed &&
@@ -150,7 +149,7 @@ AcceptedChainState::begin_replacement(std::vector<PathReplacement> replacements,
   for (const PathReplacement &replacement : replacements) {
     views.push_back(PathReplacementView{
         .label = replacement.label,
-        .old_path = configuration_.worldlines[replacement.label],
+        .old_path = configuration_.worldlines_[replacement.label],
         .new_path = replacement.path,
     });
   }
@@ -168,7 +167,7 @@ void AcceptedChainState::publish(ReplacementTransaction &transaction) noexcept {
   static_assert(std::is_nothrow_swappable_v<ContinuousPath>);
   static_assert(std::is_nothrow_move_assignable_v<Permutation>);
   for (PathReplacement &replacement : transaction.replacements_) {
-    std::swap(configuration_.worldlines[replacement.label], replacement.path);
+    std::swap(configuration_.worldlines_[replacement.label], replacement.path);
   }
   if (transaction.topology_.has_value()) {
     configuration_.replace_topology(std::move(*transaction.topology_));
@@ -178,7 +177,7 @@ void AcceptedChainState::publish(ReplacementTransaction &transaction) noexcept {
 }
 
 bool AcceptedChainState::occupancy_matches_configuration() const {
-  return occupancy_.represents(configuration_.worldlines);
+  return occupancy_.represents(configuration_.worldlines_);
 }
 
 double AcceptedChainState::occupancy_pair_overlap() { return occupancy_.pair_overlap(); }

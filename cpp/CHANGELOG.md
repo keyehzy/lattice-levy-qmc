@@ -38,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Make `ContinuousPath` a valid-by-construction value with private storage,
   read-only endpoint/event views, and structural equality; malformed paths are
   now rejected at construction instead of remaining mutable public records.
+- Make `ContinuousConfiguration` a valid-by-construction value that owns its
+  model provenance, topology, and private world-line storage; geometry queries
+  now consume that provenance and interaction estimators reject a mismatched
+  interacting model without revalidating every path.
 - Store continuous-configuration topology as one `Permutation`; cycle views are
   now derived by that owner and stitch acceptance publishes topology with one
   non-throwing move instead of synchronizing two public vectors.
@@ -60,6 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and canonical table separately, preventing mismatched physical provenance.
 - Remove retained samples' duplicate torus/cycle path storage and copied
   `log_ZN`; canonical normalization remains owned by `CanonicalEnsemble`.
+- Remove continuous samples' copied `log_Z0_N`; canonical normalization remains
+  owned by `CanonicalEnsemble` rather than each sampled configuration.
 
 ### Fixed
 

@@ -142,15 +142,21 @@ private:
   std::vector<double> log_Z_; // log_Z_[0] == 0
 };
 
-struct ContinuousConfiguration {
-  std::vector<Cycle> cycles;
-  std::vector<ParticleId> permutation;
-  std::vector<ContinuousPath> worldlines; // indexed by particle label
-  double log_Z0_N;
+class ContinuousConfiguration {
+public:
+  ContinuousConfiguration(Model, Permutation, std::vector<ContinuousPath>);
+  const Model& model() const noexcept;
+  const Permutation& topology() const noexcept;
+  std::span<const ContinuousPath> worldlines() const noexcept;
+  const ContinuousPath& path(ParticleId) const;
+  void validate() const;
+  std::size_t event_count() const;
+  Site total_winding() const;
 
-  void validate(const Model&) const;
-  std::size_t event_count() const noexcept;
-  std::vector<Coord> total_winding(const Model&) const;
+private:
+  Model model_;
+  Permutation topology_;
+  std::vector<ContinuousPath> worldlines_; // indexed by particle label
 };
 
 struct MoveStatistics {

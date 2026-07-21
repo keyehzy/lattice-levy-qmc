@@ -40,6 +40,15 @@ void ensure_finite_result(const double value, const char *description) {
   }
 }
 
+void validate_configuration_model(const ContinuousConfiguration &configuration,
+                                  const InteractingModel &model) {
+  model.validate();
+  if (configuration.model() != model.free) {
+    throw std::invalid_argument(
+        "continuous configuration provenance does not match the interacting model");
+  }
+}
+
 using OccupancyMap = std::unordered_map<SiteId, std::uint64_t, SiteIdHash>;
 
 struct OverlapWorkspace {
@@ -172,59 +181,49 @@ double pair_overlap_time_for_paths(const Model &model,
 
 } // namespace detail
 
-double pair_overlap_time(const ContinuousConfiguration &configuration, const Model &model) {
-  configuration.validate(model);
+double pair_overlap_time(const ContinuousConfiguration &configuration) {
   std::vector<const ContinuousPath *> paths;
-  paths.reserve(configuration.worldlines.size());
-  for (const ContinuousPath &path : configuration.worldlines) {
+  paths.reserve(configuration.worldlines().size());
+  for (const ContinuousPath &path : configuration.worldlines()) {
     paths.push_back(&path);
   }
-  return detail::pair_overlap_time_for_paths(model, paths);
+  return detail::pair_overlap_time_for_paths(configuration.model(), paths);
 }
 
 double interaction_action(const ContinuousConfiguration &configuration,
                           const InteractingModel &model, const double chemical_potential) {
-  model.validate();
+  validate_configuration_model(configuration, model);
   if (!std::isfinite(chemical_potential)) {
     throw std::invalid_argument("chemical potential must be finite");
   }
   const double action =
-      (model.interaction * pair_overlap_time(configuration, model.free)) -
+      (model.interaction * pair_overlap_time(configuration)) -
       (chemical_potential * static_cast<double>(model.free.particle_count) * model.free.beta);
   ensure_finite_result(action, "interaction action overflowed");
   return action;
 }
 
-double kinetic_energy_estimator(const ContinuousConfiguration &configuration, const Model &model) {
-  configuration.validate(model);
-  if (model.beta <= 0.0) {
-    throw std::invalid_argument("kinetic energy estimator requires positive beta");
-  }
-  return -static_cast<double>(configuration.event_count()) / model.beta;
+double kinetic_energy_estimator(const ContinuousConfiguration &configuration) {
+  return -static_cast<double>(configuration.event_count()) / configuration.model().beta;
 }
 
 double interaction_energy_estimator(const ContinuousConfiguration &configuration,
                                     const InteractingModel &model) {
-  model.validate();
-  const double energy =
-      model.interaction * pair_overlap_time(configuration, model.free) / model.free.beta;
+  validate_configuration_model(configuration, model);
+  const double energy = model.interaction * pair_overlap_time(configuration) / model.free.beta;
   ensure_finite_result(energy, "interaction energy estimator overflowed");
   return energy;
 }
 
 double total_energy_estimator(const ContinuousConfiguration &configuration,
                               const InteractingModel &model) {
-  return kinetic_energy_estimator(configuration, model.free) +
+  return kinetic_energy_estimator(configuration) +
          interaction_energy_estimator(configuration, model);
 }
 
-double double_occupancy_per_site(const ContinuousConfiguration &configuration, const Model &model) {
-  configuration.validate(model);
-  if (model.beta <= 0.0) {
-    throw std::invalid_argument("double occupancy requires positive beta");
-  }
-  return pair_overlap_time(configuration, model) /
-         (model.beta * static_cast<double>(model.volume()));
+double double_occupancy_per_site(const ContinuousConfiguration &configuration) {
+  const Model &model = configuration.model();
+  return pair_overlap_time(configuration) / (model.beta * static_cast<double>(model.volume()));
 }
 
 } // namespace qmc
