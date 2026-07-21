@@ -631,8 +631,8 @@ complete. A private `PreparedPermanent` owns its validated log-weight matrix and
 maximum 256-state recursion table, then samples into a fixed-capacity matching
 with fixed-capacity row scratch and without revalidating the matrix or table.
 Exact recursion, input ownership, invalid-input, unique-matching, and
-distribution tests cover the boundary. The legacy two-strand draw remains
-separate pending the stitch-mechanics work in finding 11.
+distribution tests cover the boundary. The legacy two-strand draw was routed
+through this same prepared-permanent path in finding 11 on 2026-07-21.
 
 Pre-slice evidence:
 
@@ -863,9 +863,13 @@ regressions prove invalid sweep, run, and random-seam requests preserve the
 configuration, occupancy-derived caches, statistics, and subsequent random
 stream. Valid default segment/stitch updates remain no-ops for undersized
 systems, while explicitly malformed segment/stitch options now fail
-consistently. Translation-unit splitting,
-seam/bridge-distribution caching, fixed-capacity strand selection, and removal
-of the legacy two-strand matching order remain open.
+consistently. The legacy two-strand matching order is also removed: every
+supported strand count now evaluates its matrix in row-major order and samples
+through the same validated `PreparedPermanent` recursion. An exact 2x2
+permanent regression and its sampled identity/exchange law cover the unified
+path; seeded pair-stitch streams may change while the proposal law remains
+unchanged. Translation-unit splitting, seam/bridge-distribution caching, and
+fixed-capacity strand selection remain open.
 
 Pre-slice evidence:
 
@@ -909,9 +913,9 @@ Remaining recommendation:
 - For at most eight strands, use a small fixed array of selected labels and scan
   candidate spans instead of allocating an `N`-bit vector and copied filtered
   vectors on each attempt.
-- Route `k == 2` through the same prepared-permanent evaluator and sampler as all
-  other supported sizes. Preserve the pair-law test, but allow its seeded sample
-  sequence to change.
+- Completed 2026-07-21: route `k == 2` through the same prepared-permanent
+  evaluator and sampler as all other supported sizes. The exact permanent and
+  sampled pair law are covered directly; its seeded sample sequence may change.
 
 A release-demo diagnostic using `U=0`, `beta=1`, `t=1`, `N=16`, `L=4`, `d=2`
 and 5,000 random-seam macro-steps with one stitch attempt per step took

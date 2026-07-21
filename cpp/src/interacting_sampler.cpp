@@ -263,21 +263,10 @@ std::vector<double> stitch_log_weights(const std::vector<Site> &left,
                                        const FreePathKernels &kernels) {
   const std::size_t strand_count = left.size();
   std::vector<double> weights(strand_count * strand_count);
-  const auto evaluate = [&](const std::size_t row, const std::size_t column) {
-    weights[(row * strand_count) + column] =
-        log_torus_kernel_scaled(left[row], right[column], duration, kernels);
-  };
-  if (strand_count == 2) {
-    // Retain the legacy evaluation order for the default pair kernel.
-    evaluate(0, 0);
-    evaluate(1, 1);
-    evaluate(0, 1);
-    evaluate(1, 0);
-    return weights;
-  }
   for (std::size_t row = 0; row < strand_count; ++row) {
     for (std::size_t column = 0; column < strand_count; ++column) {
-      evaluate(row, column);
+      weights[(row * strand_count) + column] =
+          log_torus_kernel_scaled(left[row], right[column], duration, kernels);
     }
   }
   return weights;
@@ -285,21 +274,7 @@ std::vector<double> stitch_log_weights(const std::vector<Site> &left,
 
 detail::StitchMatching sample_stitch_matching(const std::span<const double> log_weights,
                                               const std::size_t strand_count, Random &random) {
-  if (strand_count != 2) {
-    return detail::PreparedPermanent(log_weights, strand_count).sample(random);
-  }
-
-  const double log_identity = log_weights[0] + log_weights[3];
-  const double log_exchange = log_weights[1] + log_weights[2];
-  if (!std::isfinite(log_identity) && !std::isfinite(log_exchange)) {
-    throw std::runtime_error("both stitch matchings have zero free weight");
-  }
-  const std::array<double, 2> matching_log_weights{log_identity, log_exchange};
-  const bool exchanged = random.discrete_log_index(matching_log_weights) == 1;
-  detail::StitchMatching matching{};
-  matching[0] = exchanged ? 1 : 0;
-  matching[1] = exchanged ? 0 : 1;
-  return matching;
+  return detail::PreparedPermanent(log_weights, strand_count).sample(random);
 }
 
 ContinuousPath splice_path_interval(const detail::PathSlice &prefix_slice,

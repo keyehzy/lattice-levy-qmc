@@ -80,6 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Route pair and collective stitch requests through one `stitch_update()` API
   selected by `StitchUpdateOptions::strand_count`; seeded stitch sequences may
   change, but the proposal and acceptance laws are unchanged.
+- Route two-strand and collective stitch matchings through the same validated
+  permanent recursion and row-major weight evaluation, removing the legacy
+  pair-only draw while preserving its exact proposal law.
 
 ### Removed
 

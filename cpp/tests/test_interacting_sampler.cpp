@@ -132,6 +132,32 @@ TEST(InteractingSamplerTest, PermanentRecursionMatchesBruteForceAndLimits) {
   EXPECT_EQ(unique_permanent.sample(random), (detail::StitchMatching{0, 1, 2, 3, 4, 5, 6, 7}));
 }
 
+TEST(InteractingSamplerTest, PreparedPermanentMatchesTwoStrandLaw) {
+  const std::array<double, 4> weights{1.0, 3.0, 2.0, 5.0};
+  std::array<double, 4> log_weights{};
+  std::ranges::transform(weights, log_weights.begin(),
+                         [](const double value) { return std::log(value); });
+  const detail::PreparedPermanent permanent(log_weights, 2);
+  constexpr double identity_weight = 5.0;
+  constexpr double exchange_weight = 6.0;
+  constexpr double total_weight = identity_weight + exchange_weight;
+
+  EXPECT_EQ(permanent.strand_count(), 2);
+  EXPECT_NEAR(std::exp(permanent.log_total_weight()), total_weight, 2e-14);
+
+  Random random(721);
+  std::size_t exchanges = 0;
+  constexpr std::size_t draws = 30'000;
+  for (std::size_t draw = 0; draw < draws; ++draw) {
+    const detail::StitchMatching matching = permanent.sample(random);
+    ASSERT_LT(matching[0], 2);
+    EXPECT_EQ(matching[1], 1 - matching[0]);
+    exchanges += matching[0];
+  }
+  EXPECT_NEAR(static_cast<double>(exchanges) / static_cast<double>(draws),
+              exchange_weight / total_weight, 0.012);
+}
+
 TEST(InteractingSamplerTest, PreparedPermanentRejectsInvalidWeights) {
   const std::array<double, 1> one_weight{0.0};
   EXPECT_THROW(detail::PreparedPermanent(one_weight, 0), std::invalid_argument);
