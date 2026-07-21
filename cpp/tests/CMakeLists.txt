@@ -21,6 +21,7 @@ include(GoogleTest)
 add_executable(
   qmc_unit_tests
   test_adaptive_discrete_support.cpp
+  test_canonical_recursion.cpp
   test_configuration.cpp
   test_free_boson.cpp
   test_free_numerics.cpp

@@ -72,7 +72,7 @@ type collects one invariant that is currently spread across several files.
 | P0 | Make paths/configurations valid-by-construction (done 2026-07-21) | Ownership clarity and removal of nested validation | Large |
 | P1 | Path cursor/slice migration (done 2026-07-20) | Simpler boundary semantics and faster path surgery | Medium |
 | P1 | Add a retained-measurement context (done 2026-07-20); add accumulators | Less repeated work and a smaller demo | Medium |
-| P1 | Collect reusable free-particle numerics (path-kernel slice done 2026-07-21) | Numerical clarity and less repeated setup | Medium |
+| P1 | Collect reusable free-particle numerics (spectrum, path-kernel, and partition-recurrence slices done 2026-07-21) | Numerical clarity and less repeated setup | Medium |
 | P1 | Unify discrete log-weight draws and bounded-tail sampling (done 2026-07-20) | One truncation policy and fewer allocations | Medium |
 | P1 | Unify full/incremental action around accepted state (ownership slice done 2026-07-20) | One source of truth and faster full evaluation | Medium |
 | P1 | Make permutation topology authoritative (continuous and retained ideal done 2026-07-20) | Remove duplicated state and synchronization code | Medium |
@@ -538,22 +538,25 @@ it directly. One-off scalar-heavy APIs remain wrappers. Exact matching-seed
 tests cover Bessel counts, midpoint and retained bridges, winding, covering and
 torus continuous bridges, torus kernel weights, complete configurations, and
 subsequent RNG position under both owned and wrapper paths. The base/twisted
-partition recurrence, occupation scratch, and cycle-label management remain
-open.
+partition-recurrence slice is also complete. One private span-based recurrence
+now owns the `log Z_0 = 0` base case, validates finite-or-negative-infinity
+cycle weights and finite row results, and reuses one maximum-row scratch buffer.
+Both `CanonicalEnsemble` construction and twisted-boundary evaluation consume
+it instead of maintaining separate recursions and allocating one terms vector
+per row. Direct base-case, closed-form prefix, zero-weight, and invalid-result
+tests cover the kernel; the Python reference, permutation enumeration, and
+twisted direct-angle tests retain end-to-end coverage, with an explicit
+zero-twist/untwisted equivalence regression. Occupation scratch and cycle-label
+management remain open.
 
 Remaining evidence:
 
-- Canonical construction allocates a new `terms` vector for every particle
-  number even though the maximum row size is known at construction
-  (`src/free_boson.cpp:187-193`).
 - `CanonicalEnsemble::sample_cycles()` allocates log/probability buffers on
   every cycle, then copies the remaining labels, allocates an `N`-bit selection
   mask, and erases by scanning the full active set
   (`src/free_boson.cpp:225-251`). The many one-cycle case is consequently
   quadratic in label-management work in addition to the required canonical
   probability work.
-- canonical log recursion is implemented again for twisted boundaries
-  (`src/observables.cpp:422-475`).
 - `occupation_moments()` allocates log-term vectors for every momentum mode
   (`src/observables.cpp:126-155`).
 
@@ -568,9 +571,9 @@ Recommendation:
   Concise free-function wrappers remain for one-off use. Small
   `BridgeRequest`/`Interval` values remain a possible follow-up if the longest
   public wrapper call sites prove error-prone.
-- Implement one canonical recursion taking a span or callback of log cycle
-  weights; reuse a scratch buffer or streaming `log_add_exp` rather than allocate
-  one vector per row.
+- Completed 2026-07-21: implement one canonical recursion taking a span of log
+  cycle weights and reuse one scratch buffer rather than allocate one vector per
+  row. Ordinary and twisted partitions now share that private kernel.
 - Represent first/second log derivatives with a tiny `Jet2`/`LogDerivatives`
   value and run them through one recurrence. A dedicated two-derivative value is
   preferable to a general automatic-differentiation framework.
@@ -1144,9 +1147,10 @@ visible at the assertion sites.
 6. Retained measurement context completed 2026-07-20; add accumulators, then
    optimize direct correlation kernels from benchmark evidence.
 7. Log-weight categorical draws and adaptive-support numerics completed
-   2026-07-20; canonical derivative recurrences, spectrum/trigonometric caching,
-   and reusable free-path kernels completed 2026-07-21. Collect the remaining
-   canonical recursion scratch and cycle-label numerics.
+   2026-07-20; canonical derivative and partition recurrences,
+   spectrum/trigonometric caching, and reusable free-path kernels completed
+   2026-07-21. Collect the remaining occupation scratch and cycle-label
+   numerics.
 8. Accepted-chain ownership completed 2026-07-20; a production k-way event
    merge was benchmarked and reverted 2026-07-21. Add the bundled interaction
    measurement separately.

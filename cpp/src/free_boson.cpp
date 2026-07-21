@@ -1,6 +1,7 @@
 #include "qmc/free_boson.hpp"
 
 #include "adaptive_discrete_support.hpp"
+#include "canonical_recursion.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -170,8 +171,6 @@ CanonicalEnsemble::CanonicalEnsemble(Model model, NumericalOptions numerical)
   const auto count = model_.particle_count();
   const double negative_infinity = -std::numeric_limits<double>::infinity();
   log_z_.assign(count + 1, negative_infinity);
-  log_Z_.assign(count + 1, negative_infinity);
-  log_Z_[0] = 0.0;
   std::vector<double> trace_exponents(spectrum_.cosines().size());
 
   for (std::size_t length = 1; length <= count; ++length) {
@@ -185,16 +184,7 @@ CanonicalEnsemble::CanonicalEnsemble(Model model, NumericalOptions numerical)
     }
   }
 
-  for (std::size_t particles = 1; particles <= count; ++particles) {
-    std::vector<double> terms(particles);
-    for (std::size_t length = 1; length <= particles; ++length) {
-      terms[length - 1] = log_z_[length] + log_Z_[particles - length];
-    }
-    log_Z_[particles] = log_sum_exp(terms) - std::log(static_cast<double>(particles));
-    if (!std::isfinite(log_Z_[particles])) {
-      throw std::overflow_error("canonical partition recursion is non-finite");
-    }
-  }
+  log_Z_ = detail::canonical_log_partitions(log_z_);
 }
 
 double CanonicalEnsemble::log_partition(const std::size_t particle_count) const {

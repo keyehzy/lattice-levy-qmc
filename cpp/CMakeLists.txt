@@ -26,6 +26,7 @@ option(QMC_BUILD_STATISTICAL_TESTS "Build slower distribution-level tests" OFF)
 
 add_library(
   qmc_ideal
+  src/canonical_recursion.cpp
   src/configuration.cpp
   src/free_boson.cpp
   src/free_numerics.cpp

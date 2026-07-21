@@ -237,6 +237,21 @@ TEST(CanonicalObservablesTest, TwistedPartitionMatchesDirectMomentumAngles) {
               direct_twisted_log_partition(model, twist), 3e-14);
 }
 
+TEST(CanonicalObservablesTest, ZeroTwistUsesTheUntwistedCanonicalLaw) {
+  const qmc::Model model(qmc::ModelParameters{
+      .particle_count = 7,
+      .beta = 0.85,
+      .linear_size = 6,
+      .dimension = 3,
+      .hopping = 0.65,
+  });
+  const qmc::CanonicalEnsemble canonical(model);
+  const std::vector<double> zero_twist(model.dimension());
+
+  EXPECT_NEAR(qmc::log_canonical_partition_twisted(canonical, zero_twist),
+              canonical.log_partition(model.particle_count()), 5e-14);
+}
+
 TEST(ConfigurationObservablesTest, ExactSampleInvariantsHoldOnRetainedGrid) {
   const qmc::Model model(qmc::ModelParameters{
       .particle_count = 6,

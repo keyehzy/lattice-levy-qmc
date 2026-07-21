@@ -1,5 +1,6 @@
 #include "qmc/observables.hpp"
 
+#include "canonical_recursion.hpp"
 #include "checked_math.hpp"
 #include "qmc/free_numerics.hpp"
 #include "qmc/torus_layout.hpp"
@@ -435,7 +436,6 @@ double log_canonical_partition_twisted(const CanonicalEnsemble &ensemble,
   const auto count = model.particle_count();
   const double negative_infinity = -std::numeric_limits<double>::infinity();
   std::vector<double> log_z(count + 1, negative_infinity);
-  std::vector<double> log_Z(count + 1, negative_infinity);
   std::vector<double> exponents(spectrum.cosines().size());
   std::vector<double> twist_cosines(model.dimension());
   std::vector<double> twist_sines(model.dimension());
@@ -447,7 +447,6 @@ double log_canonical_partition_twisted(const CanonicalEnsemble &ensemble,
   }
   const auto cosines = spectrum.cosines();
   const auto sines = spectrum.sines();
-  log_Z[0] = 0.0;
   for (std::size_t length = 1; length <= count; ++length) {
     const double duration = static_cast<double>(length) * model.beta();
     const double scale = 2.0 * spectrum.hopping() * duration;
@@ -465,14 +464,7 @@ double log_canonical_partition_twisted(const CanonicalEnsemble &ensemble,
     }
     log_z[length] = value;
   }
-  for (std::size_t particles = 1; particles <= count; ++particles) {
-    std::vector<double> terms(particles);
-    for (std::size_t length = 1; length <= particles; ++length) {
-      terms[length - 1] = log_z[length] + log_Z[particles - length];
-    }
-    log_Z[particles] = log_sum_exp(terms) - std::log(static_cast<double>(particles));
-  }
-  return log_Z[count];
+  return detail::canonical_log_partitions(log_z).back();
 }
 
 double log_canonical_partition_twisted(const Model &model, std::span<const double> twist) {
