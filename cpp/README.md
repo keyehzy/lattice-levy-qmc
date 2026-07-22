@@ -195,8 +195,12 @@ tie-order convention without retaining an imaginary-time grid.
 `MatsubaraModeSet` separately owns selected torus momenta and signed frequency
 indices in frequency-major order. `ContinuousMatsubaraPlan` validates the
 continuous phase-accuracy bound and precomputes immutable spatial factors for
-reuse across configurations. The density/flux projector and ensemble response
-accumulators remain the next implementation layer.
+reuse across configurations. `continuous_particle_modes(context, plan)` then
+projects exact density residence integrals and signed bond-midpoint hopping
+impulses together in one grouped event sweep. Its unnormalised
+`ContinuousParticleModes` result owns the complete free model and mode set,
+and reports axis-resolved event counts for later response estimators. Ensemble
+normalisation and response accumulators remain the next implementation layer.
 
 See [`docs/MEASUREMENTS.md`](../docs/MEASUREMENTS.md) for estimator definitions,
 normalizations, exactness, and retained-grid conventions. The event-based

@@ -13,6 +13,9 @@
 
 namespace qmc {
 
+class ContinuousMeasurementContext;
+class ContinuousParticleModes;
+
 // Reusable continuous-time phase plan. The stricter signed-frequency bound is
 // a binary64 phase-reduction contract and is intentionally not imposed by the
 // geometry-only MatsubaraModeSet.
@@ -27,6 +30,10 @@ public:
   [[nodiscard]] const MatsubaraModeSet &modes() const noexcept { return modes_; }
 
 private:
+  friend ContinuousParticleModes
+  continuous_particle_modes(const ContinuousMeasurementContext &context,
+                            const ContinuousMatsubaraPlan &plan);
+
   MatsubaraModeSet modes_;
   // Momentum-major, then axis. These immutable factors support physical-site
   // updates and both orientations of bond-midpoint impulses.
@@ -76,6 +83,55 @@ private:
   // Includes the terminal offset, so an empty context owns the single value 0.
   std::vector<std::size_t> event_group_offsets_{0};
 };
+
+// Unnormalised density-residence and signed hopping-flux amplitudes for one
+// continuous configuration. Values use frequency-major Matsubara mode order;
+// flux adds one physical-axis component after the mode index. The result owns
+// its complete free-model and Fourier provenance. Flux uses oriented bond
+// midpoints; canonicalizing -q into [0,L) adds a reciprocal-lattice minus sign
+// for a flux component whose momentum along its bond axis is nonzero.
+class ContinuousParticleModes {
+public:
+  [[nodiscard]] const Model &model() const noexcept { return model_; }
+  [[nodiscard]] const MatsubaraModeSet &modes() const noexcept { return density_.modes(); }
+  // Integral d-tau exp(+i*omega*tau) sum_a exp(-i*q*x_a(tau)); units 1/energy.
+  // Checked mode accessors throw out_of_range.
+  [[nodiscard]] std::complex<double> density(std::size_t frequency, std::size_t momentum) const;
+  // Sum over axis hops of s*exp(+i*omega*tau-i*q*(x+s*e_axis/2)); dimensionless.
+  [[nodiscard]] std::complex<double> flux(std::size_t frequency, std::size_t momentum,
+                                          std::size_t axis) const;
+  // Total unsigned hopping-event count on one physical axis.
+  [[nodiscard]] std::size_t axis_event_count(std::size_t axis) const;
+
+private:
+  friend ContinuousParticleModes
+  continuous_particle_modes(const ContinuousMeasurementContext &context,
+                            const ContinuousMatsubaraPlan &plan);
+
+  ContinuousParticleModes(Model model, MatsubaraModeSet modes,
+                          std::vector<std::complex<double>> density_values,
+                          std::vector<std::complex<double>> flux_values,
+                          std::vector<std::size_t> axis_event_counts);
+
+  Model model_;
+  MatsubaraModeField<std::complex<double>> density_;
+  std::vector<std::complex<double>> flux_values_;
+  std::vector<std::size_t> axis_event_counts_;
+};
+
+// Projects exact residence integrals and event impulses in one grouped event
+// sweep. Throws invalid_argument when the context and plan geometry differ and
+// overflow_error/length_error when an amplitude or result shape is not finite
+// and representable.
+[[nodiscard]] ContinuousParticleModes
+continuous_particle_modes(const ContinuousMeasurementContext &context,
+                          const ContinuousMatsubaraPlan &plan);
+
+// One-off convenience overload that first owns the configuration's event
+// geometry in a ContinuousMeasurementContext.
+[[nodiscard]] ContinuousParticleModes
+continuous_particle_modes(const ContinuousConfiguration &configuration,
+                          const ContinuousMatsubaraPlan &plan);
 
 } // namespace qmc
 

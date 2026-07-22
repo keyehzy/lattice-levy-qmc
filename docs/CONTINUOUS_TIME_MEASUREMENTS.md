@@ -5,8 +5,9 @@ Date: 2026-07-22
 Status: implementation in progress. The shared Matsubara mode/result-shape
 layer, retained-result migration, and continuous phase plan (step 1), plus the
 owning continuous measurement context and deterministic event-sweep boundary
-tests (step 2), were completed on 2026-07-22. This document remains the design
-specification and contains no implementation.
+tests (step 2), plus the combined density/flux primitive and its deterministic
+identity tests (step 3), were completed on 2026-07-22. This document remains
+the design specification and contains no implementation.
 
 ## Scope and recommendation
 
@@ -874,11 +875,34 @@ spatial sign, and time-transform sign at once.
 
 ### Conjugation and time-origin rotation
 
-Because density and flux fields are real in space/time,
+Density is a site field, so with
+`bar(k)_alpha = (L-k_alpha) % L`,
 
 \[
-X(\mathbf q,i\omega_n)^*=X(-\mathbf q,-i\omega_n).
+\rho(\mathbf k,i\omega_n)^*=\rho(\bar{\mathbf k},-i\omega_n).
 \]
+
+Flux is instead evaluated at oriented bond midpoints. With momentum components
+stored canonically in `[0,L)`, replacing the signed wavevector `-q` by its
+canonical representative adds a reciprocal vector. Integer site coordinates
+are periodic under that shift, but the half-coordinate on the flux component's
+bond axis contributes a gauge sign:
+
+\[
+I_\alpha(\mathbf k,i\omega_n)^*
+=\eta_\alpha(\mathbf k)
+ I_\alpha(\bar{\mathbf k},-i\omega_n),\qquad
+\eta_\alpha(\mathbf k)=
+\begin{cases}
++1,&k_\alpha=0,\\
+-1,&k_\alpha\ne0.
+\end{cases}
+\]
+
+Equivalently, flux obeys the plain real-field conjugation identity when `-q`
+is kept as an unwrapped signed wavevector rather than canonicalized. This
+bond-basis gauge is also what keeps the Ward factor in the stated
+`2*sin(q_alpha/2)` form for canonical `q_alpha`.
 
 For the repository's `rotate_configuration_time_origin(state, shift)`
 convention, a cyclic time-origin rotation gives
@@ -1196,8 +1220,8 @@ derivative and returned decomposition explicit.
    and add the continuous plan.
 2. **Completed 2026-07-22:** Add the owning continuous measurement context and
    deterministic event-sweep boundary tests.
-3. Add density/flux primitive modes together and make the Ward identity the
-   central convention test.
+3. **Completed 2026-07-22:** Add density/flux primitive modes together and make
+   the Ward identity the central convention test.
 4. Add the density accumulator and small-system Lehmann comparisons.
 5. Add the hopping response accumulator returning `R`, `D`, and `Lambda^p`,
    followed by zero/finite-momentum ED comparisons.

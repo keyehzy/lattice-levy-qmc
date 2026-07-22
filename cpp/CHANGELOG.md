@@ -38,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `ContinuousMatsubaraPlan` with bounded binary64 phase reduction, exact
   seam/period behavior, stable interval transforms, and overflow-safe torus
   site phases.
+- Add `ContinuousParticleModes` and exact grouped-event projection of
+  unnormalised density residence amplitudes and signed bond-midpoint hopping
+  flux, including canonical-density and winding-preserving zero modes.
 - Add self-describing segment, stitch, fixed-seam stitch-sweep, and random-seam
   stitch option values.
 - Add generated compile-time version metadata in `<qmc/version.hpp>`, sourced
