@@ -131,6 +131,40 @@ the corresponding cycle length. The cycle and winding accumulators return the
 raw geometry and total winding from `observe()`, respectively, so a caller can
 write per-sample traces without evaluating those quantities twice.
 
+## Exact continuous-time Matsubara density
+
+`ContinuousMeasurementContext` owns one continuous configuration's ordered
+hopping geometry, while `ContinuousMatsubaraPlan` owns reusable phase data for
+a selected `MatsubaraModeSet`. `continuous_particle_modes(context, plan)`
+projects the exact, unnormalised density amplitude
+
+\[
+\rho_{\mathbf qn}=\int_0^\beta d\tau\,
+e^{i\omega_n\tau}\sum_a e^{-i\mathbf q\cdot\mathbf x_a(\tau)}
+\]
+
+from piecewise-constant residence intervals; it does not introduce a retained
+measurement grid.
+
+`DensityMatsubaraAccumulator` binds the complete free `Model` and mode set,
+rejects incompatible samples before mutation, and owns the sample count. For
+the homogeneous fixed-`N` model it subtracts the exact amplitude mean
+`beta*N` only at `(q,n)=(0,0)` and zero elsewhere. Its finished
+`ContinuousMatsubaraDensityCorrelations` returns
+
+\[
+\chi_{nn}(\mathbf q,i\omega_n)
+=\frac{1}{\beta V}\left\langle
+|\rho_{\mathbf qn}-\beta N\delta_{\mathbf q,0}\delta_{n,0}|^2
+\right\rangle.
+\]
+
+`mean_amplitude(frequency, momentum)` reports the sampled uncentred complex
+mean as a symmetry diagnostic, while `at(frequency, momentum)` reports the
+real nonnegative susceptibility. Both accessors use the selected mode set's
+frequency-major ordering and check each index. The result retains its complete
+model, modes, and nonzero sample count as provenance.
+
 ## Exactness and checks
 
 The canonical calculations are deterministic up to floating-point rounding.
@@ -145,5 +179,6 @@ Useful exact checks are:
 - `sum_l l <m_l> == N`;
 - `sum_r <n_r> == N` and `S(0) == N`;
 - the spatial sum of connected fixed-`N` density correlations is zero;
+- every exact continuous-time `q == 0` density susceptibility is zero;
 - each retained displacement distribution sums to one for `N > 0`;
 - twist curvature agrees with `<W_alpha^2>/beta`.

@@ -15,6 +15,7 @@ namespace qmc {
 
 class ContinuousMeasurementContext;
 class ContinuousParticleModes;
+class DensityMatsubaraAccumulator;
 
 // Reusable continuous-time phase plan. The stricter signed-frequency bound is
 // a binary64 phase-reduction contract and is intentionally not imposed by the
@@ -117,6 +118,65 @@ private:
   MatsubaraModeField<std::complex<double>> density_;
   std::vector<std::complex<double>> flux_values_;
   std::vector<std::size_t> axis_event_counts_;
+};
+
+// Connected density susceptibility for one homogeneous fixed-particle-number
+// ensemble. Values are <|delta rho(q,n)|^2>/(beta*V), have units of inverse
+// energy per site, and use the result's frequency-major Matsubara mode order.
+// The sampled uncentred mean amplitude is retained as a symmetry diagnostic.
+class ContinuousMatsubaraDensityCorrelations {
+public:
+  [[nodiscard]] const Model &model() const noexcept { return model_; }
+  [[nodiscard]] const MatsubaraModeSet &modes() const noexcept { return correlations_.modes(); }
+  [[nodiscard]] std::size_t sample_count() const noexcept { return sample_count_; }
+  // Both checked mode accessors throw out_of_range.
+  [[nodiscard]] std::complex<double> mean_amplitude(std::size_t frequency,
+                                                    std::size_t momentum) const;
+  [[nodiscard]] double at(std::size_t frequency, std::size_t momentum) const {
+    return correlations_.at(frequency, momentum);
+  }
+
+private:
+  friend class DensityMatsubaraAccumulator;
+
+  ContinuousMatsubaraDensityCorrelations(Model model, MatsubaraModeField<double> correlations,
+                                         std::vector<std::complex<double>> mean_amplitudes,
+                                         std::size_t sample_count);
+
+  Model model_;
+  MatsubaraModeField<double> correlations_;
+  std::vector<std::complex<double>> mean_amplitudes_;
+  std::size_t sample_count_;
+};
+
+// Averages exact ContinuousParticleModes density amplitudes for one complete
+// free Model and one selected Matsubara mode set. Connectedness uses the exact
+// homogeneous fixed-N mean beta*N at (q,n)=(0,0), and zero elsewhere. observe()
+// validates all provenance and candidate sums before mutating the accumulator.
+class DensityMatsubaraAccumulator {
+public:
+  // Throws invalid_argument when model beta/layout and modes differ.
+  DensityMatsubaraAccumulator(Model model, MatsubaraModeSet modes);
+
+  [[nodiscard]] const Model &model() const noexcept { return model_; }
+  [[nodiscard]] const MatsubaraModeSet &modes() const noexcept { return modes_; }
+  [[nodiscard]] std::size_t sample_count() const noexcept { return sample_count_; }
+
+  // Throws invalid_argument for different model or mode provenance and
+  // overflow_error if any candidate moment or the sample count is not
+  // representable. A failed observation leaves the accumulator unchanged.
+  void observe(const ContinuousParticleModes &values);
+  // Throws logic_error when no sample has been observed and overflow_error if
+  // a normalized result is not finite.
+  [[nodiscard]] ContinuousMatsubaraDensityCorrelations finish() const;
+
+private:
+  Model model_;
+  MatsubaraModeSet modes_;
+  std::size_t sample_count_ = 0;
+  std::vector<std::complex<double>> amplitude_sums_;
+  std::vector<double> centered_norm_sums_;
+  std::vector<std::complex<double>> analytic_means_;
 };
 
 // Projects exact residence integrals and event impulses in one grouped event

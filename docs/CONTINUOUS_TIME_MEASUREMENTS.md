@@ -6,8 +6,10 @@ Status: implementation in progress. The shared Matsubara mode/result-shape
 layer, retained-result migration, and continuous phase plan (step 1), plus the
 owning continuous measurement context and deterministic event-sweep boundary
 tests (step 2), plus the combined density/flux primitive and its deterministic
-identity tests (step 3), were completed on 2026-07-22. This document remains
-the design specification and contains no implementation.
+identity tests (step 3), plus the connected density accumulator and its
+deterministic and Lehmann-reference tests (step 4), were completed on
+2026-07-22. This document remains the design specification and contains no
+implementation.
 
 ## Scope and recommendation
 
@@ -1222,7 +1224,8 @@ derivative and returned decomposition explicit.
    deterministic event-sweep boundary tests.
 3. **Completed 2026-07-22:** Add density/flux primitive modes together and make
    the Ward identity the central convention test.
-4. Add the density accumulator and small-system Lehmann comparisons.
+4. **Completed 2026-07-22:** Add the density accumulator and small-system
+   Lehmann comparisons.
 5. Add the hopping response accumulator returning `R`, `D`, and `Lambda^p`,
    followed by zero/finite-momentum ED comparisons.
 6. Migrate full pair-overlap evaluation to the shared private event sweep only

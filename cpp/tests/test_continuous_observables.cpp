@@ -41,6 +41,14 @@ static_assert(std::is_same_v<decltype(std::declval<const ContinuousParticleModes
                              const Model &>);
 static_assert(std::is_same_v<decltype(std::declval<const ContinuousParticleModes &>().modes()),
                              const MatsubaraModeSet &>);
+static_assert(!std::default_initializable<ContinuousMatsubaraDensityCorrelations>);
+static_assert(
+    std::is_same_v<decltype(std::declval<const ContinuousMatsubaraDensityCorrelations &>().model()),
+                   const Model &>);
+static_assert(
+    std::is_same_v<decltype(std::declval<const ContinuousMatsubaraDensityCorrelations &>().modes()),
+                   const MatsubaraModeSet &>);
+static_assert(!std::default_initializable<DensityMatsubaraAccumulator>);
 
 MatsubaraModeSet make_continuous_modes(const double beta, const TorusLayout &layout,
                                        std::vector<std::vector<std::size_t>> momenta,
@@ -559,6 +567,178 @@ TEST(ContinuousParticleModesTest, RejectsContextAndPlanGeometryMismatch) {
                std::invalid_argument);
   EXPECT_THROW(static_cast<void>(continuous_particle_modes(context, wrong_layout)),
                std::invalid_argument);
+}
+
+TEST(DensityMatsubaraAccumulatorTest, UsesAnalyticCenteringAndPublishesCompleteResultProvenance) {
+  const Model model(ModelParameters{
+      .particle_count = 1,
+      .beta = 2.0,
+      .linear_size = 4,
+      .dimension = 1,
+      .hopping = 0.75,
+  });
+  const MatsubaraModeSet modes =
+      make_continuous_modes(model.beta(), TorusLayout(4, 1), {{0}, {1}}, {0, 1});
+  const ContinuousMatsubaraPlan plan(modes);
+  const ContinuousConfiguration first(model, Permutation({0}),
+                                      {ContinuousPath(model.beta(), {0}, {0}, {})});
+  const ContinuousConfiguration second(model, Permutation({0}),
+                                       {ContinuousPath(model.beta(), {2}, {2}, {})});
+  const ContinuousParticleModes first_values = continuous_particle_modes(first, plan);
+  const ContinuousParticleModes second_values = continuous_particle_modes(second, plan);
+  DensityMatsubaraAccumulator accumulator(model, modes);
+
+  EXPECT_EQ(accumulator.model(), model);
+  EXPECT_EQ(accumulator.modes(), modes);
+  EXPECT_EQ(accumulator.sample_count(), 0U);
+  EXPECT_THROW(static_cast<void>(accumulator.finish()), std::logic_error);
+
+  accumulator.observe(first_values);
+  const ContinuousMatsubaraDensityCorrelations first_result = accumulator.finish();
+  EXPECT_EQ(first_result.model(), model);
+  EXPECT_EQ(first_result.modes(), modes);
+  EXPECT_EQ(first_result.sample_count(), 1U);
+  EXPECT_EQ(first_result.mean_amplitude(0, 0), std::complex<double>(2.0, 0.0));
+  EXPECT_EQ(first_result.at(0, 0), 0.0);
+  EXPECT_NEAR(std::abs(first_result.mean_amplitude(0, 1) - std::complex<double>(2.0, 0.0)), 0.0,
+              1e-15);
+  EXPECT_NEAR(first_result.at(0, 1), 0.5, 2e-15);
+  EXPECT_EQ(first_result.mean_amplitude(1, 0), std::complex<double>(0.0, 0.0));
+  EXPECT_EQ(first_result.mean_amplitude(1, 1), std::complex<double>(0.0, 0.0));
+  EXPECT_EQ(first_result.at(1, 0), 0.0);
+  EXPECT_EQ(first_result.at(1, 1), 0.0);
+
+  accumulator.observe(second_values);
+  const ContinuousMatsubaraDensityCorrelations result = accumulator.finish();
+  EXPECT_EQ(accumulator.sample_count(), 2U);
+  EXPECT_EQ(result.sample_count(), 2U);
+  EXPECT_EQ(result.mean_amplitude(0, 0), std::complex<double>(2.0, 0.0));
+  EXPECT_EQ(result.at(0, 0), 0.0);
+  EXPECT_NEAR(std::abs(result.mean_amplitude(0, 1)), 0.0, 2e-15);
+  EXPECT_NEAR(result.at(0, 1), 0.5, 2e-15);
+
+  EXPECT_THROW(static_cast<void>(result.mean_amplitude(2, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(result.mean_amplitude(0, 2)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(result.at(2, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(result.at(0, 2)), std::out_of_range);
+}
+
+TEST(DensityMatsubaraAccumulatorTest, RejectsEveryProvenanceMismatchBeforeMutation) {
+  const Model model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const MatsubaraModeSet modes =
+      make_continuous_modes(model.beta(), TorusLayout(3, 1), {{0}, {1}}, {0});
+  EXPECT_THROW(static_cast<void>(DensityMatsubaraAccumulator(
+                   model, make_continuous_modes(2.0, TorusLayout(3, 1), {{0}}, {0}))),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(DensityMatsubaraAccumulator(
+                   model, make_continuous_modes(1.0, TorusLayout(4, 1), {{0}}, {0}))),
+               std::invalid_argument);
+
+  const ContinuousConfiguration configuration(model, Permutation({0}),
+                                              {ContinuousPath(model.beta(), {0}, {0}, {})});
+  const ContinuousParticleModes values =
+      continuous_particle_modes(configuration, ContinuousMatsubaraPlan(modes));
+  const Model different_particle_model(ModelParameters{
+      .particle_count = 2,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const ContinuousConfiguration different_particle_configuration(
+      different_particle_model, Permutation({0, 1}),
+      {ContinuousPath(different_particle_model.beta(), {0}, {0}, {}),
+       ContinuousPath(different_particle_model.beta(), {1}, {1}, {})});
+  const ContinuousParticleModes different_particle_values =
+      continuous_particle_modes(different_particle_configuration, ContinuousMatsubaraPlan(modes));
+  const Model different_model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 2.0,
+  });
+  const ContinuousConfiguration different_configuration(
+      different_model, Permutation({0}), {ContinuousPath(different_model.beta(), {0}, {0}, {})});
+  const ContinuousParticleModes different_model_values =
+      continuous_particle_modes(different_configuration, ContinuousMatsubaraPlan(modes));
+  const MatsubaraModeSet different_modes =
+      make_continuous_modes(model.beta(), TorusLayout(3, 1), {{0}, {1}}, {1});
+  const ContinuousParticleModes different_mode_values =
+      continuous_particle_modes(configuration, ContinuousMatsubaraPlan(different_modes));
+  DensityMatsubaraAccumulator accumulator(model, modes);
+
+  EXPECT_THROW(accumulator.observe(different_particle_values), std::invalid_argument);
+  EXPECT_EQ(accumulator.sample_count(), 0U);
+  EXPECT_THROW(accumulator.observe(different_model_values), std::invalid_argument);
+  EXPECT_EQ(accumulator.sample_count(), 0U);
+  EXPECT_THROW(accumulator.observe(different_mode_values), std::invalid_argument);
+  EXPECT_EQ(accumulator.sample_count(), 0U);
+
+  accumulator.observe(values);
+  EXPECT_EQ(accumulator.sample_count(), 1U);
+  EXPECT_EQ(accumulator.finish().mean_amplitude(0, 0), std::complex<double>(1.0, 0.0));
+}
+
+TEST(DensityMatsubaraAccumulatorTest, OverflowLeavesAllPreviouslyObservedMomentsUnchanged) {
+  const double beta = std::numeric_limits<double>::max() * 0.75;
+  const Model model(ModelParameters{
+      .particle_count = 1,
+      .beta = beta,
+      .linear_size = 1,
+      .dimension = 1,
+      .hopping = 0.0,
+  });
+  const MatsubaraModeSet modes = make_continuous_modes(model.beta(), TorusLayout(1, 1), {{0}}, {0});
+  const ContinuousConfiguration configuration(model, Permutation({0}),
+                                              {ContinuousPath(model.beta(), {0}, {0}, {})});
+  const ContinuousParticleModes values =
+      continuous_particle_modes(configuration, ContinuousMatsubaraPlan(modes));
+  DensityMatsubaraAccumulator accumulator(model, modes);
+
+  accumulator.observe(values);
+  const ContinuousMatsubaraDensityCorrelations before = accumulator.finish();
+  ASSERT_EQ(before.mean_amplitude(0, 0), std::complex<double>(beta, 0.0));
+  ASSERT_EQ(before.at(0, 0), 0.0);
+
+  EXPECT_THROW(accumulator.observe(values), std::overflow_error);
+  EXPECT_EQ(accumulator.sample_count(), 1U);
+  const ContinuousMatsubaraDensityCorrelations after = accumulator.finish();
+  EXPECT_EQ(after.mean_amplitude(0, 0), before.mean_amplitude(0, 0));
+  EXPECT_EQ(after.at(0, 0), before.at(0, 0));
+  EXPECT_EQ(after.sample_count(), before.sample_count());
+}
+
+TEST(DensityMatsubaraAccumulatorTest, HandlesTheEmptyFixedParticleEnsemble) {
+  const Model model(ModelParameters{
+      .particle_count = 0,
+      .beta = 1.25,
+      .linear_size = 3,
+      .dimension = 2,
+      .hopping = 0.8,
+  });
+  const MatsubaraModeSet modes =
+      make_continuous_modes(model.beta(), TorusLayout(3, 2), {{0, 0}, {1, 2}}, {-1, 0, 1});
+  const ContinuousConfiguration configuration(model, Permutation(), {});
+  const ContinuousParticleModes values =
+      continuous_particle_modes(configuration, ContinuousMatsubaraPlan(modes));
+  DensityMatsubaraAccumulator accumulator(model, modes);
+
+  accumulator.observe(values);
+  const ContinuousMatsubaraDensityCorrelations result = accumulator.finish();
+  EXPECT_EQ(result.sample_count(), 1U);
+  for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+    for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+      EXPECT_EQ(result.mean_amplitude(frequency, momentum), std::complex<double>(0.0, 0.0));
+      EXPECT_EQ(result.at(frequency, momentum), 0.0);
+    }
+  }
 }
 
 } // namespace

@@ -41,6 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `ContinuousParticleModes` and exact grouped-event projection of
   unnormalised density residence amplitudes and signed bond-midpoint hopping
   flux, including canonical-density and winding-preserving zero modes.
+- Add `DensityMatsubaraAccumulator` and the provenance-owning
+  `ContinuousMatsubaraDensityCorrelations` result for analytically centred
+  continuous-time density susceptibility and sampled mean amplitudes.
 - Add self-describing segment, stitch, fixed-seam stitch-sweep, and random-seam
   stitch option values.
 - Add generated compile-time version metadata in `<qmc/version.hpp>`, sourced

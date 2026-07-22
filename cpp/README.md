@@ -199,8 +199,14 @@ reuse across configurations. `continuous_particle_modes(context, plan)` then
 projects exact density residence integrals and signed bond-midpoint hopping
 impulses together in one grouped event sweep. Its unnormalised
 `ContinuousParticleModes` result owns the complete free model and mode set,
-and reports axis-resolved event counts for later response estimators. Ensemble
-normalisation and response accumulators remain the next implementation layer.
+and reports axis-resolved event counts for later response estimators.
+`DensityMatsubaraAccumulator` binds that complete model and mode set, rejects
+incompatible samples before mutation, and returns
+`ContinuousMatsubaraDensityCorrelations`. The result reports the sampled
+complex mean amplitude and the connected susceptibility
+`<|delta rho(q,n)|^2>/(beta*V)` with the exact homogeneous fixed-particle-number
+mean subtracted at amplitude level. Hopping-response accumulation remains a
+later implementation layer.
 
 See [`docs/MEASUREMENTS.md`](../docs/MEASUREMENTS.md) for estimator definitions,
 normalizations, exactness, and retained-grid conventions. The event-based

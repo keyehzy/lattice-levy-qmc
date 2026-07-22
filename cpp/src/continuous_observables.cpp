@@ -97,6 +97,20 @@ bool is_zero_momentum(const MatsubaraModeSet &modes, const std::size_t momentum)
                              [](const std::size_t component) { return component == 0; });
 }
 
+void validate_model_mode_geometry(const Model &model, const MatsubaraModeSet &modes,
+                                  const char *description) {
+  if (model.beta() != modes.beta() ||
+      TorusLayout(model.linear_size(), model.dimension()) != modes.layout()) {
+    throw std::invalid_argument(description);
+  }
+}
+
+MatsubaraModeSet validated_density_accumulator_modes(const Model &model, MatsubaraModeSet modes) {
+  validate_model_mode_geometry(model, modes,
+                               "density accumulator model and Matsubara geometry differ");
+  return modes;
+}
+
 void validate_projection_geometry(const ContinuousMeasurementContext &context,
                                   const MatsubaraModeSet &modes) {
   if (context.model().beta() != modes.beta() || context.layout() != modes.layout()) {
@@ -451,6 +465,135 @@ std::size_t ContinuousParticleModes::axis_event_count(const std::size_t axis) co
     throw std::out_of_range("continuous event-count axis is out of range");
   }
   return axis_event_counts_[axis];
+}
+
+ContinuousMatsubaraDensityCorrelations::ContinuousMatsubaraDensityCorrelations(
+    Model model, MatsubaraModeField<double> correlations,
+    std::vector<std::complex<double>> mean_amplitudes, const std::size_t sample_count)
+    : model_(model), correlations_(std::move(correlations)),
+      mean_amplitudes_(std::move(mean_amplitudes)), sample_count_(sample_count) {
+  validate_model_mode_geometry(
+      model_, modes(), "continuous density-correlation model and Matsubara geometry differ");
+  if (mean_amplitudes_.size() != modes().mode_count()) {
+    throw std::invalid_argument("continuous density correlations have the wrong mean extent");
+  }
+  if (sample_count_ == 0) {
+    throw std::invalid_argument("continuous density correlations require a nonzero sample count");
+  }
+  for (const std::complex<double> mean : mean_amplitudes_) {
+    if (!is_finite(mean)) {
+      throw std::invalid_argument("continuous density mean amplitude is non-finite");
+    }
+  }
+  for (const double correlation : correlations_.values()) {
+    if (!std::isfinite(correlation) || correlation < 0.0) {
+      throw std::invalid_argument("continuous density susceptibility is invalid");
+    }
+  }
+}
+
+std::complex<double>
+ContinuousMatsubaraDensityCorrelations::mean_amplitude(const std::size_t frequency,
+                                                       const std::size_t momentum) const {
+  static_cast<void>(correlations_.at(frequency, momentum));
+  return mean_amplitudes_[(frequency * modes().momentum_count()) + momentum];
+}
+
+DensityMatsubaraAccumulator::DensityMatsubaraAccumulator(Model model, MatsubaraModeSet modes)
+    : model_(model), modes_(validated_density_accumulator_modes(model_, std::move(modes))),
+      amplitude_sums_(make_checked_vector<std::complex<double>>(
+          modes_.mode_count(), "density amplitude sums exceed vector capacity")),
+      centered_norm_sums_(make_checked_vector<double>(
+          modes_.mode_count(), "density susceptibility sums exceed vector capacity")),
+      analytic_means_(make_checked_vector<std::complex<double>>(
+          modes_.mode_count(), "density analytic means exceed vector capacity")) {
+  for (std::size_t frequency = 0; frequency < modes_.frequency_count(); ++frequency) {
+    if (modes_.frequency_index(frequency) != 0) {
+      continue;
+    }
+    for (std::size_t momentum = 0; momentum < modes_.momentum_count(); ++momentum) {
+      if (is_zero_momentum(modes_, momentum)) {
+        const double zero_mode_mean = model_.beta() * static_cast<double>(model_.particle_count());
+        if (!std::isfinite(zero_mode_mean)) {
+          throw std::overflow_error("density analytic zero-mode mean is non-finite");
+        }
+        const std::size_t mode = (frequency * modes_.momentum_count()) + momentum;
+        analytic_means_[mode] = {zero_mode_mean, 0.0};
+      }
+    }
+  }
+}
+
+void DensityMatsubaraAccumulator::observe(const ContinuousParticleModes &values) {
+  if (values.model() != model_) {
+    throw std::invalid_argument("density observation has a different model");
+  }
+  if (values.modes() != modes_) {
+    throw std::invalid_argument("density observation has different Matsubara modes");
+  }
+
+  const std::size_t updated_sample_count =
+      detail::checked_add_size(sample_count_, 1, "density accumulator sample count exceeds size_t");
+  std::vector<std::complex<double>> updated_amplitude_sums = amplitude_sums_;
+  std::vector<double> updated_centered_norm_sums = centered_norm_sums_;
+  for (std::size_t frequency = 0; frequency < modes_.frequency_count(); ++frequency) {
+    for (std::size_t momentum = 0; momentum < modes_.momentum_count(); ++momentum) {
+      const std::size_t mode = (frequency * modes_.momentum_count()) + momentum;
+      const std::complex<double> amplitude = values.density(frequency, momentum);
+      if (!is_finite(amplitude)) {
+        throw std::overflow_error("density observation amplitude is non-finite");
+      }
+
+      updated_amplitude_sums[mode] += amplitude;
+      if (!is_finite(updated_amplitude_sums[mode])) {
+        throw std::overflow_error("density mean-amplitude sum is non-finite");
+      }
+
+      const std::complex<double> centered = amplitude - analytic_means_[mode];
+      if (!is_finite(centered)) {
+        throw std::overflow_error("centered density amplitude is non-finite");
+      }
+      const double centered_norm = std::norm(centered);
+      if (!std::isfinite(centered_norm)) {
+        throw std::overflow_error("density susceptibility observation is non-finite");
+      }
+      updated_centered_norm_sums[mode] += centered_norm;
+      if (!std::isfinite(updated_centered_norm_sums[mode])) {
+        throw std::overflow_error("density susceptibility sum is non-finite");
+      }
+    }
+  }
+
+  amplitude_sums_.swap(updated_amplitude_sums);
+  centered_norm_sums_.swap(updated_centered_norm_sums);
+  sample_count_ = updated_sample_count;
+}
+
+ContinuousMatsubaraDensityCorrelations DensityMatsubaraAccumulator::finish() const {
+  if (sample_count_ == 0) {
+    throw std::logic_error("cannot finish a density Matsubara accumulator without samples");
+  }
+
+  auto mean_amplitudes = make_checked_vector<std::complex<double>>(
+      modes_.mode_count(), "density mean result exceeds vector capacity");
+  auto correlations = make_checked_vector<double>(
+      modes_.mode_count(), "density susceptibility result exceeds vector capacity");
+  const auto sample_divisor = static_cast<double>(sample_count_);
+  const auto volume_divisor = static_cast<double>(model_.volume());
+  for (std::size_t mode = 0; mode < modes_.mode_count(); ++mode) {
+    mean_amplitudes[mode] = amplitude_sums_[mode] / sample_divisor;
+    correlations[mode] =
+        ((centered_norm_sums_[mode] / sample_divisor) / model_.beta()) / volume_divisor;
+    if (!is_finite(mean_amplitudes[mode])) {
+      throw std::overflow_error("density mean result is non-finite");
+    }
+    if (!std::isfinite(correlations[mode]) || correlations[mode] < 0.0) {
+      throw std::overflow_error("density susceptibility result is non-finite");
+    }
+  }
+
+  return {model_, MatsubaraModeField<double>(modes_, std::move(correlations)),
+          std::move(mean_amplitudes), sample_count_};
 }
 
 ContinuousParticleModes continuous_particle_modes(const ContinuousMeasurementContext &context,
