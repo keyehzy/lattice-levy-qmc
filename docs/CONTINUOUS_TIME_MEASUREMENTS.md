@@ -2,6 +2,8 @@
 
 Date: 2026-07-22
 
+Status: design proposal; no implementation is included in this document.
+
 ## Scope and recommendation
 
 The interacting sampler should gain a measurement layer built around exact
@@ -163,7 +165,14 @@ public:
   [[nodiscard]] const TorusLayout &layout() const noexcept;
   [[nodiscard]] std::size_t momentum_count() const noexcept;
   [[nodiscard]] std::size_t frequency_count() const noexcept;
-  // Checked mode accessors.
+  [[nodiscard]] std::size_t mode_count() const noexcept;
+  [[nodiscard]] std::span<const std::size_t>
+  momentum_indices(std::size_t momentum) const;
+  [[nodiscard]] double wavevector_component(std::size_t momentum,
+                                             std::size_t axis) const;
+  [[nodiscard]] std::int64_t frequency_index(std::size_t frequency) const;
+  [[nodiscard]] double frequency(std::size_t frequency) const;
+  bool operator==(const MatsubaraModeSet &) const = default;
 };
 
 class ContinuousMatsubaraPlan {
@@ -172,6 +181,17 @@ public:
 
   [[nodiscard]] const MatsubaraModeSet &modes() const noexcept;
   // Private reusable phase data.
+};
+
+template <class T> class MatsubaraModeField {
+public:
+  // Requires exactly modes.mode_count() values.
+  MatsubaraModeField(MatsubaraModeSet modes, std::vector<T> values);
+
+  [[nodiscard]] const MatsubaraModeSet &modes() const noexcept;
+  [[nodiscard]] std::span<const T> values() const noexcept;
+  [[nodiscard]] const T &at(std::size_t frequency,
+                            std::size_t momentum) const;
 };
 ```
 
@@ -189,8 +209,8 @@ The mode set should:
 - define frequency-major, then request-order momentum storage; vector/tensor
   component axes follow after the mode index, with the right axis varying
   fastest for a response tensor;
-- expose physical frequencies as derived values, while retaining integer
-  indices as the authoritative exact mode identity.
+- expose physical frequencies and wavevector components as derived values,
+  while retaining integer indices as the authoritative exact mode identity.
 
 Momentum components are canonical in `[0,L)`; the component of `-q` is
 `(L-k) % L`. Frequency indices remain signed rather than being reduced to a
@@ -248,6 +268,8 @@ struct ContinuousHop {
   SiteId arrival;
   Axis axis;
   std::int8_t direction;
+
+  bool operator==(const ContinuousHop &) const = default;
 };
 
 class ContinuousMeasurementContext {
@@ -301,6 +323,40 @@ mutable positions or occupancies. A private sweep state can replay the owned
 hops with particle positions and a sparse occupancy map when an observable
 needs them.
 
+The private sweep contract should make its atomicity explicit. Conceptually,
+each group is processed as follows:
+
+```text
+emit residence interval [previous_time, group_time) from the current state
+snapshot the group-level pre-state
+derive the post-state by applying every hop in stable path order
+emit group impulses from (hops, pre-state, post-state)
+install the post-state and continue
+```
+
+After the last group, it emits `[previous_time, beta)`. A group at zero thus
+precedes every positive-duration interval; a group at `beta` follows the final
+interval but still contributes periodic event impulses. Applying individual
+hops in a stable order is necessary to derive the final state and each hop's
+geometric departure, but no occupation-dependent observable may see the
+order-dependent intermediate states inside a zero-duration group. Concrete
+projectors can specialise away pre/post snapshots when they need only cached
+residence values or geometric hop data.
+
+Events stored at `0` and `beta` have the same Matsubara phase but remain two
+ordered seam-side groups, matching the path's chosen cut and endpoint
+semantics. The initial density and geometric-flux projectors are insensitive to
+that ordering. A future state-dependent impulse that wants to treat both sides
+as one cyclic coincident insertion must first define its operator ordering and
+permutation-seam replay; it must not silently coalesce the two groups.
+
+This is the reusable implementation seam: interval integration, atomic event
+groups, and replay state are shared; the functions mapping a state to a
+residence value or a group to impulses remain observable-specific. It is
+deliberately an internal contract until multiple concrete projectors establish
+whether a template, a small state machine, or direct loops give the clearest
+code.
+
 ### Per-configuration conserved-particle modes
 
 Density and hopping flux share phase conventions and an exact continuity
@@ -314,8 +370,9 @@ public:
   [[nodiscard]] std::complex<double>
   density(std::size_t frequency, std::size_t momentum) const;
   [[nodiscard]] std::complex<double>
-  flux(std::size_t frequency, std::size_t momentum, Axis axis) const;
-  [[nodiscard]] std::size_t axis_event_count(Axis axis) const;
+  flux(std::size_t frequency, std::size_t momentum,
+       std::size_t axis) const;
+  [[nodiscard]] std::size_t axis_event_count(std::size_t axis) const;
 };
 
 [[nodiscard]] ContinuousParticleModes
@@ -396,14 +453,15 @@ public:
   [[nodiscard]] const Model &model() const noexcept;
   [[nodiscard]] const MatsubaraModeSet &modes() const noexcept;
   [[nodiscard]] std::complex<double>
-  mean_flux(std::size_t frequency, std::size_t momentum, Axis axis) const;
+  mean_flux(std::size_t frequency, std::size_t momentum,
+            std::size_t axis) const;
   [[nodiscard]] std::complex<double>
   flux_response(std::size_t frequency, std::size_t momentum,
-                Axis left, Axis right) const;
-  [[nodiscard]] double diamagnetic(Axis axis) const;
+                std::size_t left, std::size_t right) const;
+  [[nodiscard]] double diamagnetic(std::size_t axis) const;
   [[nodiscard]] std::complex<double>
   paramagnetic(std::size_t frequency, std::size_t momentum,
-               Axis left, Axis right) const;
+               std::size_t left, std::size_t right) const;
 };
 ```
 
@@ -430,6 +488,7 @@ Hermitian (and positive semidefinite for the flux response), while the
 diamagnetic vector is real. Mixed-observable results may genuinely be complex
 and should have separate types rather than changing the meaning of density auto
 correlation.
+
 `paramagnetic(...)` should derive `D-R` from the two authoritative stored terms
 rather than own a third parallel tensor that can diverge.
 
@@ -439,16 +498,21 @@ matrix: spatial and imaginary-time translation invariance make distinct modes
 diagonal in the present model. A future inhomogeneous source would need an
 explicit cross-mode request and result shape.
 
-Do not expose `frequency_count`, `momentum_count`, and raw parallel vectors that
-can diverge. Both retained and continuous results should contain the same
-small `MatsubaraModeField<T>` (a `MatsubaraModeSet` plus checked owned storage)
-from
+Do not give each result separate count fields and raw parallel vectors that can
+diverge. Both retained and continuous results should contain the same small
+`MatsubaraModeField<T>` (a `MatsubaraModeSet` plus checked owned storage) from
 [repository issue 2](https://github.com/keyehzy/lattice-levy-qmc/issues/2), but
 retain distinct semantic wrappers. The existing `MatsubaraDensityCorrelations`
 is explicitly a retained-grid approximation and should retain its `RetainedGrid`
 source provenance; `ContinuousMatsubaraDensityCorrelations` records exact time
 integration and its full free `Model`. Sharing its concrete result type would
 erase a physically meaningful distinction.
+
+This owner should be mode-specific rather than a premature general tensor or
+`LatticeField`: a selected momentum request is not a complete site lattice,
+and signed continuous frequencies are not a retained time axis. The small type
+only needs checked construction, mode-indexed access, storage order, and value
+ownership.
 
 The shared field migration can preserve retained behavior exactly: construct a
 mode set with every torus momentum and frequency indices `0..M-1`, in the
@@ -457,10 +521,12 @@ under the checked owner. The continuous result uses the same indexing for a
 selected subset without making `momentum_points` mean two different things.
 
 Every `observe()` validates exact mode/model compatibility and all input shapes
-before changing sums or sample count. It computes any potentially throwing
-per-sample outer products into temporary storage first, then commits additions,
-giving the same strong boundary expected of the accepted-state transaction.
-`finish()` rejects an empty accumulator.
+before changing sums or sample count. It computes per-sample outer products and
+candidate updated sums in temporary storage, including all finite and count
+checks, then commits with nonthrowing assignments. This avoids a partially
+updated accumulator if a late tensor component overflows and gives the same
+strong boundary expected of the accepted-state transaction. `finish()` rejects
+an empty accumulator.
 
 Construction also rejects a `Model` whose `beta` or `TorusLayout` differs from
 the supplied mode set. Projection rejects a context/plan geometry mismatch;
@@ -489,12 +555,15 @@ DensityMatsubaraAccumulator density(model, modes);
 HoppingResponseAccumulator hopping(model, modes);
 
 for (std::size_t sample = 0; sample < sample_count; ++sample) {
-  advance_sampler();
+  sampler.sweep(); // Burn-in and thinning remain run-workflow policy.
   const ContinuousMeasurementContext context(sampler.state());
   const ContinuousParticleModes values = continuous_particle_modes(context, plan);
   density.observe(values);
   hopping.observe(values);
 }
+
+const auto density_result = density.finish();
+const auto hopping_result = hopping.finish();
 ```
 
 This mirrors the current retained-measurement workflow and does not wait on a
@@ -516,7 +585,8 @@ the per-configuration amplitude is
 e^{i\omega_n\tau}n_{\mathbf q}(\tau)\,d\tau.
 \]
 
-On a constant interval `[a,b)` at physical site `x`, the contribution is
+For one particle that is constant on `[a,b)` at physical site `x`, the
+contribution is
 
 \[
 e^{-i\mathbf q\cdot\mathbf x}\,\Phi_n(a,b),
@@ -529,12 +599,15 @@ where
 \begin{cases}
 b-a,&n=0,\\[3pt]
 e^{i\omega_n(a+b)/2}
-\dfrac{2\sin(\omega_n(b-a)/2)}{\omega_n},&n\ne0.
+(b-a)\,\operatorname{sinc}\!\left(\dfrac{\omega_n(b-a)}{2}\right),
+&n\ne0,
 \end{cases}
 \]
 
+Here `sinc(z) = sin(z)/z`.
+
 The midpoint/sine form avoids subtracting nearly equal complex exponentials.
-For very small arguments, implement `sin(x)/x` with a series or a tested
+For very small arguments, implement `sinc` with a series or a tested
 near-zero branch. Compute the interval midpoint as `a + (b-a)/2`, not
 `(a+b)/2`, so two valid large times cannot overflow during measurement.
 
@@ -695,8 +768,8 @@ The following identities are strong enough to define the convention in tests.
 \]
 
 so every connected `q == 0` density susceptibility is exactly zero in the
-fixed-`N` ensemble. A path with no events has zero nonzero-frequency density
-amplitude for every momentum.
+fixed-`N` ensemble. A configuration with no events has zero
+nonzero-frequency density amplitude for every momentum.
 
 ### Winding identity
 
@@ -796,6 +869,8 @@ time `tau` estimator and may ring at the frequency cutoff.
 - Compute frequencies from signed integer indices only after checking that the
   conversion and `2*pi*n/beta` are finite; a nonzero index that underflows to
   zero is also rejected.
+- Validate the magnitude of a signed frequency without first negating it, so
+  the `int64_t` minimum is rejected rather than triggering signed overflow.
 - Do not imply accurate support for every `int64_t` merely because the final
   frequency is finite. Define and test an explicit maximum `abs(n)` for reliable
   trigonometric argument reduction (or a higher-precision reduction backend),
@@ -808,6 +883,10 @@ time `tau` estimator and may ring at the frequency cutoff.
 - Use the midpoint/sine interval kernel above; special-case `n == 0` exactly.
 - Return `Phi_n(0,beta) == 0` exactly for `n != 0`, rather than evaluating
   `sin(pi*n)` in floating point.
+- Form site phases after reducing each integer product `k_alpha*x_alpha`
+  modulo `L` with an overflow-safe modular product. Converting an unreduced
+  product to `double` needlessly loses the exact torus periodicity on large
+  one-dimensional layouts.
 - Fill `q == 0` density amplitudes from the canonical identities instead of
   summing many intervals, so exact conservation is not degraded by roundoff.
 - Accumulate the signed displacement per axis with checked integer arithmetic
@@ -847,8 +926,10 @@ A coherent implementation would use:
 
 ```text
 cpp/include/qmc/matsubara_modes.hpp
+    shared geometry-only mode descriptor and checked mode-field template
+
 cpp/src/matsubara_modes.cpp
-    shared geometry-only mode descriptor and checked mode-field owner/accessors
+    non-template mode validation, indexing, and accessors
 
 cpp/include/qmc/continuous_observables.hpp
     public continuous plan, context, primitive mode sample, results/accumulators
@@ -862,8 +943,16 @@ cpp/src/continuous_observables.cpp
 
 cpp/tests/test_continuous_observables.cpp
     deterministic boundary, identity, result-shape, and ED regressions
+
+cpp/tests/test_interacting_statistical.cpp
+    sampled finite-U and high-frequency convergence checks
+
+cpp/CMakeLists.txt
+cpp/tests/CMakeLists.txt
+    source and test registration in qmc_ideal/qmc_interacting as assigned above
 ```
 
+`qmc/ideal.hpp` should include `qmc/matsubara_modes.hpp`, and
 `qmc/interacting.hpp` should include the new continuous public header. The
 geometry-only mode descriptor belongs with the lattice-transform code in
 `qmc_ideal`; all sources that mention continuous paths belong to
@@ -914,8 +1003,11 @@ failure behavior.
   unrepresentable frequency, and checked-extent overflow; projection rejects a
   context/plan geometry mismatch and accumulators reject a complete model
   mismatch.
-- For a full momentum set, plan site phases match the existing
-  `phase_for_indices`/retained-transform sign and ordering exactly.
+- Extreme one-dimensional layouts preserve torus-periodic site phases without
+  overflowing `k*x` or relying on large floating-point angle reduction.
+- For representative full momentum sets, plan site phases match the existing
+  `phase_for_indices`/retained-transform sign and ordering to a tight numerical
+  tolerance; the extreme-layout case uses an integer modular reference.
 - Accumulator validation happens before mutation; empty `finish()` fails and a
   single compatible observation preserves the per-configuration result.
 - Result accessors reject out-of-range frequency, momentum, and tensor axes.
