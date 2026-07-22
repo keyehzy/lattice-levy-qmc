@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own sample normalization.
 - Add a bundled interaction measurement that derives action, overlap, double
   occupancy, and energy estimators from one full overlap sweep.
+- Add an owning `ContinuousMeasurementContext` with physical seam positions,
+  stable globally ordered hops, and explicit equal-time event groups.
 - Add self-describing segment, stitch, fixed-seam stitch-sweep, and random-seam
   stitch option values.
 - Add generated compile-time version metadata in `<qmc/version.hpp>`, sourced

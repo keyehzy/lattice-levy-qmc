@@ -40,6 +40,7 @@ gtest_discover_tests(qmc_unit_tests PROPERTIES LABELS unit)
 add_executable(
   qmc_interacting_unit_tests
   test_continuous_configuration.cpp
+  test_continuous_observables.cpp
   test_interacting_sampler.cpp
   test_interaction.cpp
   test_occupancy_index.cpp

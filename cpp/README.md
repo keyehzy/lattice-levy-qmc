@@ -187,8 +187,16 @@ independent full overlap sweep. Use it for arbitrary configurations and audit
 checks; `sampler.observables()` derives the same scalar bundle from the
 accepted-state overlap cache.
 
+`ContinuousMeasurementContext` owns the physical positions immediately before
+time-zero events and the configuration's globally ordered hopping geometry.
+Equal-time hops are exposed as atomic groups, including distinct groups at
+`0` and `beta`, so exact continuous-time projectors can share one boundary and
+tie-order convention without retaining an imaginary-time grid.
+
 See [`docs/MEASUREMENTS.md`](../docs/MEASUREMENTS.md) for estimator definitions,
-normalizations, exactness, and retained-grid conventions.
+normalizations, exactness, and retained-grid conventions. The event-based
+continuous measurement design is documented in
+[`docs/CONTINUOUS_TIME_MEASUREMENTS.md`](../docs/CONTINUOUS_TIME_MEASUREMENTS.md).
 
 ## Measurement and plotting demo
 

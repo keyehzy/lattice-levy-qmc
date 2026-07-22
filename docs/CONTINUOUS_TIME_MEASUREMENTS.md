@@ -2,8 +2,10 @@
 
 Date: 2026-07-22
 
-Status: implementation-ready design proposal; no implementation is included in
-this document.
+Status: implementation in progress. The owning continuous measurement context
+and deterministic event-sweep boundary tests (step 2) were completed on
+2026-07-22. This document remains the design specification and contains no
+implementation.
 
 ## Scope and recommendation
 
@@ -1190,8 +1192,8 @@ derivative and returned decomposition explicit.
 
 1. Add `MatsubaraModeSet`/`MatsubaraModeField`, migrate the retained result
    wrapper with exact ordering/value equivalence, and add the continuous plan.
-2. Add the owning continuous measurement context and deterministic event-sweep
-   boundary tests.
+2. **Completed 2026-07-22:** Add the owning continuous measurement context and
+   deterministic event-sweep boundary tests.
 3. Add density/flux primitive modes together and make the Ward identity the
    central convention test.
 4. Add the density accumulator and small-system Lehmann comparisons.

@@ -1,3 +1,4 @@
+#include "continuous_test_fixtures.hpp"
 #include "qmc/continuous_configuration.hpp"
 #include "qmc/interaction.hpp"
 
@@ -275,28 +276,8 @@ TEST(ContinuousConfigurationTest, TimeOriginRotationRetainsJumpAtNewSeam) {
 }
 
 TEST(ContinuousConfigurationTest, CursorRotationMatchesCoincidentSeamTraversalExactly) {
-  const Model model(qmc::ModelParameters{
-      .particle_count = 2,
-      .beta = 1.0,
-      .linear_size = 5,
-      .dimension = 1,
-      .hopping = 1.0,
-  });
-  const ContinuousPath first(1.0, {0}, {1},
-                             {{.time = 0.0, .axis = 0, .direction = 1},
-                              {.time = 0.25, .axis = 0, .direction = 1},
-                              {.time = 0.25, .axis = 0, .direction = -1},
-                              {.time = 0.75, .axis = 0, .direction = 1},
-                              {.time = 1.0, .axis = 0, .direction = -1}});
-  const ContinuousPath second(1.0, {1}, {0},
-                              {{.time = 0.0, .axis = 0, .direction = -1},
-                               {.time = 0.25, .axis = 0, .direction = 1},
-                               {.time = 0.5, .axis = 0, .direction = 1},
-                               {.time = 0.75, .axis = 0, .direction = -1},
-                               {.time = 0.75, .axis = 0, .direction = 1},
-                               {.time = 1.0, .axis = 0, .direction = -1},
-                               {.time = 1.0, .axis = 0, .direction = -1}});
-  const ContinuousConfiguration state(model, Permutation({1, 0}), {first, second});
+  const ContinuousConfiguration state = test::coincident_seam_configuration();
+  const Model &model = state.model();
   state.validate();
 
   const ContinuousConfiguration expected =

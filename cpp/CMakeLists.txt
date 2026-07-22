@@ -57,6 +57,8 @@ add_library(
   qmc_interacting
   src/accepted_chain_state.cpp
   src/continuous_configuration.cpp
+  src/continuous_event_sweep.cpp
+  src/continuous_observables.cpp
   src/interacting_model.cpp
   src/interacting_sampler.cpp
   src/interaction.cpp
