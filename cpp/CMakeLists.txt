@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 project(
   qmc
-  VERSION 0.5.0
+  VERSION 0.6.0
   DESCRIPTION "Canonical continuous-time lattice Levy QMC"
   LANGUAGES CXX
 )
@@ -30,6 +30,7 @@ add_library(
   src/configuration.cpp
   src/free_boson.cpp
   src/free_numerics.cpp
+  src/matsubara_modes.cpp
   src/model.cpp
   src/canonical_observables.cpp
   src/lattice_transforms.cpp

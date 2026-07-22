@@ -2,14 +2,38 @@
 #define QMC_CONTINUOUS_OBSERVABLES_HPP
 
 #include "qmc/continuous_configuration.hpp"
+#include "qmc/matsubara_modes.hpp"
 #include "qmc/torus_layout.hpp"
 
+#include <complex>
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <vector>
 
 namespace qmc {
+
+// Reusable continuous-time phase plan. The stricter signed-frequency bound is
+// a binary64 phase-reduction contract and is intentionally not imposed by the
+// geometry-only MatsubaraModeSet.
+class ContinuousMatsubaraPlan {
+public:
+  static constexpr std::int64_t kMaximumAbsoluteFrequencyIndex = 1'048'576;
+
+  // Throws invalid_argument when any |n| exceeds the supported bound and
+  // overflow_error/length_error when phase storage is not representable.
+  explicit ContinuousMatsubaraPlan(MatsubaraModeSet modes);
+
+  [[nodiscard]] const MatsubaraModeSet &modes() const noexcept { return modes_; }
+
+private:
+  MatsubaraModeSet modes_;
+  // Momentum-major, then axis. These immutable factors support physical-site
+  // updates and both orientations of bond-midpoint impulses.
+  std::vector<std::complex<double>> site_step_phases_;
+  std::vector<std::complex<double>> positive_midpoint_phases_;
+  std::vector<std::complex<double>> negative_midpoint_phases_;
+};
 
 // One physical nearest-neighbor hop in a continuous configuration. Time is in
 // [0, beta], sites are reduced onto the torus, and direction retains the

@@ -2,10 +2,11 @@
 
 Date: 2026-07-22
 
-Status: implementation in progress. The owning continuous measurement context
-and deterministic event-sweep boundary tests (step 2) were completed on
-2026-07-22. This document remains the design specification and contains no
-implementation.
+Status: implementation in progress. The shared Matsubara mode/result-shape
+layer, retained-result migration, and continuous phase plan (step 1), plus the
+owning continuous measurement context and deterministic event-sweep boundary
+tests (step 2), were completed on 2026-07-22. This document remains the design
+specification and contains no implementation.
 
 ## Scope and recommendation
 
@@ -1190,8 +1191,9 @@ derivative and returned decomposition explicit.
 
 ## Implementation order
 
-1. Add `MatsubaraModeSet`/`MatsubaraModeField`, migrate the retained result
-   wrapper with exact ordering/value equivalence, and add the continuous plan.
+1. **Completed 2026-07-22:** Add `MatsubaraModeSet`/`MatsubaraModeField`,
+   migrate the retained result wrapper with exact ordering/value equivalence,
+   and add the continuous plan.
 2. **Completed 2026-07-22:** Add the owning continuous measurement context and
    deterministic event-sweep boundary tests.
 3. Add density/flux primitive modes together and make the Ward identity the

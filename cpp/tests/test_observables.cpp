@@ -371,8 +371,8 @@ TEST(ConfigurationObservablesTest, ExactSampleInvariantsHoldOnRetainedGrid) {
     EXPECT_NEAR(std::accumulate(begin, begin + static_cast<std::ptrdiff_t>(model.volume()), 0.0),
                 0.0, 2e-13);
   }
-  for (std::size_t frequency = 0; frequency < matsubara.frequencies.size(); ++frequency) {
-    EXPECT_NEAR(std::abs(matsubara.values[frequency * model.volume()]), 0.0, 3e-12);
+  for (std::size_t frequency = 0; frequency < matsubara.modes().frequency_count(); ++frequency) {
+    EXPECT_NEAR(std::abs(matsubara.at(frequency, 0)), 0.0, 3e-12);
   }
 
   ASSERT_EQ(retained_geometry.time_points, configuration.time_links_per_beta());
@@ -867,10 +867,10 @@ TEST(ConfigurationObservablesTest, MatsubaraTransformUsesRetainedGridProvenance)
   const auto line_transform = qmc::retained_grid_matsubara_transform(line);
   const auto square_transform = qmc::retained_grid_matsubara_transform(square);
 
-  EXPECT_NEAR(line_transform.values[1].real(), -2.0, 1e-14);
-  EXPECT_NEAR(line_transform.values[1].imag(), 3.0, 1e-14);
-  EXPECT_NEAR(square_transform.values[1].real(), -3.0, 1e-14);
-  EXPECT_NEAR(square_transform.values[1].imag(), 0.0, 1e-14);
+  EXPECT_NEAR(line_transform.at(0, 1).real(), -2.0, 1e-14);
+  EXPECT_NEAR(line_transform.at(0, 1).imag(), 3.0, 1e-14);
+  EXPECT_NEAR(square_transform.at(0, 1).real(), -3.0, 1e-14);
+  EXPECT_NEAR(square_transform.at(0, 1).imag(), 0.0, 1e-14);
 }
 
 TEST(ConfigurationObservablesTest, DensityCorrelationStorageIsValidByConstruction) {
@@ -891,8 +891,8 @@ TEST(ConfigurationObservablesTest, DensityCorrelationStorageIsValidByConstructio
   EXPECT_THROW(static_cast<void>(correlations.at(2, qmc::SiteId(0))), std::out_of_range);
   EXPECT_THROW(static_cast<void>(correlations.at(0, qmc::SiteId(3))), std::out_of_range);
   const auto transformed = qmc::retained_grid_matsubara_transform(correlations);
-  EXPECT_NEAR(transformed.frequencies[1], std::numbers::pi, 1e-14);
-  EXPECT_NEAR(transformed.values[0].real(), 1.0, 1e-14);
+  EXPECT_NEAR(transformed.modes().frequency(1), std::numbers::pi, 1e-14);
+  EXPECT_NEAR(transformed.at(0, 0).real(), 1.0, 1e-14);
 }
 
 TEST(CanonicalObservablesTest, HandlesEmptySystemAndRejectsUndefinedTemperatureQuantities) {

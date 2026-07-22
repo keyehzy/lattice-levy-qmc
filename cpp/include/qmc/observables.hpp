@@ -3,6 +3,7 @@
 
 #include "qmc/configuration.hpp"
 #include "qmc/free_boson.hpp"
+#include "qmc/matsubara_modes.hpp"
 #include "qmc/model.hpp"
 #include "qmc/torus_layout.hpp"
 
@@ -225,12 +226,30 @@ private:
   std::vector<double> connected_density_sums_;
 };
 
-struct MatsubaraDensityCorrelations {
-  std::vector<double> frequencies;
-  std::size_t momentum_points = 0;
-  // Grid approximation (beta/M) sum_j sum_delta exp(i*omega_n*tau_j-i*q*delta) C(delta,tau_j),
-  // indexed by n*momentum_points + flat(q).
-  std::vector<std::complex<double>> values;
+// Shape-safe retained-grid transform. Frequencies are exactly 0..M-1 and
+// momenta are the complete torus in flat TorusLayout order. Values use
+// frequency-major ordering followed by flat momentum.
+class MatsubaraDensityCorrelations {
+public:
+  // Requires matching beta/layout, frequencies 0..M-1, and every momentum in
+  // flat source-layout order. An M-1 outside int64_t throws overflow_error.
+  MatsubaraDensityCorrelations(RetainedGrid source,
+                               MatsubaraModeField<std::complex<double>> values);
+
+  [[nodiscard]] const RetainedGrid &grid() const noexcept { return grid_; }
+  [[nodiscard]] const MatsubaraModeSet &modes() const noexcept { return values_.modes(); }
+  [[nodiscard]] std::span<const std::complex<double>> values() const noexcept {
+    return values_.values();
+  }
+  [[nodiscard]] std::complex<double> at(std::size_t frequency, std::size_t momentum) const {
+    return values_.at(frequency, momentum);
+  }
+
+  bool operator==(const MatsubaraDensityCorrelations &) const = default;
+
+private:
+  RetainedGrid grid_;
+  MatsubaraModeField<std::complex<double>> values_;
 };
 
 // Uses the input's retained-grid beta and torus layout. Requires beta > 0.

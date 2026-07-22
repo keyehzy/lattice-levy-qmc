@@ -32,6 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   occupancy, and energy estimators from one full overlap sweep.
 - Add an owning `ContinuousMeasurementContext` with physical seam positions,
   stable globally ordered hops, and explicit equal-time event groups.
+- Add validated `MatsubaraModeSet` and shape-safe `MatsubaraModeField` values
+  for selected signed frequencies and torus momenta shared by retained and
+  continuous measurements.
+- Add `ContinuousMatsubaraPlan` with bounded binary64 phase reduction, exact
+  seam/period behavior, stable interval transforms, and overflow-safe torus
+  site phases.
 - Add self-describing segment, stitch, fixed-seam stitch-sweep, and random-seam
   stitch option values.
 - Add generated compile-time version metadata in `<qmc/version.hpp>`, sourced
@@ -53,6 +59,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Make retained density-correlation results valid by construction and bind
   their inverse temperature, time grid, and torus layout directly to the data;
   Matsubara transforms no longer accept a separately supplied model.
+- Replace the retained Matsubara result's public parallel arrays with an owning
+  `MatsubaraDensityCorrelations` class. Callers now use `grid()`, `modes()`,
+  `values()`, and checked `at()` accessors; construction enforces the complete
+  retained frequency and flat-momentum sequence.
 - Make `ContinuousPath` a valid-by-construction value with private storage,
   read-only endpoint/event views, and structural equality; malformed paths are
   now rejected at construction instead of remaining mutable public records.

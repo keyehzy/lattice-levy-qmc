@@ -25,6 +25,7 @@ add_executable(
   test_configuration.cpp
   test_free_boson.cpp
   test_free_numerics.cpp
+  test_matsubara_modes.cpp
   test_model.cpp
   test_observables.cpp
   test_random.cpp

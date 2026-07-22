@@ -192,6 +192,11 @@ time-zero events and the configuration's globally ordered hopping geometry.
 Equal-time hops are exposed as atomic groups, including distinct groups at
 `0` and `beta`, so exact continuous-time projectors can share one boundary and
 tie-order convention without retaining an imaginary-time grid.
+`MatsubaraModeSet` separately owns selected torus momenta and signed frequency
+indices in frequency-major order. `ContinuousMatsubaraPlan` validates the
+continuous phase-accuracy bound and precomputes immutable spatial factors for
+reuse across configurations. The density/flux projector and ensemble response
+accumulators remain the next implementation layer.
 
 See [`docs/MEASUREMENTS.md`](../docs/MEASUREMENTS.md) for estimator definitions,
 normalizations, exactness, and retained-grid conventions. The event-based

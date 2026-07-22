@@ -503,15 +503,15 @@ void write_imaginary_time(const std::filesystem::path &directory, const CommandL
     return;
   }
   const std::size_t cut_momentum = command_line.model.linear_size() > 1 ? 1 : 0;
-  for (std::size_t frequency = 0; frequency < matsubara->frequencies.size(); ++frequency) {
+  for (std::size_t frequency = 0; frequency < matsubara->modes().frequency_count(); ++frequency) {
     for (std::size_t flat = 0; flat < volume; ++flat) {
-      const auto value = matsubara->values[(frequency * volume) + flat];
-      transformed << frequency << ' ' << matsubara->frequencies[frequency] << ' ' << flat;
+      const auto value = matsubara->at(frequency, flat);
+      transformed << frequency << ' ' << matsubara->modes().frequency(frequency) << ' ' << flat;
       write_index_components(transformed, momentum.modes[flat].indices);
       transformed << ' ' << value.real() << ' ' << value.imag() << '\n';
     }
-    const auto value = matsubara->values[(frequency * volume) + cut_momentum];
-    cut << frequency << ' ' << matsubara->frequencies[frequency] << ' ' << value.real() << ' '
+    const auto value = matsubara->at(frequency, cut_momentum);
+    cut << frequency << ' ' << matsubara->modes().frequency(frequency) << ' ' << value.real() << ' '
         << value.imag() << '\n';
   }
 }

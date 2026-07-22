@@ -4,6 +4,7 @@
 #include "qmc/configuration.hpp"
 #include "qmc/free_boson.hpp"
 #include "qmc/free_numerics.hpp"
+#include "qmc/matsubara_modes.hpp"
 #include "qmc/model.hpp"
 #include "qmc/observables.hpp"
 #include "qmc/permutation.hpp"

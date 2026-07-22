@@ -106,6 +106,15 @@ that provenance directly rather than accepting a separately supplied model;
 same-volume lattices with different dimensions and data with a different
 inverse temperature therefore cannot be paired accidentally.
 
+The transformed result is also valid by construction. Its `modes()` descriptor
+owns the exact integer identities and physical frequencies, while `values()`
+uses frequency-major then flat-momentum order and `at(frequency, momentum)`
+checks both indices. Retained transforms always contain frequencies `0..M-1`
+and every torus momentum in flat `TorusLayout` order. The shared
+`MatsubaraModeSet`/`MatsubaraModeField` types can represent selected momenta and
+signed frequencies for exact continuous-time measurements without introducing
+a retained time count.
+
 `retained_geometry_observables` additionally returns the same-label
 covering-space mean-square displacement, torus return probability, and full
 torus displacement distribution at each retained time. `retained_cycle_geometry`

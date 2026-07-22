@@ -1,13 +1,18 @@
+#include "continuous_matsubara_detail.hpp"
 #include "continuous_test_fixtures.hpp"
+#include "lattice_transform_detail.hpp"
 #include "qmc/continuous_observables.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <complex>
 #include <concepts>
 #include <cstddef>
+#include <cstdint>
 #include <gtest/gtest.h>
 #include <limits>
+#include <numbers>
 #include <span>
 #include <stdexcept>
 #include <type_traits>
@@ -28,6 +33,110 @@ static_assert(
                    std::span<const SiteId>>);
 static_assert(std::is_same_v<decltype(std::declval<const ContinuousMeasurementContext &>().hops()),
                              std::span<const ContinuousHop>>);
+static_assert(!std::default_initializable<ContinuousMatsubaraPlan>);
+static_assert(std::is_same_v<decltype(std::declval<const ContinuousMatsubaraPlan &>().modes()),
+                             const MatsubaraModeSet &>);
+
+MatsubaraModeSet make_continuous_modes(const double beta, const TorusLayout &layout,
+                                       std::vector<std::vector<std::size_t>> momenta,
+                                       std::vector<std::int64_t> frequencies) {
+  return MatsubaraModeSet(beta, layout,
+                          MatsubaraModeRequest{.momentum_indices = std::move(momenta),
+                                               .frequency_indices = std::move(frequencies)});
+}
+
+TEST(ContinuousMatsubaraPlanTest, OwnsModesAndEnforcesSymmetricFrequencyBound) {
+  constexpr std::int64_t maximum = ContinuousMatsubaraPlan::kMaximumAbsoluteFrequencyIndex;
+  const MatsubaraModeSet modes =
+      make_continuous_modes(1.25, TorusLayout(5, 2), {{0, 0}, {4, 2}}, {-maximum, 0, maximum});
+  const ContinuousMatsubaraPlan plan(modes);
+
+  EXPECT_EQ(plan.modes(), modes);
+  EXPECT_THROW(static_cast<void>(ContinuousMatsubaraPlan(
+                   make_continuous_modes(1.25, TorusLayout(5, 2), {{0, 0}}, {maximum + 1}))),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(ContinuousMatsubaraPlan(
+                   make_continuous_modes(1.25, TorusLayout(5, 2), {{0, 0}}, {-maximum - 1}))),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(ContinuousMatsubaraPlan(make_continuous_modes(
+                   1.25, TorusLayout(5, 2), {{0, 0}}, {std::numeric_limits<std::int64_t>::min()}))),
+               std::invalid_argument);
+}
+
+TEST(ContinuousMatsubaraPlanTest, ReducesMaximumIndexPhasesAndPreservesExactSeams) {
+  constexpr std::int64_t maximum = ContinuousMatsubaraPlan::kMaximumAbsoluteFrequencyIndex;
+  const std::complex<double> one{1.0, 0.0};
+  EXPECT_EQ(detail::matsubara_time_phase(maximum, 0.0, 1.0), one);
+  EXPECT_EQ(detail::matsubara_time_phase(maximum, 1.0, 1.0), one);
+  EXPECT_EQ(detail::matsubara_time_phase(-maximum, 1.0, 1.0), one);
+
+  const double half_cycle_time = std::ldexp(1.0, -21);
+  const auto negative_one = detail::matsubara_time_phase(maximum, half_cycle_time, 1.0);
+  EXPECT_NEAR(negative_one.real(), -1.0, 2e-15);
+  EXPECT_NEAR(negative_one.imag(), 0.0, 2e-15);
+
+  const double three_quarter_cycle_time = 3.0 * std::ldexp(1.0, -22);
+  const auto negative_i = detail::matsubara_time_phase(maximum, three_quarter_cycle_time, 1.0);
+  EXPECT_NEAR(negative_i.real(), 0.0, 2e-15);
+  EXPECT_NEAR(negative_i.imag(), -1.0, 2e-15);
+  EXPECT_NEAR(std::abs(detail::matsubara_time_phase(-maximum, three_quarter_cycle_time, 1.0) -
+                       std::conj(negative_i)),
+              0.0, 2e-15);
+}
+
+TEST(ContinuousMatsubaraPlanTest, IntervalKernelHandlesExactAndSmallArguments) {
+  EXPECT_EQ(detail::matsubara_interval_transform(0, 0.25, 0.75, 1.0),
+            std::complex<double>(0.5, 0.0));
+  EXPECT_EQ(detail::matsubara_interval_transform(7, 0.0, 1.0, 1.0), std::complex<double>(0.0, 0.0));
+  EXPECT_EQ(detail::matsubara_interval_transform(-7, 0.0, 1.0, 1.0),
+            std::complex<double>(0.0, 0.0));
+  EXPECT_EQ(detail::matsubara_interval_transform(3, 0.4, 0.4, 1.0), std::complex<double>(0.0, 0.0));
+
+  const double begin = 0.4;
+  const double end = std::nextafter(begin, 1.0);
+  const double duration = end - begin;
+  const auto small = detail::matsubara_interval_transform(1, begin, end, 1.0);
+  const auto midpoint_phase = detail::matsubara_time_phase(1, begin + (duration / 2.0), 1.0);
+  EXPECT_NEAR(std::abs((small / duration) - midpoint_phase), 0.0, 2e-15);
+
+  const double omega = 4.0 * std::numbers::pi;
+  const auto direct = (std::exp(std::complex<double>(0.0, omega * 0.73)) -
+                       std::exp(std::complex<double>(0.0, omega * 0.12))) /
+                      std::complex<double>(0.0, omega);
+  EXPECT_NEAR(std::abs(detail::matsubara_interval_transform(2, 0.12, 0.73, 1.0) - direct), 0.0,
+              5e-16);
+
+  EXPECT_THROW(static_cast<void>(detail::matsubara_time_phase(1, -0.1, 1.0)),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(detail::matsubara_interval_transform(1, 0.5, 0.4, 1.0)),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(detail::matsubara_interval_transform(1, 0.0, 1.1, 1.0)),
+               std::invalid_argument);
+}
+
+TEST(ContinuousMatsubaraPlanTest, SitePhasesMatchRetainedConventionWithoutIntegerOverflow) {
+  const TorusLayout layout(4, 2);
+  const MatsubaraModeSet modes = make_continuous_modes(1.0, layout, {{0, 0}, {3, 2}, {1, 3}}, {0});
+  for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+    for (std::size_t site = 0; site < layout.volume(); ++site) {
+      const auto components = layout.decode(SiteId(site));
+      const double retained_phase =
+          detail::phase_for_indices(modes.momentum_indices(momentum), components, layout);
+      EXPECT_NEAR(std::abs(detail::matsubara_site_phase(modes, momentum, SiteId(site)) -
+                           std::polar(1.0, -retained_phase)),
+                  0.0, 3e-15);
+    }
+  }
+
+  constexpr Coord large_size = std::numeric_limits<Coord>::max();
+  const TorusLayout large_layout(large_size, 1);
+  const auto large_component = static_cast<std::size_t>(large_size - 1);
+  const MatsubaraModeSet large_modes =
+      make_continuous_modes(1.0, large_layout, {{large_component}}, {0});
+  const auto phase = detail::matsubara_site_phase(large_modes, 0, SiteId(large_component));
+  const double reduced_angle = -2.0 * std::numbers::pi / static_cast<double>(large_size);
+  EXPECT_NEAR(std::abs(phase - std::polar(1.0, reduced_angle)), 0.0, 1e-30);
+}
 
 ContinuousMeasurementContext make_owned_context() {
   const ContinuousConfiguration configuration = test::coincident_seam_configuration();
