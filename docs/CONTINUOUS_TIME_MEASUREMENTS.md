@@ -2,7 +2,8 @@
 
 Date: 2026-07-22
 
-Status: design proposal; no implementation is included in this document.
+Status: implementation-ready design proposal; no implementation is included in
+this document.
 
 ## Scope and recommendation
 
@@ -177,6 +178,9 @@ public:
 
 class ContinuousMatsubaraPlan {
 public:
+  // Continuous-time phase reduction is supported for |n| <= this value.
+  static constexpr std::int64_t kMaximumAbsoluteFrequencyIndex = 1'048'576;
+
   explicit ContinuousMatsubaraPlan(MatsubaraModeSet modes);
 
   [[nodiscard]] const MatsubaraModeSet &modes() const noexcept;
@@ -211,6 +215,16 @@ The mode set should:
   fastest for a response tensor;
 - expose physical frequencies and wavevector components as derived values,
   while retaining integer indices as the authoritative exact mode identity.
+
+`MatsubaraModeSet` is a geometry descriptor, so it does not impose the
+continuous projector's stricter phase-accuracy limit. It rejects a frequency
+only when its derived physical value is nonfinite or a nonzero index maps to
+zero in `double`. `ContinuousMatsubaraPlan` additionally rejects every index with
+`abs(n) > kMaximumAbsoluteFrequencyIndex`, computing the magnitude without
+negating a possibly minimum-valued `int64_t`. Keeping this limit on the plan
+allows a retained transform to describe every DFT row representable by the
+signed index type without making a large retained `M` part of the
+continuous-time numerical contract.
 
 Momentum components are canonical in `[0,L)`; the component of `-q` is
 `(L-k) % L`. Frequency indices remain signed rather than being reduced to a
@@ -420,6 +434,7 @@ class ContinuousMatsubaraDensityCorrelations {
 public:
   [[nodiscard]] const Model &model() const noexcept;
   [[nodiscard]] const MatsubaraModeSet &modes() const noexcept;
+  [[nodiscard]] std::size_t sample_count() const noexcept;
   [[nodiscard]] std::complex<double>
   mean_amplitude(std::size_t frequency, std::size_t momentum) const;
   [[nodiscard]] double at(std::size_t frequency,
@@ -452,6 +467,7 @@ class HoppingResponse {
 public:
   [[nodiscard]] const Model &model() const noexcept;
   [[nodiscard]] const MatsubaraModeSet &modes() const noexcept;
+  [[nodiscard]] std::size_t sample_count() const noexcept;
   [[nodiscard]] std::complex<double>
   mean_flux(std::size_t frequency, std::size_t momentum,
             std::size_t axis) const;
@@ -476,9 +492,9 @@ accessors:
 - the full gauge/flux response tensor;
 - the diagonal diamagnetic term;
 - the derived paramagnetic current correlation tensor;
-- accumulator-owned sample count and result mode provenance. The accumulator
-  also exposes the complete free `Model` it binds, and run metadata records the
-  `InteractingModel`.
+- sample count and mode provenance copied into the finished result. The live
+  accumulator also exposes its current sample count and the complete free
+  `Model` it binds, and run metadata records the `InteractingModel`.
 
 The direct density auto-susceptibility is real and nonnegative configuration by
 configuration, so `ContinuousMatsubaraDensityCorrelations` can store `double`
@@ -498,27 +514,68 @@ matrix: spatial and imaginary-time translation invariance make distinct modes
 diagonal in the present model. A future inhomogeneous source would need an
 explicit cross-mode request and result shape.
 
-Do not give each result separate count fields and raw parallel vectors that can
-diverge. Both retained and continuous results should contain the same small
-`MatsubaraModeField<T>` (a `MatsubaraModeSet` plus checked owned storage) from
-[repository issue 2](https://github.com/keyehzy/lattice-levy-qmc/issues/2), but
-retain distinct semantic wrappers. The existing `MatsubaraDensityCorrelations`
-is explicitly a retained-grid approximation and should retain its `RetainedGrid`
-source provenance; `ContinuousMatsubaraDensityCorrelations` records exact time
-integration and its full free `Model`. Sharing its concrete result type would
-erase a physically meaningful distinction.
+Do not give each result separate public count fields and raw parallel vectors
+that can diverge. `MatsubaraModeField<T>` is deliberately the scalar field
+owner: it owns one value per mode and is used for the retained transform values
+and the continuous density susceptibility. A selected momentum request is not
+a complete site lattice, and signed continuous frequencies are not a retained
+time axis, so this type should not grow a general trailing-tensor shape.
 
-This owner should be mode-specific rather than a premature general tensor or
-`LatticeField`: a selected momentum request is not a complete site lattice,
-and signed continuous frequencies are not a retained time axis. The small type
-only needs checked construction, mode-indexed access, storage order, and value
-ownership.
+The semantic result wrappers own and validate their additional storage:
 
-The shared field migration can preserve retained behavior exactly: construct a
-mode set with every torus momentum and frequency indices `0..M-1`, in the
-current frequency-major/flat-momentum order, then move the existing values
-under the checked owner. The continuous result uses the same indexing for a
-selected subset without making `momentum_points` mean two different things.
+- `ContinuousMatsubaraDensityCorrelations` owns one
+  `MatsubaraModeField<double>`, exactly `mode_count()` private complex mean
+  amplitudes, its complete free `Model`, and its nonzero sample count.
+- `HoppingResponse` is itself the vector/tensor shape owner. For dimension `d`,
+  its non-public constructor requires exactly `mode_count()*d` private mean-flux
+  values, `mode_count()*d*d` private response values, `d` diamagnetic values,
+  one `MatsubaraModeSet`, one complete free `Model`, and a nonzero sample count.
+  It checks every product before comparing extents. `paramagnetic` remains
+  derived and has no storage buffer.
+
+Only the checked accessors expose those component arrays. Their flat order is
+the mode order followed by component, or by left then right component with the
+right component varying fastest. This keeps the small reusable owner scalar
+without leaving the response tensor shape implicit or publicly mutable.
+
+The retained wrapper becomes a valid-by-construction class rather than the
+current public aggregate:
+
+```cpp
+class MatsubaraDensityCorrelations {
+public:
+  MatsubaraDensityCorrelations(
+      RetainedGrid source,
+      MatsubaraModeField<std::complex<double>> values);
+
+  [[nodiscard]] const RetainedGrid &grid() const noexcept;
+  [[nodiscard]] const MatsubaraModeSet &modes() const noexcept;
+  [[nodiscard]] std::span<const std::complex<double>> values() const noexcept;
+  [[nodiscard]] std::complex<double>
+  at(std::size_t frequency, std::size_t momentum) const;
+};
+```
+
+Construction requires the field beta/layout to equal the retained grid,
+frequencies to be exactly `0..M-1`, and momenta to be every torus momentum in
+flat `TorusLayout` order. It rejects a retained grid whose final DFT row cannot
+be represented by `int64_t`. Thus the retained `RetainedGrid` provenance cannot
+diverge from the mode field. The continuous result uses the same mode indexing
+for a selected subset without making `momentum_points` mean two different
+things.
+
+This retained migration intentionally removes the public `frequencies`,
+`momentum_points`, and `values` data members. It is a source-breaking pre-1.0
+API cleanup: do not retain deprecated parallel fields, because doing so would
+preserve the invalid state the owner is meant to remove. The implementation
+updates every in-tree caller and test, records the migration in
+`cpp/CHANGELOG.md`, and increments the CMake project minor version from `0.5.0`
+to `0.6.0`. Callers migrate to `modes().frequency(...)`,
+`modes().momentum_count()`, `values()`, and `at(...)`. This completes the
+result-shape part of
+[repository issue 2](https://github.com/keyehzy/lattice-levy-qmc/issues/2)
+without making the continuous implementation depend on later transform
+optimisation work in that issue.
 
 Every `observe()` validates exact mode/model compatibility and all input shapes
 before changing sums or sample count. It computes per-sample outer products and
@@ -869,15 +926,25 @@ time `tau` estimator and may ring at the frequency cutoff.
 - Compute frequencies from signed integer indices only after checking that the
   conversion and `2*pi*n/beta` are finite; a nonzero index that underflows to
   zero is also rejected.
-- Validate the magnitude of a signed frequency without first negating it, so
-  the `int64_t` minimum is rejected rather than triggering signed overflow.
-- Do not imply accurate support for every `int64_t` merely because the final
-  frequency is finite. Define and test an explicit maximum `abs(n)` for reliable
-  trigonometric argument reduction (or a higher-precision reduction backend),
-  and reject requests beyond that numerical contract.
-- Form event phases from the dimensionless ratio `tau/beta` where practical;
-  multiplying a separately rounded large frequency by a large `tau` needlessly
-  loses range and precision.
+- `ContinuousMatsubaraPlan` supports
+  `|n| <= kMaximumAbsoluteFrequencyIndex == 1'048'576`. It validates magnitude
+  through an unsigned representation, without first negating the signed value,
+  and therefore rejects `int64_t` minimum safely. Supporting larger indices is
+  a future numerical-backend change, not an undocumented relaxation.
+- Form event phases from dimensionless cycles. For an interior time, compute
+  `cycles = double(n) * (tau / beta)`, reduce it with
+  `std::remainder(cycles, 1.0)`, and only then multiply by `2*pi`. For the sine
+  in an interval `sinc`, reduce `double(n) * ((b-a) / beta)` modulo `2` before
+  evaluating the numerator, while retaining the unreduced value in the
+  denominator. Return a zero numerator directly when that reduced cycle value
+  is exactly `0` or `+/-1`, rather than evaluating `sin(0)` or `sin(+/-pi)`.
+  This avoids asking the standard library to reduce a large angle and avoids
+  multiplying a separately rounded physical frequency by `tau`.
+- At the maximum supported index, deterministic unit phases at analytically
+  known rational normalized times must agree within
+  `64*epsilon*(1+abs(n))` in absolute complex norm. This is the binary64 phase
+  contract; it does not promise meaningful modes whose oscillation is below the
+  resolution of the stored event times.
 - Return the time phase exactly as `1 + 0i` at normalised times `0` and `beta`
   for every integer Matsubara index, preserving seam periodicity explicitly.
 - Use the midpoint/sine interval kernel above; special-case `n == 0` exactly.
@@ -936,7 +1003,8 @@ cpp/include/qmc/continuous_observables.hpp
 
 cpp/src/continuous_event_sweep.hpp
 cpp/src/continuous_event_sweep.cpp
-    private event collection/grouping/replay shared with interaction.cpp
+    private event collection/grouping/replay used first by continuous
+    measurements; interaction.cpp migrates to it in implementation step 6
 
 cpp/src/continuous_observables.cpp
     exact interval projection and accumulators
@@ -967,10 +1035,12 @@ small event/state primitives without sharing that ownership model.
 
 Because this adds public result and measurement APIs, implementation should
 also update `cpp/CHANGELOG.md`, the continuous-observable section of the user
-documentation, and the example output schema if the demo starts emitting these
-results. Keep the derivation here rather than duplicating it in source comments;
-public declarations need only concise units, signs, indexing, ownership, and
-failure behavior.
+documentation, and the example output schema if the interacting demo starts
+emitting these results. The retained-wrapper migration unconditionally updates
+the ideal demo, its output verification, and retained-observable documentation.
+Keep the derivation here rather than duplicating it in source comments; public
+declarations need only concise units, signs, indexing, ownership, and failure
+behavior.
 
 ## Verification plan
 
@@ -1000,16 +1070,26 @@ failure behavior.
   configurations. In particular, preserve the covering direction when two
   directions reduce to the same physical arrival site.
 - Mode/plan validation: malformed momentum dimension/component, duplicates,
-  unrepresentable frequency, and checked-extent overflow; projection rejects a
-  context/plan geometry mismatch and accumulators reject a complete model
-  mismatch.
+  unrepresentable frequency, checked-extent overflow, acceptance at both signs
+  of `kMaximumAbsoluteFrequencyIndex`, and rejection immediately beyond it and
+  at `int64_t` minimum; projection rejects a context/plan geometry mismatch and
+  accumulators reject a complete model mismatch.
+- Maximum-index time phases at rational normalized times satisfy the stated
+  binary64 error bound, while phases at `0` and `beta` and full-period interval
+  transforms retain their exact special-case values.
 - Extreme one-dimensional layouts preserve torus-periodic site phases without
   overflowing `k*x` or relying on large floating-point angle reduction.
 - For representative full momentum sets, plan site phases match the existing
   `phase_for_indices`/retained-transform sign and ordering to a tight numerical
   tolerance; the extreme-layout case uses an integer modular reference.
 - Accumulator validation happens before mutation; empty `finish()` fails and a
-  single compatible observation preserves the per-configuration result.
+  single compatible observation preserves the per-configuration result. Every
+  finished result reports the accumulator's exact nonzero sample count.
+- The retained Matsubara wrapper rejects a field with a different beta, layout,
+  frequency sequence, momentum sequence, or value extent; migrated transform
+  values and ordering match the pre-migration implementation.
+- `HoppingResponse` construction rejects each wrong or overflowing vector/tensor
+  extent before publishing a result.
 - Result accessors reject out-of-range frequency, momentum, and tensor axes.
 
 ### Physics comparisons
