@@ -1,8 +1,13 @@
+#include "continuous_event_sweep.hpp"
+#include "continuous_test_fixtures.hpp"
+#include "interaction_detail.hpp"
 #include "qmc/interaction.hpp"
 
+#include <array>
 #include <cmath>
 #include <gtest/gtest.h>
 #include <limits>
+#include <vector>
 
 namespace qmc {
 namespace {
@@ -105,6 +110,35 @@ TEST(InteractionTest, SimultaneousEventsHaveNoOrderingDuration) {
       {{.time = 0.5, .axis = 0, .direction = -1}, {.time = 0.5, .axis = 0, .direction = 1}});
   const auto state = two_particle_state(model, first, second);
   EXPECT_DOUBLE_EQ(pair_overlap_time(state), 0.0);
+}
+
+TEST(InteractionTest, SharedSweepPreservesCoincidentSeamAndTieSemantics) {
+  const ContinuousConfiguration state = test::coincident_seam_configuration();
+  const TorusLayout layout(state.model().linear_size(), state.model().dimension());
+
+  const detail::ContinuousEventSweepData configuration_sweep =
+      detail::build_continuous_event_sweep(state, layout);
+  std::vector<const ContinuousPath *> path_view;
+  path_view.reserve(state.worldlines().size());
+  for (const ContinuousPath &path : state.worldlines()) {
+    path_view.push_back(&path);
+  }
+  const detail::ContinuousEventSweepData path_view_sweep =
+      detail::build_continuous_event_sweep(state.model(), path_view, layout);
+
+  EXPECT_EQ(path_view_sweep.seam_positions, configuration_sweep.seam_positions);
+  EXPECT_EQ(path_view_sweep.hops, configuration_sweep.hops);
+  EXPECT_EQ(path_view_sweep.group_offsets, configuration_sweep.group_offsets);
+  EXPECT_DOUBLE_EQ(detail::pair_overlap_time_for_paths(state.model(), path_view), 0.5);
+  EXPECT_DOUBLE_EQ(pair_overlap_time(state), 0.5);
+  const InteractionMeasurement measurement =
+      measure_interaction(state, InteractingModel{.free = state.model(), .interaction = 2.0});
+  EXPECT_DOUBLE_EQ(measurement.action, 1.0);
+
+  for (const double shift : std::array{0.25, 0.5, 0.75}) {
+    const ContinuousConfiguration rotated = rotate_configuration_time_origin(state, shift);
+    EXPECT_DOUBLE_EQ(pair_overlap_time(rotated), 0.5);
+  }
 }
 
 TEST(InteractionTest, HandlesEmptyAndSingleParticleStates) {

@@ -88,6 +88,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read-only values.
 - Use the shared torus layout for retained observables, full and incremental
   interaction occupancy, stitch locality buckets, and example flat indexing.
+- Route full pair-overlap evaluation through the continuous measurement
+  event sweep, sharing time normalization, stable tie ordering, physical hop
+  geometry, and equal-time grouping without changing interaction estimators.
 - Route reusable ideal sampling and exact observables through
   `CanonicalEnsemble`; the ideal demo and interacting sampler now construct the
   canonical recursion once instead of rebuilding or accepting an independently

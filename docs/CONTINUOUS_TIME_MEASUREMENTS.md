@@ -8,8 +8,9 @@ owning continuous measurement context and deterministic event-sweep boundary
 tests (step 2), plus the combined density/flux primitive and its deterministic
 identity tests (step 3), plus the connected density accumulator and its
 deterministic and Lehmann-reference tests (step 4), plus the hopping-response
-accumulator and its zero/finite-momentum Lehmann-reference tests (step 5), were
-completed through step 4 on 2026-07-22 and through step 5 on 2026-07-23. This
+accumulator and its zero/finite-momentum Lehmann-reference tests (step 5), plus
+the shared event-sweep migration of full pair-overlap evaluation (step 6), were
+completed through step 4 on 2026-07-22 and through step 6 on 2026-07-23. This
 document remains the design specification and contains no implementation.
 
 ## Scope and recommendation
@@ -72,8 +73,10 @@ boundaries are:
   and
   [`continuous_configuration.cpp`](../cpp/src/continuous_configuration.cpp):
   model/topology ownership, physical time rotation, and winding;
-- [`interaction.cpp`](../cpp/src/interaction.cpp): the existing full timed-event
-  collection, equal-time grouping, occupancy replay, and pair-overlap integral;
+- [`continuous_event_sweep.cpp`](../cpp/src/continuous_event_sweep.cpp) and
+  [`interaction.cpp`](../cpp/src/interaction.cpp): shared timed-event
+  collection/equal-time grouping and the consuming occupancy replay and
+  pair-overlap integral;
 - [`path_cursor.hpp`](../cpp/src/path_cursor.hpp): the distinct per-path
   cut/slice abstraction and its endpoint-side semantics;
 - [`observables.hpp`](../cpp/include/qmc/observables.hpp),
@@ -116,17 +119,18 @@ The design needs to preserve the following properties.
   and remains compatible with the separate
   [planned streaming-run work](https://github.com/keyehzy/lattice-levy-qmc/issues/5).
 
-The current code also points to two useful implementation extractions:
+The current code uses two focused private implementation utilities:
 
-- `interaction.cpp` privately collects, stable-sorts, groups, and applies timed
-  events while maintaining physical positions and occupancies.
+- `continuous_event_sweep.cpp` collects, stable-sorts, groups, and derives the
+  physical geometry of timed events for both measurements and full
+  pair-overlap evaluation.
 - `PathCursor` centralises cut-side semantics for path surgery, but is a
   per-path monotone-cut abstraction rather than a global configuration event
   sweep.
 
-The new layer should reuse a global event-sweep utility with the interaction
-evaluator eventually; it should not stretch `PathCursor` into a second,
-unrelated responsibility.
+The measurement layer and interaction evaluator now reuse the global
+event-sweep utility; `PathCursor` remains focused on its distinct per-path
+surgery responsibility.
 
 ### Refinements to the conversation's initial sketch
 
@@ -325,12 +329,11 @@ endpoint while `position_at(0)` includes events at zero. Events at `beta` are
 applied after the final positive-duration interval and close the permutation
 loops at the seam.
 
-The initial implementation should use the same time normalisation and stable
-tie ordering as `interaction.cpp`. A later migration can make a private
-`ContinuousEventSweep` the common implementation for the context and full
-pair-overlap calculation. Collection plus `stable_sort` is the correctness
-baseline. A k-way merge of already sorted path event lists is only justified
-after measurement workloads show the sort to matter.
+The private continuous event sweep is the common implementation for the
+context and full pair-overlap calculation, including its arbitrary
+label-indexed path-view audit boundary. Collection plus `stable_sort` is the
+correctness baseline. A k-way merge of already sorted path event lists is only
+justified after measurement workloads show the sort to matter.
 
 Intervals end at `context.model().beta()`, not at a separately supplied value.
 The existing few-ulp worldline-duration tolerance and event-at-`beta`
@@ -1033,8 +1036,8 @@ cpp/include/qmc/continuous_observables.hpp
 
 cpp/src/continuous_event_sweep.hpp
 cpp/src/continuous_event_sweep.cpp
-    private event collection/grouping/replay used first by continuous
-    measurements; interaction.cpp migrates to it in implementation step 6
+    private event collection/grouping and physical hop geometry shared by
+    continuous measurements and full pair-overlap evaluation
 
 cpp/src/continuous_observables.cpp
     exact interval projection and accumulators
@@ -1229,8 +1232,9 @@ derivative and returned decomposition explicit.
    Lehmann comparisons.
 5. **Completed 2026-07-23:** Add the hopping response accumulator returning
    `R`, `D`, and `Lambda^p`, followed by zero/finite-momentum ED comparisons.
-6. Migrate full pair-overlap evaluation to the shared private event sweep only
-   after exact equivalence tests prove unchanged action and tie semantics.
+6. **Completed 2026-07-23:** Migrate full pair-overlap evaluation to the shared
+   private event sweep, with exact equivalence tests proving unchanged action
+   and tie semantics.
 7. Add an occupancy-based diagonal projector as the third use case; then decide
    whether a private generic projection template is clearer than three small
    concrete loops.

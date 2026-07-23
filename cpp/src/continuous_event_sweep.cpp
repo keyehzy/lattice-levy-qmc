@@ -29,25 +29,40 @@ void require_vector_capacity(const std::size_t count, const std::size_t maximum,
   }
 }
 
-} // namespace
-
-ContinuousEventSweepData build_continuous_event_sweep(const ContinuousConfiguration &configuration,
-                                                      const TorusLayout &layout) {
-  const Model &model = configuration.model();
-  const auto worldlines = configuration.worldlines();
+template <class PathAt>
+ContinuousEventSweepData
+build_continuous_event_sweep_impl(const Model &model, const std::size_t path_count, PathAt path_at,
+                                  const TorusLayout &layout) {
+  if (model.beta() <= 0.0) {
+    throw std::invalid_argument("continuous event sweep requires positive beta");
+  }
+  if (path_count != model.particle_count()) {
+    throw std::logic_error("continuous event-sweep path count does not match particle_count");
+  }
 
   ContinuousEventSweepData data;
-  require_vector_capacity(worldlines.size(), data.seam_positions.max_size(),
+  require_vector_capacity(path_count, data.seam_positions.max_size(),
                           "continuous seam-position count exceeds vector capacity");
-  data.seam_positions.reserve(worldlines.size());
 
   std::size_t event_count = 0;
-  for (std::size_t particle_index = 0; particle_index < worldlines.size(); ++particle_index) {
-    const ContinuousPath &path = worldlines[particle_index];
-    event_count = checked_add_size(event_count, path.events().size(),
+  for (std::size_t particle_index = 0; particle_index < path_count; ++particle_index) {
+    const ContinuousPath *path = path_at(particle_index);
+    if (path == nullptr) {
+      throw std::logic_error("continuous event-sweep path view contains null");
+    }
+    if (path->dimension() != model.dimension()) {
+      throw std::invalid_argument("continuous event-sweep path dimension does not match the model");
+    }
+    event_count = checked_add_size(event_count, path->events().size(),
                                    "continuous event count exceeds size_t");
-    require_vector_capacity(event_count, data.hops.max_size(),
-                            "continuous hop count exceeds vector capacity");
+  }
+  require_vector_capacity(event_count, data.hops.max_size(),
+                          "continuous hop count exceeds vector capacity");
+  data.seam_positions.reserve(path_count);
+  data.hops.reserve(event_count);
+
+  for (std::size_t particle_index = 0; particle_index < path_count; ++particle_index) {
+    const ContinuousPath &path = *path_at(particle_index);
     SiteId position = layout.encode_covering(path.start());
     data.seam_positions.push_back(position);
     for (const JumpEvent &event : path.events()) {
@@ -89,6 +104,26 @@ ContinuousEventSweepData build_continuous_event_sweep(const ContinuousConfigurat
     group_begin = group_end;
   }
   return data;
+}
+
+} // namespace
+
+ContinuousEventSweepData build_continuous_event_sweep(const ContinuousConfiguration &configuration,
+                                                      const TorusLayout &layout) {
+  const Model &model = configuration.model();
+  const auto worldlines = configuration.worldlines();
+  return build_continuous_event_sweep_impl(
+      model, worldlines.size(),
+      [&worldlines](const std::size_t particle) { return &worldlines[particle]; }, layout);
+}
+
+ContinuousEventSweepData
+build_continuous_event_sweep(const Model &model,
+                             const std::span<const ContinuousPath *const> worldlines,
+                             const TorusLayout &layout) {
+  return build_continuous_event_sweep_impl(
+      model, worldlines.size(),
+      [worldlines](const std::size_t particle) { return worldlines[particle]; }, layout);
 }
 
 } // namespace qmc::detail

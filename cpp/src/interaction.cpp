@@ -1,38 +1,19 @@
 #include "qmc/interaction.hpp"
 
-#include "checked_math.hpp"
+#include "continuous_event_sweep.hpp"
 #include "interaction_detail.hpp"
 #include "qmc/torus_layout.hpp"
 
-#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
 
 namespace qmc {
 namespace {
-
-struct TimedEvent {
-  double time;
-  std::size_t particle;
-  Axis axis;
-  std::int8_t direction;
-};
-
-double normalize_event_time(const double time, const double beta) {
-  if (time >= 0.0 && time <= beta) {
-    return time;
-  }
-  const double scale = std::max(std::abs(time), std::abs(beta));
-  const double tolerance = 16.0 * std::numeric_limits<double>::epsilon() * scale;
-  if (time > beta && time - beta <= tolerance) {
-    return beta;
-  }
-  throw std::logic_error("continuous event time lies outside [0, beta]");
-}
 
 void ensure_finite_result(const double value, const char *description) {
   if (!std::isfinite(value)) {
@@ -46,7 +27,6 @@ struct OverlapWorkspace {
   std::vector<SiteId> positions;
   OccupancyMap occupancies;
   std::uint64_t pair_count = 0;
-  std::size_t total_events = 0;
 };
 
 void add_pairs(std::uint64_t &pair_count, const std::uint64_t additional) {
@@ -56,54 +36,29 @@ void add_pairs(std::uint64_t &pair_count, const std::uint64_t additional) {
   pair_count += additional;
 }
 
-OverlapWorkspace initialize_workspace(const Model &model, const TorusLayout &layout,
-                                      const std::span<const ContinuousPath *const> worldlines) {
+OverlapWorkspace initialize_workspace(const std::span<const SiteId> seam_positions) {
   OverlapWorkspace workspace;
-  workspace.positions.reserve(worldlines.size());
-  workspace.occupancies.reserve(worldlines.size());
-  for (const ContinuousPath *path : worldlines) {
-    if (path == nullptr) {
-      throw std::logic_error("pair-overlap path view contains null");
-    }
-    if (path->dimension() != model.dimension()) {
-      throw std::invalid_argument("pair-overlap path dimension does not match the model");
-    }
-    const SiteId key = layout.encode_covering(path->start());
+  workspace.positions.reserve(seam_positions.size());
+  workspace.occupancies.reserve(seam_positions.size());
+  for (const SiteId key : seam_positions) {
     auto [entry, inserted] = workspace.occupancies.try_emplace(key, 0);
     static_cast<void>(inserted);
     add_pairs(workspace.pair_count, entry->second);
     ++entry->second;
     workspace.positions.push_back(key);
-    workspace.total_events = detail::checked_add_size(workspace.total_events, path->events().size(),
-                                                      "pair-overlap event count exceeds size_t");
   }
   return workspace;
 }
 
-std::vector<TimedEvent> collect_events(const Model &model,
-                                       const std::span<const ContinuousPath *const> worldlines,
-                                       const std::size_t total_events) {
-  std::vector<TimedEvent> events;
-  if (total_events > events.max_size()) {
-    throw std::length_error("pair-overlap event count exceeds vector capacity");
+void apply_hop(const ContinuousHop &hop, OverlapWorkspace &workspace) {
+  const auto particle = static_cast<std::size_t>(hop.particle);
+  if (particle >= workspace.positions.size()) {
+    throw std::logic_error("pair-overlap hop contains an invalid particle label");
   }
-  events.reserve(total_events);
-  for (std::size_t particle = 0; particle < worldlines.size(); ++particle) {
-    for (const JumpEvent &event : worldlines[particle]->events()) {
-      events.push_back(TimedEvent{
-          .time = normalize_event_time(event.time, model.beta()),
-          .particle = particle,
-          .axis = event.axis,
-          .direction = event.direction,
-      });
-    }
+  SiteId &position = workspace.positions[particle];
+  if (position != hop.departure) {
+    throw std::logic_error("pair-overlap replay disagrees with the shared event sweep");
   }
-  std::ranges::stable_sort(events, {}, &TimedEvent::time);
-  return events;
-}
-
-void apply_event(const TimedEvent &event, const TorusLayout &layout, OverlapWorkspace &workspace) {
-  SiteId &position = workspace.positions[event.particle];
   const SiteId old_key = position;
   auto old_entry = workspace.occupancies.find(old_key);
   if (old_entry == workspace.occupancies.end() || old_entry->second == 0) {
@@ -115,7 +70,7 @@ void apply_event(const TimedEvent &event, const TorusLayout &layout, OverlapWork
     workspace.occupancies.erase(old_entry);
   }
 
-  position = layout.shifted(position, event.axis, static_cast<Coord>(event.direction));
+  position = hop.arrival;
   const SiteId new_key = position;
   auto [new_entry, inserted] = workspace.occupancies.try_emplace(new_key, 0);
   static_cast<void>(inserted);
@@ -148,26 +103,22 @@ double pair_overlap_time_for_paths(const Model &model,
   if (worldlines.size() < 2) {
     return 0.0;
   }
-  OverlapWorkspace workspace = initialize_workspace(model, layout, worldlines);
-  const std::vector<TimedEvent> events = collect_events(model, worldlines, workspace.total_events);
+  const ContinuousEventSweepData sweep = build_continuous_event_sweep(model, worldlines, layout);
+  OverlapWorkspace workspace = initialize_workspace(sweep.seam_positions);
 
   double overlap = 0.0;
   double previous_time = 0.0;
-  std::size_t event_index = 0;
-  while (event_index < events.size()) {
-    const double event_time = events[event_index].time;
+  for (std::size_t group = 0; group + 1 < sweep.group_offsets.size(); ++group) {
+    const std::size_t group_begin = sweep.group_offsets[group];
+    const std::size_t group_end = sweep.group_offsets[group + 1];
+    const double event_time = sweep.hops[group_begin].time;
     overlap += (event_time - previous_time) * static_cast<double>(workspace.pair_count);
     ensure_finite_result(overlap, "pair-overlap integral overflowed");
 
-    std::size_t group_end = event_index + 1;
-    while (group_end < events.size() && events[group_end].time == event_time) {
-      ++group_end;
-    }
-    for (std::size_t index = event_index; index < group_end; ++index) {
-      apply_event(events[index], layout, workspace);
+    for (std::size_t index = group_begin; index < group_end; ++index) {
+      apply_hop(sweep.hops[index], workspace);
     }
     previous_time = event_time;
-    event_index = group_end;
   }
 
   overlap += (model.beta() - previous_time) * static_cast<double>(workspace.pair_count);
