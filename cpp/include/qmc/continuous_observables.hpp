@@ -2,6 +2,7 @@
 #define QMC_CONTINUOUS_OBSERVABLES_HPP
 
 #include "qmc/continuous_configuration.hpp"
+#include "qmc/imaginary_time_lags.hpp"
 #include "qmc/matsubara_modes.hpp"
 #include "qmc/torus_layout.hpp"
 
@@ -14,6 +15,7 @@
 namespace qmc {
 
 class ContinuousMeasurementContext;
+class ContinuousDensityLagValues;
 class ContinuousParticleModes;
 class ContinuousPairDensityModes;
 class DensityMatsubaraAccumulator;
@@ -44,6 +46,24 @@ private:
   std::vector<std::complex<double>> site_step_phases_;
   std::vector<std::complex<double>> positive_midpoint_phases_;
   std::vector<std::complex<double>> negative_midpoint_phases_;
+};
+
+// Reusable selected-lag plan for exact density auto-correlations. Spatial step
+// phases are immutable and shared by every projected configuration.
+class ContinuousDensityLagPlan {
+public:
+  explicit ContinuousDensityLagPlan(ImaginaryTimeLagSet lags);
+
+  [[nodiscard]] const ImaginaryTimeLagSet &lags() const noexcept { return lags_; }
+
+private:
+  friend ContinuousDensityLagValues
+  continuous_density_lag_values(const ContinuousMeasurementContext &context,
+                                const ContinuousDensityLagPlan &plan);
+
+  ImaginaryTimeLagSet lags_;
+  // Momentum-major, then axis.
+  std::vector<std::complex<double>> site_step_phases_;
 };
 
 // One physical nearest-neighbor hop in a continuous configuration. Time is in
@@ -148,6 +168,30 @@ private:
 
   Model model_;
   MatsubaraModeField<std::complex<double>> pair_density_;
+};
+
+// Unnormalised, uncentred time-origin-averaged density auto-correlations for
+// one continuous configuration. Values use lag-major, then momentum request
+// order and store the real time-reversal-symmetrised overlap
+// integral ds Re[n_q(s+lag) n_q(s)^*].
+class ContinuousDensityLagValues {
+public:
+  [[nodiscard]] const Model &model() const noexcept { return model_; }
+  [[nodiscard]] const ImaginaryTimeLagSet &lags() const noexcept { return lags_; }
+  // Checked lag and momentum access throws out_of_range.
+  [[nodiscard]] double overlap(std::size_t lag, std::size_t momentum) const;
+
+private:
+  friend ContinuousDensityLagValues
+  continuous_density_lag_values(const ContinuousMeasurementContext &context,
+                                const ContinuousDensityLagPlan &plan);
+
+  ContinuousDensityLagValues(Model model, ImaginaryTimeLagSet lags,
+                             std::vector<double> overlap_values);
+
+  Model model_;
+  ImaginaryTimeLagSet lags_;
+  std::vector<double> overlap_values_;
 };
 
 // Connected density susceptibility for one homogeneous fixed-particle-number
@@ -393,6 +437,22 @@ continuous_pair_density_modes(const ContinuousMeasurementContext &context,
 [[nodiscard]] ContinuousPairDensityModes
 continuous_pair_density_modes(const ContinuousConfiguration &configuration,
                               const ContinuousMatsubaraPlan &plan);
+
+// Projects exact selected imaginary-time density overlaps from residence
+// intervals. Equal-time event groups are applied atomically, events at zero
+// precede the first positive-duration interval, and no time grid is introduced.
+// Throws invalid_argument when context and plan geometry differ and
+// overflow_error/length_error when an overlap or result shape is not finite
+// and representable.
+[[nodiscard]] ContinuousDensityLagValues
+continuous_density_lag_values(const ContinuousMeasurementContext &context,
+                              const ContinuousDensityLagPlan &plan);
+
+// One-off convenience overload that first owns the configuration's event
+// geometry in a ContinuousMeasurementContext.
+[[nodiscard]] ContinuousDensityLagValues
+continuous_density_lag_values(const ContinuousConfiguration &configuration,
+                              const ContinuousDensityLagPlan &plan);
 
 } // namespace qmc
 

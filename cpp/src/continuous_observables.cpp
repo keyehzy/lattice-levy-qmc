@@ -8,6 +8,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <numbers>
 #include <span>
@@ -42,6 +43,25 @@ std::size_t multiply_modulo(std::size_t multiplicand, std::size_t multiplier,
     }
   }
   return result;
+}
+
+std::complex<double> spatial_site_phase(const TorusLayout &layout,
+                                        const std::span<const std::size_t> momentum_components,
+                                        const SiteId site) {
+  if (momentum_components.size() != layout.dimension()) {
+    throw std::logic_error("continuous spatial phase has the wrong momentum dimension");
+  }
+  const std::vector<std::size_t> site_components = layout.decode(site);
+  const auto linear_size = static_cast<std::size_t>(layout.linear_size());
+  std::complex<double> phase{1.0, 0.0};
+  for (std::size_t axis = 0; axis < layout.dimension(); ++axis) {
+    const std::size_t residue =
+        multiply_modulo(momentum_components[axis], site_components[axis], linear_size);
+    const double angle =
+        -2.0 * std::numbers::pi * static_cast<double>(residue) / static_cast<double>(linear_size);
+    phase *= std::polar(1.0, angle);
+  }
+  return phase;
 }
 
 void validate_interval(const double begin, const double end, const double beta) {
@@ -430,6 +450,14 @@ void validate_projection_geometry(const ContinuousMeasurementContext &context,
   }
 }
 
+void validate_projection_geometry(const ContinuousMeasurementContext &context,
+                                  const ImaginaryTimeLagSet &lags) {
+  if (context.model().beta() != lags.beta() || context.layout() != lags.layout()) {
+    throw std::invalid_argument(
+        "continuous measurement context and imaginary-time lag plan geometry differ");
+  }
+}
+
 struct ProjectedParticleModeData {
   std::vector<std::complex<double>> density_values;
   std::vector<std::complex<double>> flux_values;
@@ -671,6 +699,291 @@ private:
   std::vector<std::uint8_t> zero_momenta_;
 };
 
+struct DensityResidenceSeries {
+  std::size_t momentum_count;
+  std::vector<double> boundaries;
+  // Interval-major, followed by momentum request order.
+  std::vector<std::complex<double>> values;
+
+  [[nodiscard]] std::size_t interval_count() const noexcept { return boundaries.size() - 1; }
+
+  [[nodiscard]] std::complex<double> value(const std::size_t interval,
+                                           const std::size_t momentum) const noexcept {
+    return values[(interval * momentum_count) + momentum];
+  }
+};
+
+struct ShiftedResidenceInterval {
+  double begin;
+  double end;
+  std::size_t source_interval;
+};
+
+class ContinuousDensityLagProjector {
+public:
+  ContinuousDensityLagProjector(const ContinuousMeasurementContext &context,
+                                const ImaginaryTimeLagSet &lags,
+                                const std::span<const std::complex<double>> site_step_phases)
+      : context_(context), lags_(lags), site_step_phases_(site_step_phases),
+        particle_count_(context.model().particle_count()), momentum_count_(lags.momentum_count()),
+        dimension_(context.model().dimension()),
+        particle_phase_extent_(
+            detail::checked_product(particle_count_, momentum_count_,
+                                    "continuous density-lag phase extent exceeds size_t")),
+        current_density_(make_checked_vector<CompensatedComplexSum>(
+            momentum_count_, "continuous density-lag state extent exceeds vector capacity")),
+        particle_phases_(make_checked_vector<std::complex<double>>(
+            particle_phase_extent_,
+            "continuous density-lag particle phases exceed vector capacity")),
+        zero_momenta_(make_checked_vector<std::uint8_t>(
+            momentum_count_, "continuous density-lag zero-momentum extent exceeds capacity")) {
+    const std::size_t component_extent = detail::checked_product(
+        momentum_count_, dimension_, "continuous density-lag component extent exceeds size_t");
+    if (site_step_phases_.size() != component_extent) {
+      throw std::logic_error("continuous density-lag plan has inconsistent phase storage");
+    }
+    initialize_state();
+  }
+
+  [[nodiscard]] std::vector<double> project() {
+    const DensityResidenceSeries residence = build_residence_series();
+    auto overlaps = make_checked_vector<double>(
+        lags_.value_count(), "continuous density-lag result extent exceeds vector capacity");
+    for (std::size_t lag = 0; lag < lags_.lag_count(); ++lag) {
+      const double tau = lags_.lag(lag);
+      const std::vector<double> forward = overlaps_at_lag(residence, tau);
+      double reflected_tau = tau == 0.0 ? 0.0 : lags_.beta() - tau;
+      if (reflected_tau == lags_.beta()) {
+        reflected_tau = 0.0;
+      }
+      const std::vector<double> reflected =
+          reflected_tau == tau ? forward : overlaps_at_lag(residence, reflected_tau);
+      for (std::size_t momentum = 0; momentum < momentum_count_; ++momentum) {
+        double value = (0.5 * forward[momentum]) + (0.5 * reflected[momentum]);
+        if (zero_momenta_[momentum] != 0U) {
+          value = exact_zero_momentum_overlap();
+        }
+        if (!std::isfinite(value)) {
+          throw std::overflow_error("continuous density-lag overlap is non-finite");
+        }
+        overlaps[(lag * momentum_count_) + momentum] = value;
+      }
+    }
+    return overlaps;
+  }
+
+private:
+  void initialize_state() {
+    for (std::size_t momentum = 0; momentum < momentum_count_; ++momentum) {
+      zero_momenta_[momentum] =
+          std::ranges::all_of(lags_.momentum_indices(momentum),
+                              [](const std::size_t component) { return component == 0; })
+              ? 1U
+              : 0U;
+    }
+    for (std::size_t particle = 0; particle < particle_count_; ++particle) {
+      for (std::size_t momentum = 0; momentum < momentum_count_; ++momentum) {
+        const std::complex<double> phase = spatial_site_phase(
+            lags_.layout(), lags_.momentum_indices(momentum), context_.seam_positions()[particle]);
+        particle_phases_[particle_phase_index(particle, momentum)] = phase;
+        current_density_[momentum].add(phase);
+      }
+    }
+  }
+
+  [[nodiscard]] DensityResidenceSeries build_residence_series() {
+    const std::size_t maximum_interval_count = detail::checked_add_size(
+        context_.event_group_count(), 1, "continuous density-lag interval count exceeds size_t");
+    const std::size_t maximum_value_count =
+        detail::checked_product(maximum_interval_count, momentum_count_,
+                                "continuous density-lag residence extent exceeds size_t");
+    const std::size_t maximum_boundary_count = detail::checked_add_size(
+        maximum_interval_count, 1, "continuous density-lag boundary count exceeds size_t");
+
+    DensityResidenceSeries residence{.momentum_count = momentum_count_};
+    if (maximum_boundary_count > residence.boundaries.max_size() ||
+        maximum_value_count > residence.values.max_size()) {
+      throw std::length_error("continuous density-lag residence data exceed vector capacity");
+    }
+    residence.boundaries.reserve(maximum_boundary_count);
+    residence.values.reserve(maximum_value_count);
+    residence.boundaries.push_back(0.0);
+
+    double previous_time = 0.0;
+    for (std::size_t group = 0; group < context_.event_group_count(); ++group) {
+      const double time = context_.event_time(group);
+      append_residence_interval(residence, previous_time, time);
+      apply_event_group(group);
+      previous_time = time;
+    }
+    append_residence_interval(residence, previous_time, lags_.beta());
+    if (residence.boundaries.size() < 2 || residence.boundaries.back() != lags_.beta()) {
+      throw std::logic_error("continuous density-lag residence partition is incomplete");
+    }
+    return residence;
+  }
+
+  void append_residence_interval(DensityResidenceSeries &residence, const double begin,
+                                 const double end) const {
+    if (end == begin) {
+      return;
+    }
+    if (end < begin || residence.boundaries.empty() || residence.boundaries.back() != begin) {
+      throw std::logic_error("continuous density-lag residence partition is inconsistent");
+    }
+    for (std::size_t momentum = 0; momentum < momentum_count_; ++momentum) {
+      const std::complex<double> value = current_density_[momentum].value();
+      if (!is_finite(value)) {
+        throw std::overflow_error("continuous density-lag residence value is non-finite");
+      }
+      residence.values.push_back(value);
+    }
+    residence.boundaries.push_back(end);
+  }
+
+  void apply_event_group(const std::size_t group) {
+    for (const ContinuousHop &hop : context_.hops_at(group)) {
+      const auto particle = static_cast<std::size_t>(hop.particle);
+      if (particle >= particle_count_) {
+        throw std::logic_error("continuous density-lag hop has an invalid particle label");
+      }
+      const auto axis = static_cast<std::size_t>(hop.axis);
+      for (std::size_t momentum = 0; momentum < momentum_count_; ++momentum) {
+        const std::size_t particle_phase = particle_phase_index(particle, momentum);
+        const std::complex<double> departure_phase = particle_phases_[particle_phase];
+        const std::complex<double> step_phase = site_step_phases_[(momentum * dimension_) + axis];
+        const std::complex<double> arrival_phase =
+            departure_phase * (hop.direction > 0 ? step_phase : std::conj(step_phase));
+        current_density_[momentum].add(arrival_phase - departure_phase);
+        particle_phases_[particle_phase] = arrival_phase;
+      }
+    }
+  }
+
+  [[nodiscard]] std::vector<ShiftedResidenceInterval>
+  shifted_intervals(const DensityResidenceSeries &residence, const double tau) const {
+    if (!std::isfinite(tau) || tau < 0.0 || tau >= lags_.beta()) {
+      throw std::logic_error("continuous density-lag shift is outside [0, beta)");
+    }
+    const std::size_t interval_count = residence.interval_count();
+    const auto upper = std::ranges::upper_bound(residence.boundaries, tau);
+    const auto source =
+        static_cast<std::size_t>(std::distance(residence.boundaries.begin(), upper) - 1);
+    if (source >= interval_count) {
+      throw std::logic_error("continuous density-lag shift has no residence interval");
+    }
+
+    const std::size_t maximum_shifted_count = detail::checked_add_size(
+        interval_count, 1, "continuous shifted-interval count exceeds size_t");
+    std::vector<ShiftedResidenceInterval> shifted;
+    if (maximum_shifted_count > shifted.max_size()) {
+      throw std::length_error("continuous shifted intervals exceed vector capacity");
+    }
+    shifted.reserve(maximum_shifted_count);
+    const auto append = [&shifted](const double begin, const double end,
+                                   const std::size_t source_interval) {
+      if (end < begin || !std::isfinite(begin) || !std::isfinite(end)) {
+        throw std::logic_error("continuous shifted residence interval is invalid");
+      }
+      if (end == begin) {
+        return;
+      }
+      const double expected_begin = shifted.empty() ? 0.0 : shifted.back().end;
+      if (begin != expected_begin) {
+        throw std::logic_error("continuous shifted residence intervals do not meet");
+      }
+      shifted.push_back({.begin = begin, .end = end, .source_interval = source_interval});
+    };
+
+    append(0.0, residence.boundaries[source + 1] - tau, source);
+    for (std::size_t interval = source + 1; interval < interval_count; ++interval) {
+      append(residence.boundaries[interval] - tau, residence.boundaries[interval + 1] - tau,
+             interval);
+    }
+    for (std::size_t interval = 0; interval < source; ++interval) {
+      append((residence.boundaries[interval] - tau) + lags_.beta(),
+             (residence.boundaries[interval + 1] - tau) + lags_.beta(), interval);
+    }
+    append((residence.boundaries[source] - tau) + lags_.beta(), lags_.beta(), source);
+    if (shifted.empty() || shifted.front().begin != 0.0 || shifted.back().end != lags_.beta()) {
+      throw std::logic_error("continuous shifted residence partition is incomplete");
+    }
+    return shifted;
+  }
+
+  [[nodiscard]] std::vector<double> overlaps_at_lag(const DensityResidenceSeries &residence,
+                                                    const double tau) const {
+    const std::vector<ShiftedResidenceInterval> shifted = shifted_intervals(residence, tau);
+    auto sums = make_checked_vector<CompensatedRealSum>(
+        momentum_count_, "continuous density-lag overlap sums exceed vector capacity");
+    std::size_t base = 0;
+    std::size_t displaced = 0;
+    while (base < residence.interval_count() && displaced < shifted.size()) {
+      const double begin = std::max(residence.boundaries[base], shifted[displaced].begin);
+      const double end = std::min(residence.boundaries[base + 1], shifted[displaced].end);
+      if (end > begin) {
+        const double duration = end - begin;
+        for (std::size_t momentum = 0; momentum < momentum_count_; ++momentum) {
+          const std::complex<double> product =
+              residence.value(shifted[displaced].source_interval, momentum) *
+              std::conj(residence.value(base, momentum));
+          const double contribution = duration * product.real();
+          if (!std::isfinite(contribution)) {
+            throw std::overflow_error("continuous density-lag contribution is non-finite");
+          }
+          sums[momentum].add(contribution);
+        }
+      }
+      const double base_end = residence.boundaries[base + 1];
+      const double displaced_end = shifted[displaced].end;
+      if (base_end <= displaced_end) {
+        ++base;
+      }
+      if (displaced_end <= base_end) {
+        ++displaced;
+      }
+    }
+    if (base != residence.interval_count() || displaced != shifted.size()) {
+      throw std::logic_error("continuous density-lag intersection did not cover the period");
+    }
+
+    auto values = make_checked_vector<double>(
+        momentum_count_, "continuous density-lag overlap values exceed vector capacity");
+    for (std::size_t momentum = 0; momentum < momentum_count_; ++momentum) {
+      values[momentum] = sums[momentum].value();
+      if (!std::isfinite(values[momentum])) {
+        throw std::overflow_error("continuous density-lag overlap sum is non-finite");
+      }
+    }
+    return values;
+  }
+
+  [[nodiscard]] double exact_zero_momentum_overlap() const {
+    const auto particle_count = static_cast<double>(particle_count_);
+    const double value = (lags_.beta() * particle_count) * particle_count;
+    if (!std::isfinite(value)) {
+      throw std::overflow_error("continuous zero-momentum density-lag overlap is non-finite");
+    }
+    return value;
+  }
+
+  [[nodiscard]] std::size_t particle_phase_index(const std::size_t particle,
+                                                 const std::size_t momentum) const noexcept {
+    return (particle * momentum_count_) + momentum;
+  }
+
+  const ContinuousMeasurementContext &context_;
+  const ImaginaryTimeLagSet &lags_;
+  std::span<const std::complex<double>> site_step_phases_;
+  std::size_t particle_count_;
+  std::size_t momentum_count_;
+  std::size_t dimension_;
+  std::size_t particle_phase_extent_;
+  std::vector<CompensatedComplexSum> current_density_;
+  std::vector<std::complex<double>> particle_phases_;
+  std::vector<std::uint8_t> zero_momenta_;
+};
+
 using PairDensityOccupancyMap = std::unordered_map<SiteId, std::uint64_t, SiteIdHash>;
 
 void add_pair_count(std::uint64_t &pair_count, const std::uint64_t additional) {
@@ -870,6 +1183,22 @@ ContinuousMatsubaraPlan::ContinuousMatsubaraPlan(MatsubaraModeSet modes)
   }
 }
 
+ContinuousDensityLagPlan::ContinuousDensityLagPlan(ImaginaryTimeLagSet lags)
+    : lags_(std::move(lags)) {
+  const std::size_t component_count =
+      detail::checked_product(lags_.momentum_count(), lags_.layout().dimension(),
+                              "continuous density-lag phase extent exceeds size_t");
+  if (component_count > site_step_phases_.max_size()) {
+    throw std::length_error("continuous density-lag phase data exceed vector capacity");
+  }
+  site_step_phases_.reserve(component_count);
+  for (std::size_t momentum = 0; momentum < lags_.momentum_count(); ++momentum) {
+    for (std::size_t axis = 0; axis < lags_.layout().dimension(); ++axis) {
+      site_step_phases_.push_back(std::polar(1.0, -lags_.wavevector_component(momentum, axis)));
+    }
+  }
+}
+
 ContinuousMeasurementContext::ContinuousMeasurementContext(
     const ContinuousConfiguration &configuration)
     : model_(configuration.model()), layout_(model_.linear_size(), model_.dimension()) {
@@ -955,6 +1284,30 @@ ContinuousPairDensityModes::ContinuousPairDensityModes(
       throw std::invalid_argument("continuous pair-density amplitude is non-finite");
     }
   }
+}
+
+ContinuousDensityLagValues::ContinuousDensityLagValues(Model model, ImaginaryTimeLagSet lags,
+                                                       std::vector<double> overlap_values)
+    : model_(model), lags_(std::move(lags)), overlap_values_(std::move(overlap_values)) {
+  if (model_.beta() != lags_.beta() ||
+      TorusLayout(model_.linear_size(), model_.dimension()) != lags_.layout()) {
+    throw std::invalid_argument("continuous density-lag geometry does not match its model");
+  }
+  if (overlap_values_.size() != lags_.value_count()) {
+    throw std::invalid_argument("continuous density-lag result has the wrong value extent");
+  }
+  for (const double value : overlap_values_) {
+    if (!std::isfinite(value)) {
+      throw std::invalid_argument("continuous density-lag overlap is non-finite");
+    }
+  }
+}
+
+double ContinuousDensityLagValues::overlap(const std::size_t lag,
+                                           const std::size_t momentum) const {
+  static_cast<void>(lags_.lag(lag));
+  static_cast<void>(lags_.momentum_indices(momentum));
+  return overlap_values_[(lag * lags_.momentum_count()) + momentum];
 }
 
 ContinuousMatsubaraDensityCorrelations::ContinuousMatsubaraDensityCorrelations(
@@ -1427,6 +1780,21 @@ continuous_pair_density_modes(const ContinuousConfiguration &configuration,
   return continuous_pair_density_modes(ContinuousMeasurementContext(configuration), plan);
 }
 
+ContinuousDensityLagValues
+continuous_density_lag_values(const ContinuousMeasurementContext &context,
+                              const ContinuousDensityLagPlan &plan) {
+  const ImaginaryTimeLagSet &lags = plan.lags();
+  validate_projection_geometry(context, lags);
+  ContinuousDensityLagProjector projector(context, lags, plan.site_step_phases_);
+  return {context.model(), lags, projector.project()};
+}
+
+ContinuousDensityLagValues
+continuous_density_lag_values(const ContinuousConfiguration &configuration,
+                              const ContinuousDensityLagPlan &plan) {
+  return continuous_density_lag_values(ContinuousMeasurementContext(configuration), plan);
+}
+
 namespace detail {
 
 std::complex<double> matsubara_time_phase(const std::int64_t index, const double time,
@@ -1478,18 +1846,7 @@ std::complex<double> matsubara_interval_transform(const std::int64_t index, cons
 
 std::complex<double> matsubara_site_phase(const MatsubaraModeSet &modes, const std::size_t momentum,
                                           const SiteId site) {
-  const auto momentum_components = modes.momentum_indices(momentum);
-  const std::vector<std::size_t> site_components = modes.layout().decode(site);
-  const auto linear_size = static_cast<std::size_t>(modes.layout().linear_size());
-  std::complex<double> phase{1.0, 0.0};
-  for (std::size_t axis = 0; axis < modes.layout().dimension(); ++axis) {
-    const std::size_t residue =
-        multiply_modulo(momentum_components[axis], site_components[axis], linear_size);
-    const double angle =
-        -2.0 * std::numbers::pi * static_cast<double>(residue) / static_cast<double>(linear_size);
-    phase *= std::polar(1.0, angle);
-  }
-  return phase;
+  return spatial_site_phase(modes.layout(), modes.momentum_indices(momentum), site);
 }
 
 } // namespace detail

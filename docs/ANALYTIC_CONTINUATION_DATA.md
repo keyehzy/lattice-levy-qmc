@@ -4,8 +4,9 @@ Date: 2026-07-23
 
 Status: staged implementation specification. The exact continuous-time
 Matsubara density estimator, its block-resolved statistics, and the versioned
-continuation-data export/demo workflow are implemented. Direct requested-lag
-output is not implemented.
+continuation-data export/demo workflow are implemented. The exact primitive
+requested-lag plan and interval-overlap projector are also implemented;
+block-resolved requested-lag statistics and export are not implemented.
 
 ## Goal and boundary
 
@@ -400,14 +401,14 @@ particle modes own only the free `Model`. A bundle must never infer `U` from a
 measurement result; the run workflow supplies it explicitly and verifies that
 its free model matches the block series.
 
-## Direct requested-lag backend
+## Implemented direct requested-lag primitive
 
 Some continuation programs and diagnostic plots prefer `C(q,tau)` to
 Matsubara data. Inverting a finite set of Matsubara modes is not an exact
 continuous-time estimator and can ring at the frequency cutoff. The direct
 backend should therefore evaluate selected lags from residence intervals.
 
-Conceptually:
+The implemented primitive API is:
 
 ```cpp
 struct ImaginaryTimeLagRequest {
@@ -448,8 +449,7 @@ continuous_density_lag_values(
     const ContinuousDensityLagPlan &);
 ```
 
-The exact public names can change during implementation. The required
-semantics are:
+The implemented semantics are:
 
 - `beta` is positive and every lag is finite and canonical in `[0,beta)`;
 - momentum and lag requests are nonempty, duplicate-free, and preserve request
@@ -460,12 +460,13 @@ semantics are:
 - the source-free auto-correlation stores the real, time-reversal-symmetrised
   estimator, eliminating an exactly zero ensemble imaginary part without
   changing its mean;
-- the accumulator subtracts `beta*N*N` only at `q == 0`, applies
-  `1/(beta*V)`, owns sample/block counts, and installs the exact fixed-`N`
-  zero rather than subtracting two rounded values; and
 - a future background gauge field or genuinely complex mixed correlation
   requires a different result type rather than silently discarding its
   imaginary part.
+
+The remaining lag accumulator must subtract `beta*N*N` only at `q == 0`,
+apply `1/(beta*V)`, own sample/block counts, and install the exact fixed-`N`
+zero rather than subtracting two rounded values.
 
 ### Exact interval-overlap algorithm
 
@@ -596,10 +597,13 @@ loop.
    provenance.
 4. **Completed 2026-07-23:** Extend the finite-`U` statistical regression to
    exercise the public block workflow and exported values.
-5. Add the separate requested-lag plan, exact interval-overlap projector, block
-   accumulator, and deterministic/Lehmann tests when a direct-`tau` consumer is
-   selected.
-6. Provide thin, separately maintained adapters for concrete continuation
+5. **Primitive completed 2026-07-23:** Add the separate requested-lag geometry
+   and plan, provenance-owning raw-overlap result, exact interval-overlap
+   projector, and deterministic seam/symmetry/invariance/reference tests.
+6. Add the requested-lag block accumulator, extend the versioned bundle and
+   demo workflow to the `imaginary_time_lag` basis, and add small-system Lehmann
+   tests when a direct-`tau` consumer is selected.
+7. Provide thin, separately maintained adapters for concrete continuation
    programs only after their input conventions are pinned by integration
    tests. Do not add a continuation solver to the QMC core by default.
 

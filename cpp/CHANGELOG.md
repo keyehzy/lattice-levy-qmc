@@ -38,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `ContinuousMatsubaraPlan` with bounded binary64 phase reduction, exact
   seam/period behavior, stable interval transforms, and overflow-safe torus
   site phases.
+- Add validated `ImaginaryTimeLagSet` geometry plus
+  `ContinuousDensityLagPlan`, `ContinuousDensityLagValues`, and an exact
+  event-driven interval-overlap projector for selected density-correlation
+  lags without introducing a retained time grid.
 - Add `ContinuousParticleModes` and exact grouped-event projection of
   unnormalised density residence amplitudes and signed bond-midpoint hopping
   flux, including canonical-density and winding-preserving zero modes.

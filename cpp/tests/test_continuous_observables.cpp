@@ -37,6 +37,14 @@ static_assert(std::is_same_v<decltype(std::declval<const ContinuousMeasurementCo
 static_assert(!std::default_initializable<ContinuousMatsubaraPlan>);
 static_assert(std::is_same_v<decltype(std::declval<const ContinuousMatsubaraPlan &>().modes()),
                              const MatsubaraModeSet &>);
+static_assert(!std::default_initializable<ContinuousDensityLagPlan>);
+static_assert(std::is_same_v<decltype(std::declval<const ContinuousDensityLagPlan &>().lags()),
+                             const ImaginaryTimeLagSet &>);
+static_assert(!std::default_initializable<ContinuousDensityLagValues>);
+static_assert(std::is_same_v<decltype(std::declval<const ContinuousDensityLagValues &>().model()),
+                             const Model &>);
+static_assert(std::is_same_v<decltype(std::declval<const ContinuousDensityLagValues &>().lags()),
+                             const ImaginaryTimeLagSet &>);
 static_assert(!std::default_initializable<ContinuousParticleModes>);
 static_assert(std::is_same_v<decltype(std::declval<const ContinuousParticleModes &>().model()),
                              const Model &>);
@@ -74,6 +82,14 @@ MatsubaraModeSet make_continuous_modes(const double beta, const TorusLayout &lay
   return MatsubaraModeSet(beta, layout,
                           MatsubaraModeRequest{.momentum_indices = std::move(momenta),
                                                .frequency_indices = std::move(frequencies)});
+}
+
+ImaginaryTimeLagSet make_continuous_lags(const double beta, const TorusLayout &layout,
+                                         std::vector<std::vector<std::size_t>> momenta,
+                                         std::vector<double> lags) {
+  return ImaginaryTimeLagSet(
+      beta, layout,
+      ImaginaryTimeLagRequest{.momentum_indices = std::move(momenta), .lags = std::move(lags)});
 }
 
 ContinuousConfiguration multidimensional_projection_configuration() {
@@ -136,6 +152,46 @@ ContinuousConfiguration atomic_pair_density_configuration() {
   return ContinuousConfiguration(model, Permutation({1, 0}), {first, second});
 }
 
+ContinuousConfiguration static_density_lag_configuration() {
+  const Model model(ModelParameters{
+      .particle_count = 2,
+      .beta = 1.0,
+      .linear_size = 4,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  return ContinuousConfiguration(
+      model, Permutation({0, 1}),
+      {ContinuousPath(1.0, {0}, {0}, {}), ContinuousPath(1.0, {1}, {1}, {})});
+}
+
+ContinuousConfiguration single_event_density_lag_configuration() {
+  const Model model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 1,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  return ContinuousConfiguration(
+      model, Permutation({0}),
+      {ContinuousPath(1.0, {0}, {1}, {{.time = 0.4, .axis = 0, .direction = 1}})});
+}
+
+ContinuousConfiguration multiple_cycle_density_lag_configuration() {
+  const Model model(ModelParameters{
+      .particle_count = 3,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const ContinuousPath first(1.0, {0}, {1}, {{.time = 0.3, .axis = 0, .direction = 1}});
+  const ContinuousPath second(1.0, {1}, {0}, {{.time = 0.7, .axis = 0, .direction = -1}});
+  const ContinuousPath third(1.0, {2}, {2}, {});
+  return ContinuousConfiguration(model, Permutation({1, 0, 2}), {first, second, third});
+}
+
 ContinuousConfiguration translated_configuration(const ContinuousConfiguration &configuration,
                                                  const Site &displacement) {
   std::vector<ContinuousPath> translated_worldlines;
@@ -145,6 +201,74 @@ ContinuousConfiguration translated_configuration(const ContinuousConfiguration &
   }
   return ContinuousConfiguration(configuration.model(), configuration.topology(),
                                  std::move(translated_worldlines));
+}
+
+std::complex<double> reference_density_at(const ContinuousConfiguration &configuration,
+                                          const ImaginaryTimeLagSet &lags,
+                                          const std::size_t momentum, const double tau) {
+  const TorusLayout &layout = lags.layout();
+  std::complex<double> density{0.0, 0.0};
+  for (const Site &position : configuration.positions_at(tau)) {
+    const std::vector<std::size_t> components = layout.decode(layout.encode_covering(position));
+    const double phase =
+        detail::phase_for_indices(lags.momentum_indices(momentum), components, layout);
+    density += std::polar(1.0, -phase);
+  }
+  return density;
+}
+
+double reference_raw_density_lag_overlap(const ContinuousConfiguration &configuration,
+                                         const ImaginaryTimeLagSet &lags,
+                                         const std::size_t momentum, const double tau) {
+  const double beta = lags.beta();
+  const ContinuousMeasurementContext context(configuration);
+  std::vector<double> boundaries{0.0, beta};
+  const auto append_boundary = [&boundaries, beta](double boundary) {
+    if (boundary == beta) {
+      boundary = 0.0;
+    }
+    if (boundary > 0.0 && boundary < beta) {
+      boundaries.push_back(boundary);
+    }
+  };
+  for (std::size_t group = 0; group < context.event_group_count(); ++group) {
+    double event_time = context.event_time(group);
+    append_boundary(event_time);
+    if (event_time == beta) {
+      event_time = 0.0;
+    }
+    double shifted = event_time - tau;
+    if (shifted < 0.0) {
+      shifted += beta;
+    }
+    append_boundary(shifted);
+  }
+  std::ranges::sort(boundaries);
+  boundaries.erase(std::ranges::unique(boundaries).begin(), boundaries.end());
+
+  double overlap = 0.0;
+  for (std::size_t interval = 0; interval + 1 < boundaries.size(); ++interval) {
+    const double begin = boundaries[interval];
+    const double end = boundaries[interval + 1];
+    const double midpoint = begin + (0.5 * (end - begin));
+    double shifted_midpoint = midpoint + tau;
+    if (shifted_midpoint >= beta) {
+      shifted_midpoint -= beta;
+    }
+    const std::complex<double> base = reference_density_at(configuration, lags, momentum, midpoint);
+    const std::complex<double> shifted =
+        reference_density_at(configuration, lags, momentum, shifted_midpoint);
+    overlap += (end - begin) * (shifted * std::conj(base)).real();
+  }
+  return overlap;
+}
+
+double reference_symmetrized_density_lag_overlap(const ContinuousConfiguration &configuration,
+                                                 const ImaginaryTimeLagSet &lags,
+                                                 const std::size_t momentum, const double tau) {
+  const double reflected = tau == 0.0 ? 0.0 : lags.beta() - tau;
+  return (0.5 * reference_raw_density_lag_overlap(configuration, lags, momentum, tau)) +
+         (0.5 * reference_raw_density_lag_overlap(configuration, lags, momentum, reflected));
 }
 
 TEST(ContinuousMatsubaraPlanTest, OwnsModesAndEnforcesSymmetricFrequencyBound) {
@@ -451,6 +575,140 @@ TEST(ContinuousMeasurementContextTest, HandlesSingleSiteAndMultidimensionalPhysi
   EXPECT_EQ(plane_context.hops()[1].axis, 0U);
   EXPECT_EQ(plane_context.hops()[1].arrival,
             plane_context.layout().encode(std::array<std::size_t, 2>{2, 1}));
+}
+
+TEST(ContinuousDensityLagValuesTest, OwnsPlanAndResultProvenanceWithCheckedLagMajorAccess) {
+  const ContinuousConfiguration configuration = static_density_lag_configuration();
+  const Model model = configuration.model();
+  const ImaginaryTimeLagSet lags =
+      make_continuous_lags(model.beta(), TorusLayout(4, 1), {{0}, {1}, {3}}, {0.75, 0.0, 0.25});
+  const ContinuousDensityLagPlan plan(lags);
+  const ContinuousDensityLagValues from_context =
+      continuous_density_lag_values(ContinuousMeasurementContext(configuration), plan);
+  const ContinuousDensityLagValues convenience = continuous_density_lag_values(configuration, plan);
+
+  EXPECT_EQ(plan.lags(), lags);
+  EXPECT_EQ(from_context.model(), model);
+  EXPECT_EQ(from_context.lags(), lags);
+  for (std::size_t lag = 0; lag < lags.lag_count(); ++lag) {
+    EXPECT_DOUBLE_EQ(from_context.overlap(lag, 0), 4.0);
+    EXPECT_NEAR(from_context.overlap(lag, 1), 2.0, 2e-15);
+    EXPECT_NEAR(from_context.overlap(lag, 2), 2.0, 2e-15);
+    for (std::size_t momentum = 0; momentum < lags.momentum_count(); ++momentum) {
+      EXPECT_DOUBLE_EQ(convenience.overlap(lag, momentum), from_context.overlap(lag, momentum));
+    }
+  }
+  EXPECT_THROW(static_cast<void>(from_context.overlap(lags.lag_count(), 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(from_context.overlap(0, lags.momentum_count())),
+               std::out_of_range);
+}
+
+TEST(ContinuousDensityLagValuesTest, MatchesIndependentIntervalReferenceAcrossEdgeFixtures) {
+  std::vector<ContinuousConfiguration> configurations;
+  configurations.push_back(static_density_lag_configuration());
+  configurations.push_back(single_event_density_lag_configuration());
+  configurations.push_back(test::coincident_seam_configuration());
+  configurations.push_back(multidimensional_projection_configuration());
+  configurations.push_back(multiple_cycle_density_lag_configuration());
+  const Model empty_model(ModelParameters{
+      .particle_count = 0,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  configurations.emplace_back(empty_model, Permutation(), std::vector<ContinuousPath>{});
+
+  for (const ContinuousConfiguration &configuration : configurations) {
+    const Model &model = configuration.model();
+    const TorusLayout layout(model.linear_size(), model.dimension());
+    std::vector<std::vector<std::size_t>> momenta(1,
+                                                  std::vector<std::size_t>(model.dimension(), 0));
+    if (model.linear_size() > 1) {
+      std::vector<std::size_t> nonzero(model.dimension(), 0);
+      nonzero[0] = 1;
+      momenta.push_back(std::move(nonzero));
+    }
+    const ImaginaryTimeLagSet lags =
+        make_continuous_lags(model.beta(), layout, std::move(momenta), {0.0, 0.13, 0.4, 0.73});
+    const ContinuousDensityLagValues values =
+        continuous_density_lag_values(configuration, ContinuousDensityLagPlan(lags));
+
+    const double particle_count = static_cast<double>(model.particle_count());
+    const double exact_zero_momentum = (model.beta() * particle_count) * particle_count;
+    for (std::size_t lag = 0; lag < lags.lag_count(); ++lag) {
+      EXPECT_DOUBLE_EQ(values.overlap(lag, 0), exact_zero_momentum);
+      for (std::size_t momentum = 1; momentum < lags.momentum_count(); ++momentum) {
+        const double expected =
+            reference_symmetrized_density_lag_overlap(configuration, lags, momentum, lags.lag(lag));
+        const double tolerance = 3e-13 * (1.0 + std::abs(expected));
+        EXPECT_NEAR(values.overlap(lag, momentum), expected, tolerance);
+      }
+    }
+  }
+}
+
+TEST(ContinuousDensityLagValuesTest,
+     EnforcesTimeReflectionAndPreservesTranslationAndTimeOriginInvariance) {
+  const ContinuousConfiguration configuration = multidimensional_projection_configuration();
+  const ContinuousConfiguration translated = translated_configuration(configuration, Site{6, -7});
+  const ContinuousConfiguration rotated = rotate_configuration_time_origin(configuration, 0.25);
+  const Model model = configuration.model();
+  const ImaginaryTimeLagSet lags = make_continuous_lags(
+      model.beta(), TorusLayout(5, 2), {{0, 0}, {1, 2}, {4, 3}}, {0.0, 0.1, 0.25, 0.75, 0.9});
+  const ContinuousDensityLagPlan plan(lags);
+  const ContinuousDensityLagValues original = continuous_density_lag_values(configuration, plan);
+  const ContinuousDensityLagValues shifted = continuous_density_lag_values(translated, plan);
+  const ContinuousDensityLagValues time_rotated = continuous_density_lag_values(rotated, plan);
+
+  const std::array<std::size_t, 5> reflected_indices{0, 4, 3, 2, 1};
+  for (std::size_t lag = 0; lag < lags.lag_count(); ++lag) {
+    for (std::size_t momentum = 0; momentum < lags.momentum_count(); ++momentum) {
+      const double value = original.overlap(lag, momentum);
+      const double tolerance = 5e-13 * (1.0 + std::abs(value));
+      EXPECT_NEAR(value, original.overlap(reflected_indices[lag], momentum), tolerance);
+      EXPECT_NEAR(value, shifted.overlap(lag, momentum), tolerance);
+      EXPECT_NEAR(value, time_rotated.overlap(lag, momentum), tolerance);
+      if (lags.lag(lag) == 0.0) {
+        EXPECT_GE(value, 0.0);
+      }
+    }
+  }
+}
+
+TEST(ContinuousDensityLagValuesTest, HandlesRepresentableLagsAdjacentToThePeriodicSeam) {
+  const ContinuousConfiguration configuration = test::coincident_seam_configuration();
+  const Model model = configuration.model();
+  const double first_positive = std::nextafter(0.0, 1.0);
+  const double last_before_beta = std::nextafter(model.beta(), 0.0);
+  const ImaginaryTimeLagSet lags = make_continuous_lags(model.beta(), TorusLayout(5, 1), {{1}, {4}},
+                                                        {0.0, first_positive, last_before_beta});
+  const ContinuousDensityLagValues values =
+      continuous_density_lag_values(configuration, ContinuousDensityLagPlan(lags));
+
+  for (std::size_t lag = 0; lag < lags.lag_count(); ++lag) {
+    for (std::size_t momentum = 0; momentum < lags.momentum_count(); ++momentum) {
+      EXPECT_TRUE(std::isfinite(values.overlap(lag, momentum)));
+    }
+  }
+  for (std::size_t momentum = 0; momentum < lags.momentum_count(); ++momentum) {
+    EXPECT_NEAR(values.overlap(0, momentum), values.overlap(1, momentum), 2e-14);
+    EXPECT_NEAR(values.overlap(0, momentum), values.overlap(2, momentum), 2e-14);
+  }
+}
+
+TEST(ContinuousDensityLagValuesTest, RejectsEveryContextAndPlanGeometryMismatch) {
+  const ContinuousConfiguration configuration = test::coincident_seam_configuration();
+  const ContinuousMeasurementContext context(configuration);
+  const ContinuousDensityLagPlan wrong_beta(
+      make_continuous_lags(2.0, TorusLayout(5, 1), {{0}, {1}}, {0.0, 0.5}));
+  const ContinuousDensityLagPlan wrong_layout(
+      make_continuous_lags(1.0, TorusLayout(4, 1), {{0}, {1}}, {0.0, 0.5}));
+
+  EXPECT_THROW(static_cast<void>(continuous_density_lag_values(context, wrong_beta)),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(continuous_density_lag_values(context, wrong_layout)),
+               std::invalid_argument);
 }
 
 TEST(ContinuousParticleModesTest, ProjectsStaticPathsAndCanonicalZeroMomentumExactly) {
