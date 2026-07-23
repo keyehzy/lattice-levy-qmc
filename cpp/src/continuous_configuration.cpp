@@ -15,11 +15,11 @@
 namespace qmc {
 namespace {
 
-bool nearly_equal_time(const double left, const double right) {
+bool nearly_equal_time(const double left, const double right, const double arithmetic_scale = 0.0) {
   if (left == right) {
     return true;
   }
-  const double scale = std::max(std::abs(left), std::abs(right));
+  const double scale = std::max({std::abs(left), std::abs(right), std::abs(arithmetic_scale)});
   return std::abs(left - right) <= 16.0 * std::numeric_limits<double>::epsilon() * scale;
 }
 
@@ -104,12 +104,12 @@ std::vector<ContinuousPath> sample_paths_for_cycle(const Cycle &labels, const Mo
   // beta by a few ulps. Worldline time is exactly [0,beta], so normalize that
   // harmless arithmetic drift before the paths enter the Markov state.
   for (ContinuousPath &path : paths) {
-    if (!nearly_equal_time(path.duration(), model.beta())) {
+    if (!nearly_equal_time(path.duration(), model.beta(), duration)) {
       throw std::runtime_error("continuous cycle piece duration drift exceeds tolerance");
     }
     std::vector<JumpEvent> events(path.events().begin(), path.events().end());
     for (JumpEvent &event : events) {
-      if (event.time > model.beta() && nearly_equal_time(event.time, model.beta())) {
+      if (event.time > model.beta() && nearly_equal_time(event.time, model.beta(), duration)) {
         event.time = model.beta();
       }
     }
