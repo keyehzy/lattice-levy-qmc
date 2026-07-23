@@ -51,6 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `DensityMatsubaraBlockAccumulator` and `DensityMatsubaraBlockSeries` for
   complete equal-size density blocks, per-momentum frequency covariance of the
   mean, standard errors, and leave-one-block-out means.
+- Add `DensityLagBlockAccumulator` and `DensityLagBlockSeries` for normalized
+  selected-lag density blocks, signed means, per-momentum cross-lag covariance,
+  standard errors, leave-one-block-out means, and exact fixed-particle-number
+  zero-momentum constraints.
 - Add an opt-in interacting-demo density continuation workflow that publishes
   a validated `density-continuation-v1` bundle with values, per-momentum
   frequency covariance, normalized blocks, full interacting run provenance,

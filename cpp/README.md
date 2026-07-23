@@ -209,6 +209,12 @@ mean subtracted at amplitude level. `DensityMatsubaraBlockAccumulator` consumes
 the same normalized observation into consecutive equal-size blocks; its owning
 result exposes block values, means, per-momentum frequency covariance of the
 mean, standard errors, and leave-one-block-out means.
+`continuous_density_lag_values(context, plan)` separately projects exact
+selected-lag density overlaps without a time grid. `DensityLagBlockAccumulator`
+normalizes those overlaps into connected per-site correlations, installs the
+fixed-particle-number zero-momentum value as exact zero, and publishes signed
+block values, means, per-momentum cross-lag covariance, standard errors, and
+leave-one-block-out means in an owning `DensityLagBlockSeries`.
 `HoppingResponseAccumulator` consumes the same primitive sample and returns the
 full signed-flux gauge response
 `R=<I I^*>/(beta*V)`, axis-resolved diamagnetic term
@@ -224,8 +230,9 @@ See [`docs/MEASUREMENTS.md`](../docs/MEASUREMENTS.md) for estimator definitions,
 normalizations, exactness, and retained-grid conventions. The event-based
 continuous measurement design is documented in
 [`docs/CONTINUOUS_TIME_MEASUREMENTS.md`](../docs/CONTINUOUS_TIME_MEASUREMENTS.md).
-The implemented block-resolved statistics and continuation-data export, along
-with the remaining exact requested-lag density output, are specified in
+The implemented Matsubara and requested-lag block statistics, Matsubara
+continuation-data export, and remaining requested-lag export workflow are
+specified in
 [`docs/ANALYTIC_CONTINUATION_DATA.md`](../docs/ANALYTIC_CONTINUATION_DATA.md).
 
 ## Measurement and plotting demo

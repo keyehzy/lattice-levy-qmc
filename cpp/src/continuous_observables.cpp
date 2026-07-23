@@ -138,6 +138,12 @@ bool is_zero_momentum(const MatsubaraModeSet &modes, const std::size_t momentum)
                              [](const std::size_t component) { return component == 0; });
 }
 
+bool is_zero_momentum(const ImaginaryTimeLagSet &lags, const std::size_t momentum) {
+  const auto components = lags.momentum_indices(momentum);
+  return std::ranges::all_of(components,
+                             [](const std::size_t component) { return component == 0; });
+}
+
 void validate_model_mode_geometry(const Model &model, const MatsubaraModeSet &modes,
                                   const char *description) {
   if (model.beta() != modes.beta() ||
@@ -150,6 +156,20 @@ MatsubaraModeSet validated_density_accumulator_modes(const Model &model, Matsuba
   validate_model_mode_geometry(model, modes,
                                "density accumulator model and Matsubara geometry differ");
   return modes;
+}
+
+void validate_model_lag_geometry(const Model &model, const ImaginaryTimeLagSet &lags,
+                                 const char *description) {
+  if (model.beta() != lags.beta() ||
+      TorusLayout(model.linear_size(), model.dimension()) != lags.layout()) {
+    throw std::invalid_argument(description);
+  }
+}
+
+ImaginaryTimeLagSet validated_density_lag_accumulator_lags(const Model &model,
+                                                           ImaginaryTimeLagSet lags) {
+  validate_model_lag_geometry(model, lags, "density lag accumulator model and lag geometry differ");
+  return lags;
 }
 
 std::size_t validated_measurements_per_block(const std::size_t measurements_per_block) {
@@ -343,6 +363,137 @@ std::vector<double> density_block_covariances(const MatsubaraModeSet &modes,
         const std::size_t lower = density_covariance_index(
             frequency_count, momentum,
             {.row_frequency = right_frequency, .column_frequency = left_frequency});
+        covariances[upper] = covariance;
+        covariances[lower] = covariance;
+      }
+    }
+  }
+  return covariances;
+}
+
+std::size_t density_lag_covariance_extent(const ImaginaryTimeLagSet &lags) {
+  const std::size_t lag_square = detail::checked_product(
+      lags.lag_count(), lags.lag_count(), "density lag covariance extent exceeds size_t");
+  return detail::checked_product(lags.momentum_count(), lag_square,
+                                 "density lag covariance extent exceeds size_t");
+}
+
+std::vector<double> density_lag_observation(const ContinuousDensityLagValues &values,
+                                            const Model &model, const ImaginaryTimeLagSet &lags) {
+  if (values.model() != model) {
+    throw std::invalid_argument("density lag observation has a different model");
+  }
+  if (values.lags() != lags) {
+    throw std::invalid_argument("density lag observation has different lag geometry");
+  }
+
+  auto observation = make_checked_vector<double>(lags.value_count(),
+                                                 "density lag observations exceed vector capacity");
+  const auto volume_divisor = static_cast<double>(model.volume());
+  for (std::size_t lag = 0; lag < lags.lag_count(); ++lag) {
+    for (std::size_t momentum = 0; momentum < lags.momentum_count(); ++momentum) {
+      const std::size_t value = (lag * lags.momentum_count()) + momentum;
+      if (is_zero_momentum(lags, momentum)) {
+        observation[value] = 0.0;
+        continue;
+      }
+      const double overlap = values.overlap(lag, momentum);
+      if (!std::isfinite(overlap)) {
+        throw std::overflow_error("density lag overlap is non-finite");
+      }
+      const double normalized = (overlap / model.beta()) / volume_divisor;
+      if (!std::isfinite(normalized)) {
+        throw std::overflow_error("normalized density lag observation is non-finite");
+      }
+      observation[value] = normalized;
+    }
+  }
+  return observation;
+}
+
+std::size_t validate_density_lag_block_series(const ImaginaryTimeLagSet &lags,
+                                              const std::size_t measurements_per_block,
+                                              const std::span<const double> block_values,
+                                              const std::size_t sample_count) {
+  if (block_values.size() % lags.value_count() != 0) {
+    throw std::invalid_argument("density lag block series has the wrong block-value extent");
+  }
+  const std::size_t block_count = block_values.size() / lags.value_count();
+  if (block_count < 2) {
+    throw std::invalid_argument("density lag block series requires at least two blocks");
+  }
+  const std::size_t expected_sample_count = detail::checked_product(
+      block_count, measurements_per_block, "density lag block-series sample count exceeds size_t");
+  if (sample_count != expected_sample_count) {
+    throw std::invalid_argument("density lag block series has an inconsistent sample count");
+  }
+  for (std::size_t block = 0; block < block_count; ++block) {
+    for (std::size_t lag = 0; lag < lags.lag_count(); ++lag) {
+      for (std::size_t momentum = 0; momentum < lags.momentum_count(); ++momentum) {
+        const double value =
+            block_values[(block * lags.value_count()) + (lag * lags.momentum_count()) + momentum];
+        if (!std::isfinite(value)) {
+          throw std::invalid_argument("density lag block value is non-finite");
+        }
+        if (is_zero_momentum(lags, momentum) && value != 0.0) {
+          throw std::invalid_argument("density lag zero-momentum block value is not exact zero");
+        }
+      }
+    }
+  }
+  return block_count;
+}
+
+std::vector<double> density_lag_block_means(const ImaginaryTimeLagSet &lags,
+                                            const std::span<const double> block_values,
+                                            const std::size_t block_count) {
+  auto means = make_checked_vector<double>(lags.value_count(),
+                                           "density lag block means exceed vector capacity");
+  const auto block_divisor = static_cast<double>(block_count);
+  for (std::size_t value = 0; value < lags.value_count(); ++value) {
+    CompensatedRealSum mean_sum;
+    for (std::size_t block = 0; block < block_count; ++block) {
+      mean_sum.add(block_values[(block * lags.value_count()) + value] / block_divisor);
+    }
+    means[value] = mean_sum.value();
+    if (!std::isfinite(means[value])) {
+      throw std::overflow_error("density lag block-series mean is non-finite");
+    }
+  }
+  return means;
+}
+
+struct DensityLagCovarianceCoordinates {
+  std::size_t row_lag;
+  std::size_t column_lag;
+};
+
+std::size_t
+density_lag_covariance_index(const std::size_t lag_count, const std::size_t momentum,
+                             const DensityLagCovarianceCoordinates coordinates) noexcept {
+  return ((((momentum * lag_count) + coordinates.row_lag) * lag_count) + coordinates.column_lag);
+}
+
+std::vector<double> density_lag_block_covariances(const ImaginaryTimeLagSet &lags,
+                                                  const std::span<const double> block_values,
+                                                  const std::span<const double> means,
+                                                  const std::size_t block_count) {
+  auto covariances = make_checked_vector<double>(density_lag_covariance_extent(lags),
+                                                 "density lag covariances exceed vector capacity");
+  const std::size_t lag_count = lags.lag_count();
+  const std::size_t momentum_count = lags.momentum_count();
+  for (std::size_t momentum = 0; momentum < momentum_count; ++momentum) {
+    for (std::size_t left_lag = 0; left_lag < lag_count; ++left_lag) {
+      const std::size_t left_value = (left_lag * momentum_count) + momentum;
+      for (std::size_t right_lag = left_lag; right_lag < lag_count; ++right_lag) {
+        const std::size_t right_value = (right_lag * momentum_count) + momentum;
+        const double covariance =
+            density_covariance_of_mean(block_values, means, lags.value_count(), block_count,
+                                       left_value, right_value, left_lag == right_lag);
+        const std::size_t upper = density_lag_covariance_index(
+            lag_count, momentum, {.row_lag = left_lag, .column_lag = right_lag});
+        const std::size_t lower = density_lag_covariance_index(
+            lag_count, momentum, {.row_lag = right_lag, .column_lag = left_lag});
         covariances[upper] = covariance;
         covariances[lower] = covariance;
       }
@@ -1549,6 +1700,153 @@ DensityMatsubaraBlockSeries DensityMatsubaraBlockAccumulator::finish() const {
     throw std::logic_error("density block accumulator requires at least two complete blocks");
   }
   return {model_, modes_, measurements_per_block_, block_values_, sample_count_};
+}
+
+DensityLagBlockSeries::DensityLagBlockSeries(Model model, ImaginaryTimeLagSet lags,
+                                             const std::size_t measurements_per_block,
+                                             std::vector<double> block_values,
+                                             const std::size_t sample_count)
+    : model_(model), lags_(validated_density_lag_accumulator_lags(model_, std::move(lags))),
+      measurements_per_block_(validated_measurements_per_block(measurements_per_block)),
+      sample_count_(sample_count), block_values_(std::move(block_values)) {
+  block_count_ = validate_density_lag_block_series(lags_, measurements_per_block_, block_values_,
+                                                   sample_count_);
+  means_ = density_lag_block_means(lags_, block_values_, block_count_);
+  covariances_ = density_lag_block_covariances(lags_, block_values_, means_, block_count_);
+}
+
+std::size_t DensityLagBlockSeries::value_index(const std::size_t lag,
+                                               const std::size_t momentum) const {
+  if (lag >= lags_.lag_count()) {
+    throw std::out_of_range("density lag block-series lag index is out of range");
+  }
+  if (momentum >= lags_.momentum_count()) {
+    throw std::out_of_range("density lag block-series momentum index is out of range");
+  }
+  return (lag * lags_.momentum_count()) + momentum;
+}
+
+std::size_t DensityLagBlockSeries::covariance_index(const std::size_t momentum,
+                                                    const std::size_t left_lag,
+                                                    const std::size_t right_lag) const {
+  if (momentum >= lags_.momentum_count()) {
+    throw std::out_of_range("density lag covariance momentum index is out of range");
+  }
+  if (left_lag >= lags_.lag_count()) {
+    throw std::out_of_range("density lag covariance left-lag index is out of range");
+  }
+  if (right_lag >= lags_.lag_count()) {
+    throw std::out_of_range("density lag covariance right-lag index is out of range");
+  }
+  return density_lag_covariance_index(lags_.lag_count(), momentum,
+                                      {.row_lag = left_lag, .column_lag = right_lag});
+}
+
+double DensityLagBlockSeries::block_value(const std::size_t block, const std::size_t lag,
+                                          const std::size_t momentum) const {
+  if (block >= block_count_) {
+    throw std::out_of_range("density lag block index is out of range");
+  }
+  return block_values_[(block * lags_.value_count()) + value_index(lag, momentum)];
+}
+
+double DensityLagBlockSeries::mean(const std::size_t lag, const std::size_t momentum) const {
+  return means_[value_index(lag, momentum)];
+}
+
+double DensityLagBlockSeries::covariance_of_mean(const std::size_t momentum,
+                                                 const std::size_t left_lag,
+                                                 const std::size_t right_lag) const {
+  return covariances_[covariance_index(momentum, left_lag, right_lag)];
+}
+
+double DensityLagBlockSeries::standard_error(const std::size_t lag,
+                                             const std::size_t momentum) const {
+  const std::size_t covariance = covariance_index(momentum, lag, lag);
+  return std::sqrt(covariances_[covariance]);
+}
+
+double DensityLagBlockSeries::jackknife_mean(const std::size_t omitted_block, const std::size_t lag,
+                                             const std::size_t momentum) const {
+  if (omitted_block >= block_count_) {
+    throw std::out_of_range("density lag jackknife block index is out of range");
+  }
+  const std::size_t value = value_index(lag, momentum);
+  const auto jackknife_divisor = static_cast<double>(block_count_ - 1);
+  CompensatedRealSum jackknife_sum;
+  for (std::size_t block = 0; block < block_count_; ++block) {
+    if (block != omitted_block) {
+      jackknife_sum.add(block_values_[(block * lags_.value_count()) + value] / jackknife_divisor);
+    }
+  }
+  const double mean_without_block = jackknife_sum.value();
+  if (!std::isfinite(mean_without_block)) {
+    throw std::overflow_error("density lag jackknife mean is non-finite");
+  }
+  return mean_without_block;
+}
+
+DensityLagBlockAccumulator::DensityLagBlockAccumulator(Model model, ImaginaryTimeLagSet lags,
+                                                       const std::size_t measurements_per_block)
+    : model_(model), lags_(validated_density_lag_accumulator_lags(model_, std::move(lags))),
+      measurements_per_block_(validated_measurements_per_block(measurements_per_block)),
+      pending_sums_(make_checked_vector<double>(
+          lags_.value_count(), "density lag pending block sums exceed vector capacity")) {}
+
+void DensityLagBlockAccumulator::observe(const ContinuousDensityLagValues &values) {
+  const std::size_t updated_sample_count = detail::checked_add_size(
+      sample_count_, 1, "density lag block accumulator sample count exceeds size_t");
+  const std::size_t updated_pending_sample_count = detail::checked_add_size(
+      pending_sample_count_, 1, "density lag pending sample count exceeds size_t");
+  if (updated_pending_sample_count > measurements_per_block_) {
+    throw std::logic_error("density lag pending sample count exceeds its block size");
+  }
+  const std::vector<double> observation = density_lag_observation(values, model_, lags_);
+
+  std::vector<double> updated_pending_sums = pending_sums_;
+  for (std::size_t value = 0; value < lags_.value_count(); ++value) {
+    updated_pending_sums[value] += observation[value];
+    if (!std::isfinite(updated_pending_sums[value])) {
+      throw std::overflow_error("density lag pending block sum is non-finite");
+    }
+  }
+
+  if (updated_pending_sample_count < measurements_per_block_) {
+    pending_sums_.swap(updated_pending_sums);
+    pending_sample_count_ = updated_pending_sample_count;
+    sample_count_ = updated_sample_count;
+    return;
+  }
+
+  auto completed_block = make_checked_vector<double>(
+      lags_.value_count(), "density lag completed block exceeds vector capacity");
+  const auto block_divisor = static_cast<double>(measurements_per_block_);
+  for (std::size_t value = 0; value < lags_.value_count(); ++value) {
+    completed_block[value] = updated_pending_sums[value] / block_divisor;
+    if (!std::isfinite(completed_block[value])) {
+      throw std::overflow_error("density lag completed block value is non-finite");
+    }
+  }
+  const std::size_t updated_block_value_count = detail::checked_add_size(
+      block_values_.size(), lags_.value_count(), "density lag block-value extent exceeds size_t");
+  if (updated_block_value_count > block_values_.max_size()) {
+    throw std::length_error("density lag block values exceed vector capacity");
+  }
+
+  block_values_.insert(block_values_.end(), completed_block.begin(), completed_block.end());
+  std::ranges::fill(pending_sums_, 0.0);
+  pending_sample_count_ = 0;
+  sample_count_ = updated_sample_count;
+}
+
+DensityLagBlockSeries DensityLagBlockAccumulator::finish() const {
+  if (pending_sample_count_ != 0) {
+    throw std::logic_error("cannot finish a density lag block accumulator with a partial block");
+  }
+  if (completed_block_count() < 2) {
+    throw std::logic_error("density lag block accumulator requires at least two complete blocks");
+  }
+  return {model_, lags_, measurements_per_block_, block_values_, sample_count_};
 }
 
 HoppingResponse::HoppingResponse(Model model, MatsubaraModeSet modes,

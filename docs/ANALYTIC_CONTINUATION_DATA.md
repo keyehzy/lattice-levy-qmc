@@ -5,8 +5,9 @@ Date: 2026-07-23
 Status: staged implementation specification. The exact continuous-time
 Matsubara density estimator, its block-resolved statistics, and the versioned
 continuation-data export/demo workflow are implemented. The exact primitive
-requested-lag plan and interval-overlap projector are also implemented;
-block-resolved requested-lag statistics and export are not implemented.
+requested-lag plan, interval-overlap projector, and block-resolved statistics
+are also implemented; requested-lag export and demo integration are not
+implemented.
 
 ## Goal and boundary
 
@@ -464,9 +465,16 @@ The implemented semantics are:
   requires a different result type rather than silently discarding its
   imaginary part.
 
-The remaining lag accumulator must subtract `beta*N*N` only at `q == 0`,
-apply `1/(beta*V)`, own sample/block counts, and install the exact fixed-`N`
-zero rather than subtracting two rounded values.
+`DensityLagBlockAccumulator` consumes these primitive overlaps, applies
+`1/(beta*V)` at every nonzero momentum, and installs exact zero at `q == 0`
+rather than subtracting two rounded values. Its owning
+`DensityLagBlockSeries` retains the complete model and requested-lag
+provenance, block size, sample count, signed block observations, means,
+per-momentum cross-lag covariance of the mean, standard errors, and
+leave-one-block-out means. It has the same complete-block rules as the
+Matsubara path and rejects failed observations before mutation. Unlike a
+Matsubara susceptibility observation, a nonzero-lag correlation and its block
+mean may be negative.
 
 ### Exact interval-overlap algorithm
 
@@ -600,10 +608,13 @@ loop.
 5. **Primitive completed 2026-07-23:** Add the separate requested-lag geometry
    and plan, provenance-owning raw-overlap result, exact interval-overlap
    projector, and deterministic seam/symmetry/invariance/reference tests.
-6. Add the requested-lag block accumulator, extend the versioned bundle and
-   demo workflow to the `imaginary_time_lag` basis, and add small-system Lehmann
-   tests when a direct-`tau` consumer is selected.
-7. Provide thin, separately maintained adapters for concrete continuation
+6. **Block statistics completed 2026-07-23:** Add the requested-lag block
+   accumulator and provenance-owning series with signed block values,
+   per-momentum cross-lag covariance, standard errors, and jackknife means.
+7. Extend the versioned bundle and demo workflow to the
+   `imaginary_time_lag` basis, and add small-system Lehmann tests when a
+   direct-`tau` consumer is selected.
+8. Provide thin, separately maintained adapters for concrete continuation
    programs only after their input conventions are pinned by integration
    tests. Do not add a continuation solver to the QMC core by default.
 

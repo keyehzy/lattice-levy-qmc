@@ -18,6 +18,7 @@ class ContinuousMeasurementContext;
 class ContinuousDensityLagValues;
 class ContinuousParticleModes;
 class ContinuousPairDensityModes;
+class DensityLagBlockAccumulator;
 class DensityMatsubaraAccumulator;
 class DensityMatsubaraBlockAccumulator;
 class HoppingResponseAccumulator;
@@ -335,6 +336,88 @@ private:
   std::vector<double> pending_sums_;
   std::vector<double> block_values_;
   std::vector<std::complex<double>> analytic_means_;
+};
+
+// Consecutive equal-size block means of the connected density correlation at
+// selected imaginary-time lags. Values are dimensionless per site and may be
+// signed. Statistical covariance is the covariance of the reported mean,
+// calculated independently across lags for each requested momentum.
+class DensityLagBlockSeries {
+public:
+  [[nodiscard]] const Model &model() const noexcept { return model_; }
+  [[nodiscard]] const ImaginaryTimeLagSet &lags() const noexcept { return lags_; }
+  [[nodiscard]] std::size_t measurements_per_block() const noexcept {
+    return measurements_per_block_;
+  }
+  [[nodiscard]] std::size_t block_count() const noexcept { return block_count_; }
+  [[nodiscard]] std::size_t sample_count() const noexcept { return sample_count_; }
+
+  // All accessors check every supplied block, lag, and momentum axis.
+  [[nodiscard]] double block_value(std::size_t block, std::size_t lag, std::size_t momentum) const;
+  [[nodiscard]] double mean(std::size_t lag, std::size_t momentum) const;
+  [[nodiscard]] double covariance_of_mean(std::size_t momentum, std::size_t left_lag,
+                                          std::size_t right_lag) const;
+  [[nodiscard]] double standard_error(std::size_t lag, std::size_t momentum) const;
+  [[nodiscard]] double jackknife_mean(std::size_t omitted_block, std::size_t lag,
+                                      std::size_t momentum) const;
+
+private:
+  friend class DensityLagBlockAccumulator;
+
+  DensityLagBlockSeries(Model model, ImaginaryTimeLagSet lags, std::size_t measurements_per_block,
+                        std::vector<double> block_values, std::size_t sample_count);
+
+  [[nodiscard]] std::size_t value_index(std::size_t lag, std::size_t momentum) const;
+  [[nodiscard]] std::size_t covariance_index(std::size_t momentum, std::size_t left_lag,
+                                             std::size_t right_lag) const;
+
+  Model model_;
+  ImaginaryTimeLagSet lags_;
+  std::size_t measurements_per_block_;
+  std::size_t block_count_ = 0;
+  std::size_t sample_count_;
+  std::vector<double> block_values_;
+  std::vector<double> means_;
+  std::vector<double> covariances_;
+};
+
+// Forms consecutive equal-size block means from exact selected-lag density
+// overlaps. Nonzero momenta are normalized by 1/(beta*V); fixed-particle-number
+// zero momentum is installed as exact zero without rounded subtraction. Failed
+// observations leave all state unchanged, and finish() never drops a partial
+// block.
+class DensityLagBlockAccumulator {
+public:
+  // Throws invalid_argument for zero block size or differing model/lag
+  // geometry, and length_error/overflow_error for unrepresentable extents.
+  DensityLagBlockAccumulator(Model model, ImaginaryTimeLagSet lags,
+                             std::size_t measurements_per_block);
+
+  [[nodiscard]] const Model &model() const noexcept { return model_; }
+  [[nodiscard]] const ImaginaryTimeLagSet &lags() const noexcept { return lags_; }
+  [[nodiscard]] std::size_t measurements_per_block() const noexcept {
+    return measurements_per_block_;
+  }
+  [[nodiscard]] std::size_t completed_block_count() const noexcept {
+    return block_values_.size() / lags_.value_count();
+  }
+  [[nodiscard]] std::size_t pending_sample_count() const noexcept { return pending_sample_count_; }
+
+  // Throws invalid_argument for different model or lag provenance and
+  // overflow_error/length_error if candidate state is not representable.
+  // Validation and a completing block's allocation occur before mutation.
+  void observe(const ContinuousDensityLagValues &values);
+  // Requires at least two complete blocks and no pending partial block.
+  [[nodiscard]] DensityLagBlockSeries finish() const;
+
+private:
+  Model model_;
+  ImaginaryTimeLagSet lags_;
+  std::size_t measurements_per_block_;
+  std::size_t sample_count_ = 0;
+  std::size_t pending_sample_count_ = 0;
+  std::vector<double> pending_sums_;
+  std::vector<double> block_values_;
 };
 
 // Gauge response to the dimensionless positive-bond Peierls source. The full
