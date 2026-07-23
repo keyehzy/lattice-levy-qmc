@@ -53,6 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add deterministic global covering-space translation regressions for
   continuous particle and pair-density modes, including auto-response
   invariance.
+- Add a finite-interaction statistical regression comparing continuous density
+  susceptibility, hopping response, and the diamagnetic estimator with
+  small-system exact diagonalisation using blocked Markov-chain errors.
 - Add self-describing segment, stitch, fixed-seam stitch-sweep, and random-seam
   stitch option values.
 - Add generated compile-time version metadata in `<qmc/version.hpp>`, sourced

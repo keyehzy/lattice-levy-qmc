@@ -14,8 +14,10 @@ the occupancy-based on-site pair-density projector and its deterministic
 boundary/identity tests (step 7), were completed through step 4 on 2026-07-22
 and through step 7 on 2026-07-23. The deterministic global covering-space
 translation-covariance and auto-response-invariance check was completed on
-2026-07-23. This document remains the design specification and contains no
-implementation.
+2026-07-23. The finite-interaction sampler-to-accumulator comparison with
+small-system exact diagonalisation and blocked Markov-chain errors was also
+completed on 2026-07-23. This document remains the design specification and
+contains no implementation.
 
 ## Scope and recommendation
 
@@ -1212,9 +1214,11 @@ behavior.
 - Check `D_alpha` against the axis-resolved event-count kinetic estimator.
 - Verify the high-frequency approach `R_aa -> D_a` and
   `Lambda^p_aa -> 0` statistically.
-- At `U == 0`, compare the exact continuous result with the deterministic
-  canonical/Lehmann answer; for finite `U`, use the existing small-system ED
-  machinery with controlled Markov-chain errors.
+- **Completed 2026-07-23:** At `U == 0`, compare the exact continuous result
+  with the deterministic canonical/Lehmann answer. At finite `U`, the
+  `N=2`, `L=3`, `beta=0.8`, `t=1`, `U=1.2` regression compares density,
+  finite-frequency hopping response, and the diamagnetic term with
+  small-system ED using blocked Markov-chain errors.
 - As a secondary regression, show convergence of the retained-grid density
   transform toward the continuous result as `M` increases. The retained value
   is not the reference at finite `M`.

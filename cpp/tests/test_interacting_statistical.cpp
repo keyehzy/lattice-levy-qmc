@@ -142,11 +142,20 @@ TEST(ContinuousMatsubaraAccumulatorTest, MatchesOneParticleLehmannReferences) {
 TEST(InteractingDistributionTest, MatchesSmallSystemExactDiagonalizationReference) {
   constexpr std::size_t burn_in = 2'000;
   constexpr std::size_t sample_count = 30'000;
+  constexpr std::size_t block_size = 100;
+  constexpr std::size_t block_count = sample_count / block_size;
+  static_assert(sample_count % block_size == 0);
   const qmc::InteractingModel model{
       .free = qmc::Model(qmc::ModelParameters{
           .particle_count = 2, .beta = 0.8, .linear_size = 3, .dimension = 1, .hopping = 1.0}),
       .interaction = 1.2,
   };
+  const qmc::MatsubaraModeSet modes(
+      model.free.beta(), qmc::TorusLayout(model.free.linear_size(), model.free.dimension()),
+      qmc::MatsubaraModeRequest{.momentum_indices = {{1}}, .frequency_indices = {0, 1}});
+  const qmc::ContinuousMatsubaraPlan plan(modes);
+  qmc::DensityMatsubaraAccumulator density_accumulator(model.free, modes);
+  qmc::HoppingResponseAccumulator hopping_accumulator(model.free, modes);
   qmc::InteractingSampler sampler(model, 20260717);
   for (std::size_t update = 0; update < burn_in; ++update) {
     static_cast<void>(sampler.global_update());
@@ -156,6 +165,12 @@ TEST(InteractingDistributionTest, MatchesSmallSystemExactDiagonalizationReferenc
   double kinetic_energy = 0.0;
   double interaction_energy = 0.0;
   double pair_count = 0.0;
+  // Batch means account for autocorrelation in the Markov chain. Entries are
+  // density (n=0,1), finite-frequency flux response, and the diamagnetic term.
+  std::array<double, 4> block_sums{};
+  std::array<double, 4> block_mean_sums{};
+  std::array<double, 4> block_mean_square_sums{};
+  const double normalization = model.free.beta() * static_cast<double>(model.free.volume());
   for (std::size_t sample = 0; sample < sample_count; ++sample) {
     static_cast<void>(sampler.global_update());
     const auto value = sampler.observables();
@@ -163,6 +178,28 @@ TEST(InteractingDistributionTest, MatchesSmallSystemExactDiagonalizationReferenc
     kinetic_energy += value.kinetic_energy;
     interaction_energy += value.interaction_energy;
     pair_count += value.pair_overlap_time / model.free.beta();
+
+    const qmc::ContinuousParticleModes modes_sample =
+        qmc::continuous_particle_modes(sampler.state(), plan);
+    density_accumulator.observe(modes_sample);
+    hopping_accumulator.observe(modes_sample);
+    const std::array observations{
+        std::norm(modes_sample.density(0, 0)) / normalization,
+        std::norm(modes_sample.density(1, 0)) / normalization,
+        std::norm(modes_sample.flux(1, 0, 0)) / normalization,
+        static_cast<double>(modes_sample.axis_event_count(0)) / normalization,
+    };
+    for (std::size_t observable = 0; observable < observations.size(); ++observable) {
+      block_sums[observable] += observations[observable];
+    }
+    if ((sample + 1) % block_size == 0) {
+      for (std::size_t observable = 0; observable < observations.size(); ++observable) {
+        const double block_mean = block_sums[observable] / static_cast<double>(block_size);
+        block_mean_sums[observable] += block_mean;
+        block_mean_square_sums[observable] += block_mean * block_mean;
+        block_sums[observable] = 0.0;
+      }
+    }
   }
 
   const double denominator = static_cast<double>(sample_count);
@@ -171,6 +208,48 @@ TEST(InteractingDistributionTest, MatchesSmallSystemExactDiagonalizationReferenc
   EXPECT_NEAR(kinetic_energy / denominator, -3.4840757439, 0.07);
   EXPECT_NEAR(interaction_energy / denominator, 0.3419709598, 0.018);
   EXPECT_NEAR(pair_count / denominator, 0.2849757998, 0.015);
+
+  std::array<double, 4> block_standard_errors{};
+  for (std::size_t observable = 0; observable < block_standard_errors.size(); ++observable) {
+    const double block_sum = block_mean_sums[observable];
+    const double centered_square_sum = block_mean_square_sums[observable] -
+                                       (block_sum * block_sum / static_cast<double>(block_count));
+    const double block_variance =
+        std::max(0.0, centered_square_sum / static_cast<double>(block_count - 1));
+    block_standard_errors[observable] =
+        std::sqrt(block_variance / static_cast<double>(block_count));
+  }
+
+  const qmc::ContinuousMatsubaraDensityCorrelations density_result = density_accumulator.finish();
+  const qmc::HoppingResponse hopping_result = hopping_accumulator.finish();
+  ASSERT_EQ(density_result.sample_count(), sample_count);
+  ASSERT_EQ(hopping_result.sample_count(), sample_count);
+  const std::array exact_density{0.32798, 0.04773};
+  for (std::size_t frequency = 0; frequency < exact_density.size(); ++frequency) {
+    const double sample_mean = block_mean_sums[frequency] / static_cast<double>(block_count);
+    EXPECT_NEAR(density_result.at(frequency, 0), sample_mean, 1e-13);
+    EXPECT_NEAR(density_result.at(frequency, 0), exact_density[frequency],
+                6.0 * block_standard_errors[frequency])
+        << "blocked standard error = " << block_standard_errors[frequency];
+  }
+  const double response_mean = block_mean_sums[2] / static_cast<double>(block_count);
+  EXPECT_NEAR(hopping_result.flux_response(1, 0, 0, 0).real(), response_mean, 1e-13);
+  EXPECT_EQ(hopping_result.flux_response(1, 0, 0, 0).imag(), 0.0);
+  EXPECT_NEAR(hopping_result.flux_response(1, 0, 0, 0).real(), 0.98151,
+              6.0 * block_standard_errors[2])
+      << "blocked standard error = " << block_standard_errors[2];
+
+  const double diamagnetic_mean = block_mean_sums[3] / static_cast<double>(block_count);
+  EXPECT_NEAR(hopping_result.diamagnetic(0), diamagnetic_mean, 1e-13);
+  EXPECT_NEAR(hopping_result.diamagnetic(0), 1.16136, 6.0 * block_standard_errors[3])
+      << "blocked standard error = " << block_standard_errors[3];
+
+  // These caps keep the six-standard-error comparisons discriminating and
+  // guard against a silently under-mixed chain.
+  EXPECT_LT(block_standard_errors[0], 0.004);
+  EXPECT_LT(block_standard_errors[1], 0.001);
+  EXPECT_LT(block_standard_errors[2], 0.02);
+  EXPECT_LT(block_standard_errors[3], 0.01);
 
   const auto acceptance = sampler.statistics(qmc::MoveKind::GlobalMove).acceptance();
   ASSERT_TRUE(acceptance.has_value());
