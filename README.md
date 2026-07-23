@@ -65,8 +65,10 @@ statistical error bars.
 | `docs/MEASUREMENTS.md` | Retained and exact continuous-time estimator conventions |
 | `docs/CONTINUOUS_TIME_MEASUREMENTS.md` | Implemented event-based Matsubara measurement design |
 | `docs/ANALYTIC_CONTINUATION_DATA.md` | Block statistics, covariance, export, and requested-lag design |
+| `docs/MAXENT.md` | Vendored TRIQS/maxent density-bundle adapter and bosonic kernel |
 | `docs/RANDOM_SEAM_STITCH.md` | Closed permutation reconnection, detailed balance, and local action updates |
 | `interacting_ed_validation.txt` | Checked-in reference output from the exact-diagonalization comparison |
+| `vendor/triqs_maxent/` | Pinned TRIQS/maxent 4.0.0 source snapshot (GPL-3.0-or-later) |
 
 ## Install and verify
 
@@ -199,6 +201,20 @@ The demonstration driver runs the same workflow and plots running means:
 ```bash
 python python/demo_interacting.py --N 6 --L 8 --beta 1.5 --t 1.0 --U 2.0
 ```
+
+The C++ interacting demo can also emit blocked density correlations for
+analytic continuation. The vendored TRIQS/maxent adapter reads that bundle,
+uses its full per-momentum covariance, and writes a reconstructed positive
+density spectrum:
+
+```bash
+python3 python/qmc_maxent.py density-continuation-v1 \
+  --momentum-ordinal 0 --omega-max 12 \
+  --output-dir density-maxent-v1
+```
+
+See [the MaxEnt integration guide](docs/MAXENT.md) for bundle generation,
+kernel conventions, output tables, and analysis controls.
 
 ## Important conventions
 

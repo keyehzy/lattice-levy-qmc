@@ -8,7 +8,9 @@ continuation-data export/demo workflow are implemented. The exact primitive
 requested-lag plan, interval-overlap projector, and block-resolved statistics
 are also implemented, together with requested-lag export, demo integration,
 small-system Lehmann regression, and a deterministic exact cross-backend
-Fourier-identity regression.
+Fourier-identity regression. A separately maintained adapter for the vendored
+TRIQS/maxent `DataKernel` is implemented in `python/qmc_maxent.py`; it is not
+part of the QMC measurement library.
 
 ## Goal and boundary
 
@@ -388,9 +390,11 @@ block  momentum  frequency_or_lag  value
 
 Keeping block data makes the covariance reproducible, permits coarser
 reblocking without rerunning QMC, and supplies the leave-one-block-out
-replicates. A solver-specific adapter may translate this bundle to a MaxEnt or
-stochastic-continuation input format, but the QMC demo should not emit a format
-that implies one downstream implementation is authoritative.
+replicates. The separately maintained `python/qmc_maxent.py` adapter translates
+this bundle into arrays for the vendored TRIQS/maxent `DataKernel`; other
+solver-specific adapters may be added without changing the bundle. The QMC
+demo does not emit a format that implies one downstream implementation is
+authoritative.
 
 The writer validates all tables and metadata before creating the destination.
 It writes to a sibling temporary directory and atomically renames the complete
@@ -622,17 +626,20 @@ loop.
 7. **Completed 2026-07-23:** Extend the versioned bundle and demo workflow to
    the `imaginary_time_lag` basis, and add a small-system Lehmann regression at
    several requested lags and momenta.
-8. Provide thin, separately maintained adapters for concrete continuation
-   programs only after their input conventions are pinned by integration
-   tests. Do not add a continuation solver to the QMC core by default.
+8. **Completed 2026-07-23 for TRIQS/maxent:** Provide a thin, separately
+   maintained adapter with integration tests. The adapter uses the exact
+   positive bosonic kernels through `DataKernel`, consumes the full
+   per-momentum covariance, and leaves the QMC core independent of the solver.
 
 ## Non-goals
 
 - No Trotter, retained, or quadrature time grid for interacting measurements.
 - No inverse transform of a truncated Matsubara set presented as exact
   `C(q,tau)`.
-- No automatic MaxEnt default model, real-frequency cutoff/grid,
-  regularisation selection, or covariance regularisation.
+- No automatic MaxEnt choices in the QMC core or continuation bundle writer.
+  The separate TRIQS/maxent adapter requires an explicit real-frequency cutoff,
+  exposes its mesh/alpha/analyzer choices, records its flat default model, and
+  applies no covariance ridge or diagonal replacement.
 - No claim that jackknife variation captures continuation-method systematic
   uncertainty.
 - No continuation of `q == 0` fixed-`N` density data.
