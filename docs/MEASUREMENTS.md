@@ -242,12 +242,18 @@ the sampled uncentred complex amplitude as a symmetry diagnostic. The response
 tensor is Hermitian by construction. `R`, `D`, and `Lambda^p` have units of
 energy per site in the repository's `k_B=1`, unit-lattice-spacing convention.
 
-The interacting demo can export these block-resolved statistics, the
-cross-frequency sampling covariance, and complete run provenance as the
-versioned four-table continuation bundle documented in
-[`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md). The separate
-exact requested-lag backend remains specified there as a later workflow
-extension, not an alternate normalization of the Matsubara estimator.
+`HoppingResponseBlockAccumulator` forms consecutive equal-size blocks of all
+three authoritative terms. Its owning series reports component-wise standard
+errors and leave-one-block-out means. Paramagnetic errors are formed from
+`D*delta-R` block by block, preserving the sampled covariance between the
+contact and flux-response terms.
+
+The interacting demo exports this data as the separate
+`hopping-response-v1` schema: a manifest plus response, diamagnetic, and
+mean-flux value/block tables. The schema records complete run provenance and
+publishes atomically without assigning a conductivity interpretation. It is
+distinct from the density continuation bundle documented in
+[`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md).
 
 ## Exactness and checks
 

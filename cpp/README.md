@@ -220,6 +220,13 @@ full signed-flux gauge response
 `R=<I I^*>/(beta*V)`, axis-resolved diamagnetic term
 `D=<K_axis>/(beta*V)`, and derived paramagnetic current correlation
 `Lambda^p=D*delta-R`, together with sampled complex mean flux diagnostics.
+`HoppingResponseBlockAccumulator` forms complete equal-size blocks of those
+terms. Its owning series exposes authoritative block values, component-wise
+standard errors, and leave-one-block-out means; paramagnetic statistics are
+derived block by block so the covariance between `D` and `R` is retained.
+The interacting demo's opt-in `--hopping-*` workflow writes a versioned
+`hopping-response-v1` directory containing full run provenance and separate
+response, diamagnetic, and mean-flux value/block tables.
 `continuous_pair_density_modes(context, plan)` is the separate
 occupancy-based diagonal projector. Its unnormalised
 `ContinuousPairDensityModes` result contains the exact residence transform of

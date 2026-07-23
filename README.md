@@ -204,8 +204,11 @@ The demonstration driver runs the same workflow and plots running means:
 python python/demo_interacting.py --N 6 --L 8 --beta 1.5 --t 1.0 --U 2.0
 ```
 
-The C++ interacting demo can also emit blocked density correlations for
-analytic continuation. The vendored TRIQS/maxent adapter reads that bundle,
+The C++ interacting demo can emit blocked density correlations for analytic
+continuation and a separate blocked hopping-response bundle. The latter keeps
+the full gauge response, diamagnetic contact term, derived paramagnetic
+response, and mean-flux diagnostics without imposing a conductivity
+interpretation. The vendored TRIQS/maxent adapter reads the density bundle,
 uses its full per-momentum covariance, and writes a reconstructed positive
 density spectrum:
 

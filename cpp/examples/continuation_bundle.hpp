@@ -41,6 +41,20 @@ void write_density_continuation_bundle(const std::filesystem::path &destination,
                                        const DensityLagBlockSeries &series,
                                        const DensityContinuationRunProvenance &provenance);
 
+// The hopping-response export uses the same sampler provenance contract but is
+// deliberately a separate schema: it is blocked imaginary-axis gauge-response
+// data, not a conductivity continuation prescription.
+using HoppingResponseRunProvenance = DensityContinuationRunProvenance;
+
+void validate_hopping_response_bundle_destination(const std::filesystem::path &destination);
+
+// Writes hopping-response-v1 as a manifest plus separate authoritative
+// response, diamagnetic, and mean-flux value/block tables. Existing
+// destinations are rejected and publication is atomic.
+void write_hopping_response_bundle(const std::filesystem::path &destination,
+                                   const HoppingResponseBlockSeries &series,
+                                   const HoppingResponseRunProvenance &provenance);
+
 } // namespace qmc::example
 
 #endif

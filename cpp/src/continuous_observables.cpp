@@ -508,6 +508,13 @@ MatsubaraModeSet validated_hopping_accumulator_modes(const Model &model, Matsuba
   return modes;
 }
 
+std::size_t validated_hopping_measurements_per_block(const std::size_t measurements_per_block) {
+  if (measurements_per_block == 0) {
+    throw std::invalid_argument("hopping block size must be positive");
+  }
+  return measurements_per_block;
+}
+
 std::size_t response_tensor_index(const std::size_t mode, const std::size_t row,
                                   const std::size_t column, const std::size_t dimension) noexcept {
   return ((((mode * dimension) + row) * dimension) + column);
@@ -591,6 +598,136 @@ void update_hopping_response_mode(const std::size_t mode, const std::size_t dime
       updated_response_sums[lower] = std::conj(updated);
     }
   }
+}
+
+double hopping_response_component(const std::complex<double> value,
+                                  const HoppingResponseComponent component) {
+  switch (component) {
+  case HoppingResponseComponent::Real:
+    return value.real();
+  case HoppingResponseComponent::Imaginary:
+    return value.imag();
+  }
+  throw std::invalid_argument("unknown hopping-response complex component");
+}
+
+std::size_t validate_hopping_block_series(
+    const MatsubaraModeSet &modes, const std::size_t dimension,
+    const std::size_t measurements_per_block,
+    const std::span<const std::complex<double>> mean_flux_block_values,
+    const std::span<const std::complex<double>> flux_response_block_values,
+    const std::span<const double> diamagnetic_block_values, const std::size_t sample_count) {
+  const std::size_t flux_extent = detail::checked_product(
+      modes.mode_count(), dimension, "hopping block-series flux extent exceeds size_t");
+  const std::size_t response_extent = detail::checked_product(
+      flux_extent, dimension, "hopping block-series response extent exceeds size_t");
+  if (mean_flux_block_values.size() % flux_extent != 0 ||
+      flux_response_block_values.size() % response_extent != 0 ||
+      diamagnetic_block_values.size() % dimension != 0) {
+    throw std::invalid_argument("hopping block series has an incomplete block extent");
+  }
+  const std::size_t block_count = mean_flux_block_values.size() / flux_extent;
+  if (block_count < 2 || flux_response_block_values.size() / response_extent != block_count ||
+      diamagnetic_block_values.size() / dimension != block_count) {
+    throw std::invalid_argument("hopping block series has inconsistent block counts");
+  }
+  const std::size_t expected_sample_count = detail::checked_product(
+      block_count, measurements_per_block, "hopping block-series sample count exceeds size_t");
+  if (sample_count != expected_sample_count) {
+    throw std::invalid_argument("hopping block series has an inconsistent sample count");
+  }
+  for (std::size_t block = 0; block < block_count; ++block) {
+    validate_mean_flux_values(mean_flux_block_values.subspan(block * flux_extent, flux_extent));
+    validate_flux_response_values(
+        modes.mode_count(), dimension,
+        flux_response_block_values.subspan(block * response_extent, response_extent));
+    validate_diamagnetic_values(diamagnetic_block_values.subspan(block * dimension, dimension));
+  }
+  return block_count;
+}
+
+std::vector<std::complex<double>>
+hopping_complex_block_means(const std::span<const std::complex<double>> block_values,
+                            const std::size_t value_extent, const std::size_t block_count,
+                            const char *description) {
+  auto means = make_checked_vector<std::complex<double>>(value_extent, description);
+  const auto block_divisor = static_cast<double>(block_count);
+  for (std::size_t value = 0; value < value_extent; ++value) {
+    CompensatedComplexSum sum;
+    for (std::size_t block = 0; block < block_count; ++block) {
+      sum.add(block_values[(block * value_extent) + value] / block_divisor);
+    }
+    means[value] = sum.value();
+    if (!is_finite(means[value])) {
+      throw std::overflow_error("hopping block-series complex mean is non-finite");
+    }
+  }
+  return means;
+}
+
+std::vector<double> hopping_real_block_means(const std::span<const double> block_values,
+                                             const std::size_t value_extent,
+                                             const std::size_t block_count,
+                                             const char *description) {
+  auto means = make_checked_vector<double>(value_extent, description);
+  const auto block_divisor = static_cast<double>(block_count);
+  for (std::size_t value = 0; value < value_extent; ++value) {
+    CompensatedRealSum sum;
+    for (std::size_t block = 0; block < block_count; ++block) {
+      sum.add(block_values[(block * value_extent) + value] / block_divisor);
+    }
+    means[value] = sum.value();
+    if (!std::isfinite(means[value])) {
+      throw std::overflow_error("hopping block-series real mean is non-finite");
+    }
+  }
+  return means;
+}
+
+double hopping_complex_standard_error(const std::span<const std::complex<double>> block_values,
+                                      const std::size_t value_extent, const std::size_t block_count,
+                                      const std::size_t value, const std::complex<double> mean,
+                                      const HoppingResponseComponent component) {
+  CompensatedRealSum squared_difference_sum;
+  const double component_mean = hopping_response_component(mean, component);
+  for (std::size_t block = 0; block < block_count; ++block) {
+    const double difference =
+        hopping_response_component(block_values[(block * value_extent) + value], component) -
+        component_mean;
+    const double squared_difference = difference * difference;
+    if (!std::isfinite(squared_difference)) {
+      throw std::overflow_error("hopping block-series variance product is non-finite");
+    }
+    squared_difference_sum.add(squared_difference);
+  }
+  const double variance_of_mean =
+      (squared_difference_sum.value() / static_cast<double>(block_count)) /
+      static_cast<double>(block_count - 1);
+  if (!std::isfinite(variance_of_mean) || variance_of_mean < 0.0) {
+    throw std::overflow_error("hopping block-series variance of mean is invalid");
+  }
+  return std::sqrt(variance_of_mean);
+}
+
+double hopping_real_standard_error(const std::span<const double> block_values,
+                                   const std::size_t value_extent, const std::size_t block_count,
+                                   const std::size_t value, const double mean) {
+  CompensatedRealSum squared_difference_sum;
+  for (std::size_t block = 0; block < block_count; ++block) {
+    const double difference = block_values[(block * value_extent) + value] - mean;
+    const double squared_difference = difference * difference;
+    if (!std::isfinite(squared_difference)) {
+      throw std::overflow_error("hopping diamagnetic variance product is non-finite");
+    }
+    squared_difference_sum.add(squared_difference);
+  }
+  const double variance_of_mean =
+      (squared_difference_sum.value() / static_cast<double>(block_count)) /
+      static_cast<double>(block_count - 1);
+  if (!std::isfinite(variance_of_mean) || variance_of_mean < 0.0) {
+    throw std::overflow_error("hopping diamagnetic variance of mean is invalid");
+  }
+  return std::sqrt(variance_of_mean);
 }
 
 void validate_projection_geometry(const ContinuousMeasurementContext &context,
@@ -2043,6 +2180,402 @@ HoppingResponse HoppingResponseAccumulator::finish() const {
           std::move(mean_flux_values),
           std::move(flux_response_values),
           std::move(diamagnetic_values),
+          sample_count_};
+}
+
+HoppingResponseBlockSeries::HoppingResponseBlockSeries(
+    Model model, MatsubaraModeSet modes, const std::size_t measurements_per_block,
+    std::vector<std::complex<double>> mean_flux_block_values,
+    std::vector<std::complex<double>> flux_response_block_values,
+    std::vector<double> diamagnetic_block_values, const std::size_t sample_count)
+    : model_(model), modes_(validated_hopping_accumulator_modes(model_, std::move(modes))),
+      measurements_per_block_(validated_hopping_measurements_per_block(measurements_per_block)),
+      sample_count_(sample_count), mean_flux_block_values_(std::move(mean_flux_block_values)),
+      flux_response_block_values_(std::move(flux_response_block_values)),
+      diamagnetic_block_values_(std::move(diamagnetic_block_values)) {
+  const std::size_t dimension = model_.dimension();
+  const std::size_t flux_extent = detail::checked_product(
+      modes_.mode_count(), dimension, "hopping block-series flux extent exceeds size_t");
+  const std::size_t response_extent = detail::checked_product(
+      flux_extent, dimension, "hopping block-series response extent exceeds size_t");
+  block_count_ = validate_hopping_block_series(modes_, dimension, measurements_per_block_,
+                                               mean_flux_block_values_, flux_response_block_values_,
+                                               diamagnetic_block_values_, sample_count_);
+  mean_flux_values_ =
+      hopping_complex_block_means(mean_flux_block_values_, flux_extent, block_count_,
+                                  "hopping block-series mean flux exceeds vector capacity");
+  flux_response_values_ =
+      hopping_complex_block_means(flux_response_block_values_, response_extent, block_count_,
+                                  "hopping block-series mean response exceeds vector capacity");
+  diamagnetic_values_ =
+      hopping_real_block_means(diamagnetic_block_values_, dimension, block_count_,
+                               "hopping block-series diamagnetic mean exceeds vector capacity");
+  validate_mean_flux_values(mean_flux_values_);
+  validate_flux_response_values(modes_.mode_count(), dimension, flux_response_values_);
+  validate_diamagnetic_values(diamagnetic_values_);
+}
+
+std::size_t HoppingResponseBlockSeries::flux_index(const std::size_t frequency,
+                                                   const std::size_t momentum,
+                                                   const std::size_t axis) const {
+  if (frequency >= modes_.frequency_count()) {
+    throw std::out_of_range("hopping block-series frequency index is out of range");
+  }
+  if (momentum >= modes_.momentum_count()) {
+    throw std::out_of_range("hopping block-series momentum index is out of range");
+  }
+  if (axis >= model_.dimension()) {
+    throw std::out_of_range("hopping block-series axis is out of range");
+  }
+  return ((((frequency * modes_.momentum_count()) + momentum) * model_.dimension()) + axis);
+}
+
+std::size_t HoppingResponseBlockSeries::response_index(const std::size_t frequency,
+                                                       const std::size_t momentum,
+                                                       const std::size_t left,
+                                                       const std::size_t right) const {
+  const std::size_t left_component = flux_index(frequency, momentum, left);
+  if (right >= model_.dimension()) {
+    throw std::out_of_range("hopping block-series right axis is out of range");
+  }
+  return (left_component * model_.dimension()) + right;
+}
+
+void HoppingResponseBlockSeries::validate_block(const std::size_t block) const {
+  if (block >= block_count_) {
+    throw std::out_of_range("hopping block index is out of range");
+  }
+}
+
+std::complex<double> HoppingResponseBlockSeries::block_mean_flux(const std::size_t block,
+                                                                 const std::size_t frequency,
+                                                                 const std::size_t momentum,
+                                                                 const std::size_t axis) const {
+  validate_block(block);
+  const std::size_t value = flux_index(frequency, momentum, axis);
+  return mean_flux_block_values_[(block * mean_flux_values_.size()) + value];
+}
+
+std::complex<double> HoppingResponseBlockSeries::mean_flux(const std::size_t frequency,
+                                                           const std::size_t momentum,
+                                                           const std::size_t axis) const {
+  return mean_flux_values_[flux_index(frequency, momentum, axis)];
+}
+
+double HoppingResponseBlockSeries::mean_flux_standard_error(
+    const std::size_t frequency, const std::size_t momentum, const std::size_t axis,
+    const HoppingResponseComponent component) const {
+  const std::size_t value = flux_index(frequency, momentum, axis);
+  return hopping_complex_standard_error(mean_flux_block_values_, mean_flux_values_.size(),
+                                        block_count_, value, mean_flux_values_[value], component);
+}
+
+std::complex<double> HoppingResponseBlockSeries::jackknife_mean_flux(
+    const std::size_t omitted_block, const std::size_t frequency, const std::size_t momentum,
+    const std::size_t axis) const {
+  validate_block(omitted_block);
+  const std::size_t value = flux_index(frequency, momentum, axis);
+  const auto divisor = static_cast<double>(block_count_ - 1);
+  CompensatedComplexSum sum;
+  for (std::size_t block = 0; block < block_count_; ++block) {
+    if (block != omitted_block) {
+      sum.add(mean_flux_block_values_[(block * mean_flux_values_.size()) + value] / divisor);
+    }
+  }
+  const std::complex<double> mean = sum.value();
+  if (!is_finite(mean)) {
+    throw std::overflow_error("hopping mean-flux jackknife mean is non-finite");
+  }
+  return mean;
+}
+
+std::complex<double> HoppingResponseBlockSeries::block_flux_response(
+    const std::size_t block, const std::size_t frequency, const std::size_t momentum,
+    const std::size_t left, const std::size_t right) const {
+  validate_block(block);
+  const std::size_t value = response_index(frequency, momentum, left, right);
+  return flux_response_block_values_[(block * flux_response_values_.size()) + value];
+}
+
+std::complex<double> HoppingResponseBlockSeries::flux_response(const std::size_t frequency,
+                                                               const std::size_t momentum,
+                                                               const std::size_t left,
+                                                               const std::size_t right) const {
+  return flux_response_values_[response_index(frequency, momentum, left, right)];
+}
+
+double HoppingResponseBlockSeries::flux_response_standard_error(
+    const std::size_t frequency, const std::size_t momentum, const std::size_t left,
+    const std::size_t right, const HoppingResponseComponent component) const {
+  const std::size_t value = response_index(frequency, momentum, left, right);
+  return hopping_complex_standard_error(flux_response_block_values_, flux_response_values_.size(),
+                                        block_count_, value, flux_response_values_[value],
+                                        component);
+}
+
+std::complex<double> HoppingResponseBlockSeries::jackknife_flux_response(
+    const std::size_t omitted_block, const std::size_t frequency, const std::size_t momentum,
+    const std::size_t left, const std::size_t right) const {
+  validate_block(omitted_block);
+  const std::size_t value = response_index(frequency, momentum, left, right);
+  const auto divisor = static_cast<double>(block_count_ - 1);
+  CompensatedComplexSum sum;
+  for (std::size_t block = 0; block < block_count_; ++block) {
+    if (block != omitted_block) {
+      sum.add(flux_response_block_values_[(block * flux_response_values_.size()) + value] /
+              divisor);
+    }
+  }
+  const std::complex<double> mean = sum.value();
+  if (!is_finite(mean)) {
+    throw std::overflow_error("hopping flux-response jackknife mean is non-finite");
+  }
+  return mean;
+}
+
+double HoppingResponseBlockSeries::block_diamagnetic(const std::size_t block,
+                                                     const std::size_t axis) const {
+  validate_block(block);
+  if (axis >= model_.dimension()) {
+    throw std::out_of_range("hopping block-series diamagnetic axis is out of range");
+  }
+  return diamagnetic_block_values_[(block * model_.dimension()) + axis];
+}
+
+double HoppingResponseBlockSeries::diamagnetic(const std::size_t axis) const {
+  if (axis >= model_.dimension()) {
+    throw std::out_of_range("hopping block-series diamagnetic axis is out of range");
+  }
+  return diamagnetic_values_[axis];
+}
+
+double HoppingResponseBlockSeries::diamagnetic_standard_error(const std::size_t axis) const {
+  if (axis >= model_.dimension()) {
+    throw std::out_of_range("hopping block-series diamagnetic axis is out of range");
+  }
+  return hopping_real_standard_error(diamagnetic_block_values_, model_.dimension(), block_count_,
+                                     axis, diamagnetic_values_[axis]);
+}
+
+double HoppingResponseBlockSeries::jackknife_diamagnetic(const std::size_t omitted_block,
+                                                         const std::size_t axis) const {
+  validate_block(omitted_block);
+  if (axis >= model_.dimension()) {
+    throw std::out_of_range("hopping block-series diamagnetic axis is out of range");
+  }
+  const auto divisor = static_cast<double>(block_count_ - 1);
+  CompensatedRealSum sum;
+  for (std::size_t block = 0; block < block_count_; ++block) {
+    if (block != omitted_block) {
+      sum.add(diamagnetic_block_values_[(block * model_.dimension()) + axis] / divisor);
+    }
+  }
+  const double mean = sum.value();
+  if (!std::isfinite(mean) || mean < 0.0) {
+    throw std::overflow_error("hopping diamagnetic jackknife mean is invalid");
+  }
+  return mean;
+}
+
+std::complex<double> HoppingResponseBlockSeries::block_paramagnetic(const std::size_t block,
+                                                                    const std::size_t frequency,
+                                                                    const std::size_t momentum,
+                                                                    const std::size_t left,
+                                                                    const std::size_t right) const {
+  std::complex<double> value = -block_flux_response(block, frequency, momentum, left, right);
+  if (left == right) {
+    value += block_diamagnetic(block, left);
+  }
+  return value;
+}
+
+std::complex<double> HoppingResponseBlockSeries::paramagnetic(const std::size_t frequency,
+                                                              const std::size_t momentum,
+                                                              const std::size_t left,
+                                                              const std::size_t right) const {
+  std::complex<double> value = -flux_response(frequency, momentum, left, right);
+  if (left == right) {
+    value += diamagnetic(left);
+  }
+  return value;
+}
+
+double HoppingResponseBlockSeries::paramagnetic_standard_error(
+    const std::size_t frequency, const std::size_t momentum, const std::size_t left,
+    const std::size_t right, const HoppingResponseComponent component) const {
+  const std::complex<double> mean = paramagnetic(frequency, momentum, left, right);
+  const double component_mean = hopping_response_component(mean, component);
+  CompensatedRealSum squared_difference_sum;
+  for (std::size_t block = 0; block < block_count_; ++block) {
+    const double difference =
+        hopping_response_component(block_paramagnetic(block, frequency, momentum, left, right),
+                                   component) -
+        component_mean;
+    const double squared_difference = difference * difference;
+    if (!std::isfinite(squared_difference)) {
+      throw std::overflow_error("hopping paramagnetic variance product is non-finite");
+    }
+    squared_difference_sum.add(squared_difference);
+  }
+  const double variance_of_mean =
+      (squared_difference_sum.value() / static_cast<double>(block_count_)) /
+      static_cast<double>(block_count_ - 1);
+  if (!std::isfinite(variance_of_mean) || variance_of_mean < 0.0) {
+    throw std::overflow_error("hopping paramagnetic variance of mean is invalid");
+  }
+  return std::sqrt(variance_of_mean);
+}
+
+std::complex<double> HoppingResponseBlockSeries::jackknife_paramagnetic(
+    const std::size_t omitted_block, const std::size_t frequency, const std::size_t momentum,
+    const std::size_t left, const std::size_t right) const {
+  std::complex<double> value =
+      -jackknife_flux_response(omitted_block, frequency, momentum, left, right);
+  if (left == right) {
+    value += jackknife_diamagnetic(omitted_block, left);
+  }
+  return value;
+}
+
+HoppingResponseBlockAccumulator::HoppingResponseBlockAccumulator(
+    Model model, MatsubaraModeSet modes, const std::size_t measurements_per_block)
+    : model_(model), modes_(validated_hopping_accumulator_modes(model_, std::move(modes))),
+      measurements_per_block_(validated_hopping_measurements_per_block(measurements_per_block)),
+      pending_flux_sums_(make_checked_vector<std::complex<double>>(
+          detail::checked_product(modes_.mode_count(), model_.dimension(),
+                                  "hopping pending flux extent exceeds size_t"),
+          "hopping pending flux sums exceed vector capacity")),
+      pending_response_sums_(make_checked_vector<std::complex<double>>(
+          detail::checked_product(
+              detail::checked_product(modes_.mode_count(), model_.dimension(),
+                                      "hopping pending response component extent exceeds size_t"),
+              model_.dimension(), "hopping pending response extent exceeds size_t"),
+          "hopping pending response sums exceed vector capacity")),
+      pending_axis_event_count_sums_(make_checked_vector<std::size_t>(
+          model_.dimension(), "hopping pending axis counts exceed vector capacity")) {}
+
+void HoppingResponseBlockAccumulator::observe(const ContinuousParticleModes &values) {
+  if (values.model() != model_) {
+    throw std::invalid_argument("hopping block observation has a different model");
+  }
+  if (values.modes() != modes_) {
+    throw std::invalid_argument("hopping block observation has different Matsubara modes");
+  }
+  const std::size_t updated_sample_count = detail::checked_add_size(
+      sample_count_, 1, "hopping block accumulator sample count exceeds size_t");
+  const std::size_t updated_pending_sample_count = detail::checked_add_size(
+      pending_sample_count_, 1, "hopping pending sample count exceeds size_t");
+  if (updated_pending_sample_count > measurements_per_block_) {
+    throw std::logic_error("hopping pending sample count exceeds its block size");
+  }
+
+  std::vector<std::complex<double>> updated_flux_sums = pending_flux_sums_;
+  std::vector<std::complex<double>> updated_response_sums = pending_response_sums_;
+  std::vector<std::size_t> updated_axis_event_count_sums = pending_axis_event_count_sums_;
+  auto amplitudes = make_checked_vector<std::complex<double>>(
+      model_.dimension(), "hopping block observation workspace exceeds vector capacity");
+  for (std::size_t frequency = 0; frequency < modes_.frequency_count(); ++frequency) {
+    for (std::size_t momentum = 0; momentum < modes_.momentum_count(); ++momentum) {
+      const std::size_t mode = (frequency * modes_.momentum_count()) + momentum;
+      update_hopping_flux_mode(values, frequency, momentum, mode, model_.dimension(), amplitudes,
+                               updated_flux_sums);
+      update_hopping_response_mode(mode, model_.dimension(), amplitudes, updated_response_sums);
+    }
+  }
+  for (std::size_t axis = 0; axis < model_.dimension(); ++axis) {
+    updated_axis_event_count_sums[axis] =
+        detail::checked_add_size(updated_axis_event_count_sums[axis], values.axis_event_count(axis),
+                                 "hopping pending axis event-count sum exceeds size_t");
+  }
+
+  if (updated_pending_sample_count < measurements_per_block_) {
+    pending_flux_sums_.swap(updated_flux_sums);
+    pending_response_sums_.swap(updated_response_sums);
+    pending_axis_event_count_sums_.swap(updated_axis_event_count_sums);
+    pending_sample_count_ = updated_pending_sample_count;
+    sample_count_ = updated_sample_count;
+    return;
+  }
+
+  auto completed_flux = make_checked_vector<std::complex<double>>(
+      pending_flux_sums_.size(), "hopping completed flux block exceeds vector capacity");
+  auto completed_response = make_checked_vector<std::complex<double>>(
+      pending_response_sums_.size(), "hopping completed response block exceeds vector capacity");
+  auto completed_diamagnetic = make_checked_vector<double>(
+      model_.dimension(), "hopping completed diamagnetic block exceeds vector capacity");
+  const auto block_divisor = static_cast<double>(measurements_per_block_);
+  const auto volume_divisor = static_cast<double>(model_.volume());
+  for (std::size_t value = 0; value < completed_flux.size(); ++value) {
+    completed_flux[value] = updated_flux_sums[value] / block_divisor;
+    if (!is_finite(completed_flux[value])) {
+      throw std::overflow_error("hopping completed mean-flux block is non-finite");
+    }
+  }
+  for (std::size_t value = 0; value < completed_response.size(); ++value) {
+    completed_response[value] =
+        ((updated_response_sums[value] / block_divisor) / volume_divisor) / model_.beta();
+    if (!is_finite(completed_response[value])) {
+      throw std::overflow_error("hopping completed response block is non-finite");
+    }
+  }
+  validate_flux_response_values(modes_.mode_count(), model_.dimension(), completed_response);
+  for (std::size_t axis = 0; axis < model_.dimension(); ++axis) {
+    completed_diamagnetic[axis] =
+        ((static_cast<double>(updated_axis_event_count_sums[axis]) / block_divisor) /
+         volume_divisor) /
+        model_.beta();
+    if (!std::isfinite(completed_diamagnetic[axis]) || completed_diamagnetic[axis] < 0.0) {
+      throw std::overflow_error("hopping completed diamagnetic block is invalid");
+    }
+  }
+
+  const std::size_t updated_flux_block_count =
+      detail::checked_add_size(mean_flux_block_values_.size(), completed_flux.size(),
+                               "hopping mean-flux block extent exceeds size_t");
+  const std::size_t updated_response_block_count =
+      detail::checked_add_size(flux_response_block_values_.size(), completed_response.size(),
+                               "hopping response block extent exceeds size_t");
+  const std::size_t updated_diamagnetic_block_count =
+      detail::checked_add_size(diamagnetic_block_values_.size(), completed_diamagnetic.size(),
+                               "hopping diamagnetic block extent exceeds size_t");
+  if (updated_flux_block_count > mean_flux_block_values_.max_size() ||
+      updated_response_block_count > flux_response_block_values_.max_size() ||
+      updated_diamagnetic_block_count > diamagnetic_block_values_.max_size()) {
+    throw std::length_error("hopping block values exceed vector capacity");
+  }
+  std::vector<std::complex<double>> updated_flux_blocks = mean_flux_block_values_;
+  std::vector<std::complex<double>> updated_response_blocks = flux_response_block_values_;
+  std::vector<double> updated_diamagnetic_blocks = diamagnetic_block_values_;
+  updated_flux_blocks.insert(updated_flux_blocks.end(), completed_flux.begin(),
+                             completed_flux.end());
+  updated_response_blocks.insert(updated_response_blocks.end(), completed_response.begin(),
+                                 completed_response.end());
+  updated_diamagnetic_blocks.insert(updated_diamagnetic_blocks.end(), completed_diamagnetic.begin(),
+                                    completed_diamagnetic.end());
+
+  mean_flux_block_values_.swap(updated_flux_blocks);
+  flux_response_block_values_.swap(updated_response_blocks);
+  diamagnetic_block_values_.swap(updated_diamagnetic_blocks);
+  std::ranges::fill(pending_flux_sums_, std::complex<double>{});
+  std::ranges::fill(pending_response_sums_, std::complex<double>{});
+  std::ranges::fill(pending_axis_event_count_sums_, std::size_t{0});
+  pending_sample_count_ = 0;
+  sample_count_ = updated_sample_count;
+}
+
+HoppingResponseBlockSeries HoppingResponseBlockAccumulator::finish() const {
+  if (pending_sample_count_ != 0) {
+    throw std::logic_error("cannot finish a hopping block accumulator with a partial block");
+  }
+  if (completed_block_count() < 2) {
+    throw std::logic_error("hopping block accumulator requires at least two complete blocks");
+  }
+  return {model_,
+          modes_,
+          measurements_per_block_,
+          mean_flux_block_values_,
+          flux_response_block_values_,
+          diamagnetic_block_values_,
           sample_count_};
 }
 

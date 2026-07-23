@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <complex>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -89,6 +90,27 @@ DensityMatsubaraBlockSeries make_series(const Model &model, const MatsubaraModeS
   const ContinuousParticleModes moving_values =
       continuous_particle_modes(moving_configuration, plan);
   DensityMatsubaraBlockAccumulator accumulator(model, modes, 2);
+  for (const ContinuousParticleModes *values : {&static_values, &static_values, &static_values,
+                                                &moving_values, &moving_values, &moving_values}) {
+    accumulator.observe(*values);
+  }
+  return accumulator.finish();
+}
+
+HoppingResponseBlockSeries make_hopping_series(const Model &model, const MatsubaraModeSet &modes) {
+  const ContinuousMatsubaraPlan plan(modes);
+  const ContinuousConfiguration static_configuration(model, Permutation({0}),
+                                                     {ContinuousPath(model.beta(), {0}, {0}, {})});
+  const ContinuousConfiguration moving_configuration(
+      model, Permutation({0}),
+      {ContinuousPath(model.beta(), {0}, {0},
+                      {{.time = 0.25, .axis = 0, .direction = 1},
+                       {.time = 0.75, .axis = 0, .direction = -1}})});
+  const ContinuousParticleModes static_values =
+      continuous_particle_modes(static_configuration, plan);
+  const ContinuousParticleModes moving_values =
+      continuous_particle_modes(moving_configuration, plan);
+  HoppingResponseBlockAccumulator accumulator(model, modes, 2);
   for (const ContinuousParticleModes *values : {&static_values, &static_values, &static_values,
                                                 &moving_values, &moving_values, &moving_values}) {
     accumulator.observe(*values);
@@ -415,6 +437,107 @@ TEST(DensityContinuationBundleTest, WritesSignedImaginaryTimeLagBasisAndReproduc
     covariance /= static_cast<double>(series.block_count() * (series.block_count() - 1));
     EXPECT_NEAR(std::stod(covariance_rows[row][3]), covariance, 1e-17);
   }
+}
+
+TEST(HoppingResponseBundleTest, WritesReconstructibleBlockedResponseAndCompleteProvenance) {
+  const InteractingModel model = test_model();
+  const MatsubaraModeSet modes = test_modes(model.free);
+  const HoppingResponseBlockSeries series = make_hopping_series(model.free, modes);
+  ScopedTemporaryDirectory temporary;
+  const std::filesystem::path destination = temporary.path() / "hopping-response-v1";
+
+  validate_hopping_response_bundle_destination(destination);
+  write_hopping_response_bundle(destination, series, test_provenance(model));
+
+  for (const std::string filename :
+       {"manifest.tsv", "response_values.tsv", "response_blocks.tsv", "mean_flux_values.tsv",
+        "mean_flux_blocks.tsv", "diamagnetic_values.tsv", "diamagnetic_blocks.tsv"}) {
+    EXPECT_TRUE(std::filesystem::is_regular_file(destination / filename));
+    EXPECT_GT(std::filesystem::file_size(destination / filename), 0U);
+  }
+  const auto manifest = read_manifest(destination / "manifest.tsv");
+  EXPECT_EQ(manifest.at("schema_id"), "hopping-response");
+  EXPECT_EQ(manifest.at("schema_version"), "1");
+  EXPECT_EQ(manifest.at("basis"), "bosonic_matsubara");
+  EXPECT_EQ(manifest.at("observable_id"), "full_gauge_flux_response");
+  EXPECT_EQ(manifest.at("source_convention"), "positive_bond_peierls_phase");
+  EXPECT_EQ(manifest.at("model_interaction"), "0.75");
+  EXPECT_EQ(manifest.at("seed"), "123456");
+  EXPECT_EQ(manifest.at("measurements_per_block"), "2");
+  EXPECT_EQ(manifest.at("completed_block_count"), "3");
+  EXPECT_EQ(manifest.at("sample_count"), "6");
+  EXPECT_EQ(manifest.at("post_burn_in_sampler_sweeps_per_block"), "6");
+  EXPECT_EQ(manifest.at("momentum_count"), "2");
+  EXPECT_EQ(manifest.at("frequency_count"), "3");
+  EXPECT_EQ(manifest.at("response_values_row_count"), "6");
+  EXPECT_EQ(manifest.at("response_blocks_row_count"), "18");
+  EXPECT_EQ(manifest.at("mean_flux_values_row_count"), "6");
+  EXPECT_EQ(manifest.at("mean_flux_blocks_row_count"), "18");
+  EXPECT_EQ(manifest.at("diamagnetic_values_row_count"), "1");
+  EXPECT_EQ(manifest.at("diamagnetic_blocks_row_count"), "3");
+  EXPECT_EQ(manifest.at("conductivity_interpretation"), "none");
+
+  const auto response_blocks = read_table(destination / "response_blocks.tsv");
+  ASSERT_EQ(response_blocks.size(), 19U);
+  EXPECT_EQ(response_blocks.front(),
+            std::vector<std::string>({"block", "momentum", "frequency", "left_axis", "right_axis",
+                                      "flux_response_real", "flux_response_imag",
+                                      "paramagnetic_real", "paramagnetic_imag"}));
+  std::map<std::tuple<std::size_t, std::size_t, std::size_t>, std::complex<double>>
+      exported_response_blocks;
+  for (std::size_t row = 1; row < response_blocks.size(); ++row) {
+    ASSERT_EQ(response_blocks[row].size(), 9U);
+    const std::size_t block = std::stoull(response_blocks[row][0]);
+    const std::size_t momentum = std::stoull(response_blocks[row][1]);
+    const std::size_t frequency = std::stoull(response_blocks[row][2]);
+    const std::complex<double> response(std::stod(response_blocks[row][5]),
+                                        std::stod(response_blocks[row][6]));
+    exported_response_blocks.emplace(std::make_tuple(block, momentum, frequency), response);
+    EXPECT_EQ(response, series.block_flux_response(block, frequency, momentum, 0, 0));
+    EXPECT_EQ(std::complex<double>(std::stod(response_blocks[row][7]),
+                                   std::stod(response_blocks[row][8])),
+              series.block_paramagnetic(block, frequency, momentum, 0, 0));
+  }
+
+  const auto response_values = read_table(destination / "response_values.tsv");
+  ASSERT_EQ(response_values.size(), 7U);
+  ASSERT_EQ(response_values.front().size(), 15U);
+  for (std::size_t row = 1; row < response_values.size(); ++row) {
+    ASSERT_EQ(response_values[row].size(), 15U);
+    const std::size_t momentum = std::stoull(response_values[row][0]);
+    const std::size_t frequency = std::stoull(response_values[row][2]);
+    std::complex<double> reconstructed;
+    for (std::size_t block = 0; block < series.block_count(); ++block) {
+      reconstructed += exported_response_blocks.at({block, momentum, frequency}) /
+                       static_cast<double>(series.block_count());
+    }
+    EXPECT_EQ(std::complex<double>(std::stod(response_values[row][7]),
+                                   std::stod(response_values[row][8])),
+              reconstructed);
+    EXPECT_DOUBLE_EQ(std::stod(response_values[row][9]),
+                     series.flux_response_standard_error(frequency, momentum, 0, 0,
+                                                         HoppingResponseComponent::Real));
+    EXPECT_DOUBLE_EQ(std::stod(response_values[row][10]),
+                     series.flux_response_standard_error(frequency, momentum, 0, 0,
+                                                         HoppingResponseComponent::Imaginary));
+  }
+
+  const auto diamagnetic_blocks = read_table(destination / "diamagnetic_blocks.tsv");
+  ASSERT_EQ(diamagnetic_blocks.size(), 4U);
+  for (std::size_t row = 1; row < diamagnetic_blocks.size(); ++row) {
+    const std::size_t block = std::stoull(diamagnetic_blocks[row][0]);
+    EXPECT_DOUBLE_EQ(std::stod(diamagnetic_blocks[row][2]), series.block_diamagnetic(block, 0));
+  }
+  const auto diamagnetic_values = read_table(destination / "diamagnetic_values.tsv");
+  ASSERT_EQ(diamagnetic_values.size(), 2U);
+  EXPECT_DOUBLE_EQ(std::stod(diamagnetic_values[1][1]), series.diamagnetic(0));
+  EXPECT_DOUBLE_EQ(std::stod(diamagnetic_values[1][2]), series.diamagnetic_standard_error(0));
+
+  EXPECT_THROW(validate_hopping_response_bundle_destination(destination), std::invalid_argument);
+  const std::string original_manifest = read_file(destination / "manifest.tsv");
+  EXPECT_THROW(write_hopping_response_bundle(destination, series, test_provenance(model)),
+               std::invalid_argument);
+  EXPECT_EQ(read_file(destination / "manifest.tsv"), original_manifest);
 }
 
 TEST(DensityContinuationBundleTest, RejectsExistingDestinationWithoutOverwritingIt) {

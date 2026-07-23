@@ -633,6 +633,11 @@ loop.
    maintained adapter with integration tests. The adapter uses the exact
    positive bosonic kernels through `DataKernel`, consumes the full
    per-momentum covariance, and leaves the QMC core independent of the solver.
+9. **Completed 2026-07-23 as a separate non-continuation schema:** Add public
+   hopping-response block statistics and the atomic `hopping-response-v1`
+   export. It retains the authoritative full gauge response, diamagnetic term,
+   derived block-level paramagnetic response, and mean-flux diagnostic without
+   prescribing conductivity continuation.
 
 ## Non-goals
 

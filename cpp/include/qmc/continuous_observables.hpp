@@ -22,6 +22,7 @@ class DensityLagBlockAccumulator;
 class DensityMatsubaraAccumulator;
 class DensityMatsubaraBlockAccumulator;
 class HoppingResponseAccumulator;
+class HoppingResponseBlockAccumulator;
 
 // Reusable continuous-time phase plan. The stricter signed-frequency bound is
 // a binary64 phase-reduction contract and is intentionally not imposed by the
@@ -490,6 +491,142 @@ private:
   std::vector<std::complex<double>> flux_sums_;
   std::vector<std::complex<double>> response_sums_;
   std::vector<std::size_t> axis_event_count_sums_;
+};
+
+// Selects one Cartesian component when reporting a standard error for a
+// complex blocked observable.
+enum class HoppingResponseComponent {
+  Real,
+  Imaginary,
+};
+
+// Consecutive equal-size block means of the hopping response. The stored
+// authoritative block observables are the complex mean flux, the Hermitian
+// full gauge response R, and the real diamagnetic term D. Paramagnetic values
+// are derived block by block as D*delta-R, so their errors retain the sampled
+// covariance between the two terms.
+class HoppingResponseBlockSeries {
+public:
+  [[nodiscard]] const Model &model() const noexcept { return model_; }
+  [[nodiscard]] const MatsubaraModeSet &modes() const noexcept { return modes_; }
+  [[nodiscard]] std::size_t measurements_per_block() const noexcept {
+    return measurements_per_block_;
+  }
+  [[nodiscard]] std::size_t block_count() const noexcept { return block_count_; }
+  [[nodiscard]] std::size_t sample_count() const noexcept { return sample_count_; }
+
+  // All accessors check every supplied block, frequency, momentum, and axis.
+  [[nodiscard]] std::complex<double> block_mean_flux(std::size_t block, std::size_t frequency,
+                                                     std::size_t momentum, std::size_t axis) const;
+  [[nodiscard]] std::complex<double> mean_flux(std::size_t frequency, std::size_t momentum,
+                                               std::size_t axis) const;
+  [[nodiscard]] double mean_flux_standard_error(std::size_t frequency, std::size_t momentum,
+                                                std::size_t axis,
+                                                HoppingResponseComponent component) const;
+  [[nodiscard]] std::complex<double> jackknife_mean_flux(std::size_t omitted_block,
+                                                         std::size_t frequency,
+                                                         std::size_t momentum,
+                                                         std::size_t axis) const;
+
+  [[nodiscard]] std::complex<double> block_flux_response(std::size_t block, std::size_t frequency,
+                                                         std::size_t momentum, std::size_t left,
+                                                         std::size_t right) const;
+  [[nodiscard]] std::complex<double> flux_response(std::size_t frequency, std::size_t momentum,
+                                                   std::size_t left, std::size_t right) const;
+  [[nodiscard]] double flux_response_standard_error(std::size_t frequency, std::size_t momentum,
+                                                    std::size_t left, std::size_t right,
+                                                    HoppingResponseComponent component) const;
+  [[nodiscard]] std::complex<double> jackknife_flux_response(std::size_t omitted_block,
+                                                             std::size_t frequency,
+                                                             std::size_t momentum, std::size_t left,
+                                                             std::size_t right) const;
+
+  [[nodiscard]] double block_diamagnetic(std::size_t block, std::size_t axis) const;
+  [[nodiscard]] double diamagnetic(std::size_t axis) const;
+  [[nodiscard]] double diamagnetic_standard_error(std::size_t axis) const;
+  [[nodiscard]] double jackknife_diamagnetic(std::size_t omitted_block, std::size_t axis) const;
+
+  [[nodiscard]] std::complex<double> block_paramagnetic(std::size_t block, std::size_t frequency,
+                                                        std::size_t momentum, std::size_t left,
+                                                        std::size_t right) const;
+  [[nodiscard]] std::complex<double> paramagnetic(std::size_t frequency, std::size_t momentum,
+                                                  std::size_t left, std::size_t right) const;
+  [[nodiscard]] double paramagnetic_standard_error(std::size_t frequency, std::size_t momentum,
+                                                   std::size_t left, std::size_t right,
+                                                   HoppingResponseComponent component) const;
+  [[nodiscard]] std::complex<double> jackknife_paramagnetic(std::size_t omitted_block,
+                                                            std::size_t frequency,
+                                                            std::size_t momentum, std::size_t left,
+                                                            std::size_t right) const;
+
+private:
+  friend class HoppingResponseBlockAccumulator;
+
+  HoppingResponseBlockSeries(Model model, MatsubaraModeSet modes,
+                             std::size_t measurements_per_block,
+                             std::vector<std::complex<double>> mean_flux_block_values,
+                             std::vector<std::complex<double>> flux_response_block_values,
+                             std::vector<double> diamagnetic_block_values,
+                             std::size_t sample_count);
+
+  [[nodiscard]] std::size_t flux_index(std::size_t frequency, std::size_t momentum,
+                                       std::size_t axis) const;
+  [[nodiscard]] std::size_t response_index(std::size_t frequency, std::size_t momentum,
+                                           std::size_t left, std::size_t right) const;
+  void validate_block(std::size_t block) const;
+
+  Model model_;
+  MatsubaraModeSet modes_;
+  std::size_t measurements_per_block_;
+  std::size_t block_count_ = 0;
+  std::size_t sample_count_;
+  std::vector<std::complex<double>> mean_flux_block_values_;
+  std::vector<std::complex<double>> flux_response_block_values_;
+  std::vector<double> diamagnetic_block_values_;
+  std::vector<std::complex<double>> mean_flux_values_;
+  std::vector<std::complex<double>> flux_response_values_;
+  std::vector<double> diamagnetic_values_;
+};
+
+// Forms consecutive equal-size block means from exact signed hopping-flux
+// amplitudes and event counts. Failed observations leave all state unchanged,
+// and finish() never drops a partial block.
+class HoppingResponseBlockAccumulator {
+public:
+  // Throws invalid_argument for zero block size or differing model/mode
+  // geometry, and length_error/overflow_error for unrepresentable extents.
+  HoppingResponseBlockAccumulator(Model model, MatsubaraModeSet modes,
+                                  std::size_t measurements_per_block);
+
+  [[nodiscard]] const Model &model() const noexcept { return model_; }
+  [[nodiscard]] const MatsubaraModeSet &modes() const noexcept { return modes_; }
+  [[nodiscard]] std::size_t measurements_per_block() const noexcept {
+    return measurements_per_block_;
+  }
+  [[nodiscard]] std::size_t completed_block_count() const noexcept {
+    return diamagnetic_block_values_.size() / model_.dimension();
+  }
+  [[nodiscard]] std::size_t pending_sample_count() const noexcept { return pending_sample_count_; }
+
+  // Throws invalid_argument for different model or mode provenance and
+  // overflow_error/length_error if candidate state is not representable.
+  // Validation and a completing block's allocation occur before mutation.
+  void observe(const ContinuousParticleModes &values);
+  // Requires at least two complete blocks and no pending partial block.
+  [[nodiscard]] HoppingResponseBlockSeries finish() const;
+
+private:
+  Model model_;
+  MatsubaraModeSet modes_;
+  std::size_t measurements_per_block_;
+  std::size_t sample_count_ = 0;
+  std::size_t pending_sample_count_ = 0;
+  std::vector<std::complex<double>> pending_flux_sums_;
+  std::vector<std::complex<double>> pending_response_sums_;
+  std::vector<std::size_t> pending_axis_event_count_sums_;
+  std::vector<std::complex<double>> mean_flux_block_values_;
+  std::vector<std::complex<double>> flux_response_block_values_;
+  std::vector<double> diamagnetic_block_values_;
 };
 
 // Projects exact residence integrals and event impulses in one grouped event

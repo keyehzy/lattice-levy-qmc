@@ -32,6 +32,12 @@ struct DensityContinuationCommand {
   std::filesystem::path output_directory;
 };
 
+struct HoppingResponseCommand {
+  qmc::MatsubaraModeSet modes;
+  std::size_t measurements_per_block;
+  std::filesystem::path output_directory;
+};
+
 struct CommandLine {
   qmc::InteractingModel model;
   std::uint64_t seed;
@@ -43,6 +49,7 @@ struct CommandLine {
   std::filesystem::path output;
   bool retain_scalar_trace;
   std::optional<DensityContinuationCommand> density_continuation;
+  std::optional<HoppingResponseCommand> hopping_response;
 };
 
 std::string_view trim(const std::string_view value) {
@@ -60,12 +67,12 @@ std::string_view trim(const std::string_view value) {
 std::size_t parse_momentum_component(const std::string_view input) {
   const std::string_view value = trim(input);
   if (value.empty()) {
-    throw std::invalid_argument("density momentum contains an empty component");
+    throw std::invalid_argument("momentum contains an empty component");
   }
   std::size_t component = 0;
   const auto conversion = std::from_chars(value.data(), value.data() + value.size(), component);
   if (conversion.ec != std::errc{} || conversion.ptr != value.data() + value.size()) {
-    throw std::invalid_argument("density momentum components must be nonnegative integers");
+    throw std::invalid_argument("momentum components must be nonnegative integers");
   }
   return component;
 }
@@ -73,7 +80,7 @@ std::size_t parse_momentum_component(const std::string_view input) {
 std::vector<std::vector<std::size_t>> parse_momentum_rows(const std::string_view input,
                                                           const std::size_t dimension) {
   if (trim(input).empty()) {
-    throw std::invalid_argument("density momenta must not be empty");
+    throw std::invalid_argument("momenta must not be empty");
   }
   std::vector<std::vector<std::size_t>> momenta;
   std::size_t row_begin = 0;
@@ -83,7 +90,7 @@ std::vector<std::vector<std::size_t>> parse_momentum_rows(const std::string_view
         input.substr(row_begin, row_end == std::string_view::npos ? input.size() - row_begin
                                                                   : row_end - row_begin);
     if (trim(row).empty()) {
-      throw std::invalid_argument("density momenta contain an empty row");
+      throw std::invalid_argument("momenta contain an empty row");
     }
     std::vector<std::size_t> components;
     std::size_t component_begin = 0;
@@ -99,7 +106,7 @@ std::vector<std::vector<std::size_t>> parse_momentum_rows(const std::string_view
       component_begin = component_end + 1;
     }
     if (components.size() != dimension) {
-      throw std::invalid_argument("each density momentum row must match the model dimension");
+      throw std::invalid_argument("each momentum row must match the model dimension");
     }
     momenta.push_back(std::move(components));
     if (row_end == std::string_view::npos) {
@@ -165,7 +172,7 @@ void validate_density_plan(const DensityContinuationGeometry &geometry) {
 
 std::optional<DensityContinuationCommand>
 parse_density_continuation(const cxxopts::ParseResult &result, const qmc::InteractingModel &model,
-                           const std::size_t samples, const bool retain_scalar_trace) {
+                           const std::size_t samples) {
   const bool has_destination = result.contains("density-continuation-dir");
   const bool has_momenta = result.contains("density-momenta");
   const bool has_frequency = result.contains("density-frequency-max");
@@ -175,9 +182,6 @@ parse_density_continuation(const cxxopts::ParseResult &result, const qmc::Intera
     if (has_momenta || has_frequency || has_lags || has_block_size) {
       throw std::invalid_argument(
           "density continuation options require --density-continuation-dir");
-    }
-    if (!retain_scalar_trace) {
-      throw std::invalid_argument("--no-trace requires --density-continuation-dir");
     }
     return std::nullopt;
   }
@@ -215,6 +219,48 @@ parse_density_continuation(const cxxopts::ParseResult &result, const qmc::Intera
       .output_directory = result["density-continuation-dir"].as<std::string>(),
   };
   validate_density_plan(command.geometry);
+  return command;
+}
+
+std::optional<HoppingResponseCommand> parse_hopping_response(const cxxopts::ParseResult &result,
+                                                             const qmc::InteractingModel &model,
+                                                             const std::size_t samples) {
+  const bool has_destination = result.contains("hopping-response-dir");
+  const bool has_momenta = result.contains("hopping-momenta");
+  const bool has_frequency = result.contains("hopping-frequency-max");
+  const bool has_block_size = result.contains("hopping-measurements-per-block");
+  if (!has_destination) {
+    if (has_momenta || has_frequency || has_block_size) {
+      throw std::invalid_argument("hopping response options require --hopping-response-dir");
+    }
+    return std::nullopt;
+  }
+  if (!has_momenta || !has_frequency || !has_block_size) {
+    throw std::invalid_argument("hopping response requires --hopping-momenta, "
+                                "--hopping-frequency-max, and "
+                                "--hopping-measurements-per-block");
+  }
+  std::vector<std::vector<std::size_t>> momenta =
+      parse_momentum_rows(result["hopping-momenta"].as<std::string>(), model.free.dimension());
+  const std::size_t measurements_per_block =
+      result["hopping-measurements-per-block"].as<std::size_t>();
+  if (measurements_per_block == 0) {
+    throw std::invalid_argument("hopping measurements per block must be positive");
+  }
+  if (samples % measurements_per_block != 0) {
+    throw std::invalid_argument("hopping response samples must form complete equal-size blocks");
+  }
+  if (samples / measurements_per_block < 2) {
+    throw std::invalid_argument("hopping response requires at least two complete blocks");
+  }
+  const qmc::TorusLayout layout(model.free.linear_size(), model.free.dimension());
+  HoppingResponseCommand command{
+      .modes = make_density_matsubara_modes(model, layout, std::move(momenta),
+                                            result["hopping-frequency-max"].as<std::size_t>()),
+      .measurements_per_block = measurements_per_block,
+      .output_directory = result["hopping-response-dir"].as<std::string>(),
+  };
+  static_cast<void>(qmc::ContinuousMatsubaraPlan(command.modes));
   return command;
 }
 
@@ -271,7 +317,17 @@ std::optional<CommandLine> parse_command_line(const int argc, char **argv) {
         cxxopts::value<std::size_t>()},
        {"density-continuation-dir", "New density-continuation-v1 output directory",
         cxxopts::value<std::string>()},
-       {"no-trace", "Do not retain the scalar trace when writing a continuation bundle",
+       {"hopping-momenta",
+        "Semicolon-separated hopping-response momentum rows with comma-separated components",
+        cxxopts::value<std::string>()},
+       {"hopping-frequency-max",
+        "Largest hopping-response bosonic Matsubara index in the inclusive range [0,n]",
+        cxxopts::value<std::size_t>()},
+       {"hopping-measurements-per-block", "Consecutive hopping-response measurements in each block",
+        cxxopts::value<std::size_t>()},
+       {"hopping-response-dir", "New hopping-response-v1 output directory",
+        cxxopts::value<std::string>()},
+       {"no-trace", "Do not retain the scalar trace when writing a measurement bundle",
         cxxopts::value<bool>()->default_value("false")->implicit_value("true")},
        {"h,help", "Print help"}});
 
@@ -316,7 +372,13 @@ std::optional<CommandLine> parse_command_line(const int argc, char **argv) {
 
   const bool retain_scalar_trace = !result["no-trace"].as<bool>();
   std::optional<DensityContinuationCommand> density_continuation =
-      parse_density_continuation(result, model, samples, retain_scalar_trace);
+      parse_density_continuation(result, model, samples);
+  std::optional<HoppingResponseCommand> hopping_response =
+      parse_hopping_response(result, model, samples);
+  if (!retain_scalar_trace && !density_continuation.has_value() && !hopping_response.has_value()) {
+    throw std::invalid_argument(
+        "--no-trace requires --density-continuation-dir or --hopping-response-dir");
+  }
 
   return CommandLine{
       .model = model,
@@ -343,6 +405,7 @@ std::optional<CommandLine> parse_command_line(const int argc, char **argv) {
       .output = result["output"].as<std::string>(),
       .retain_scalar_trace = retain_scalar_trace,
       .density_continuation = std::move(density_continuation),
+      .hopping_response = std::move(hopping_response),
   };
 }
 
@@ -385,28 +448,50 @@ void print_acceptance(const qmc::InteractingSampler &sampler, const qmc::MoveKin
 
 struct PreparedOutputs {
   std::filesystem::path trace_path;
-  std::filesystem::path continuation_path;
+  std::filesystem::path density_continuation_path;
+  std::filesystem::path hopping_response_path;
   std::optional<std::ofstream> trace;
 };
 
 PreparedOutputs prepare_outputs(const CommandLine &command_line) {
   PreparedOutputs output{
       .trace_path = std::filesystem::absolute(command_line.output).lexically_normal(),
-      .continuation_path = {},
+      .density_continuation_path = {},
+      .hopping_response_path = {},
       .trace = std::nullopt,
   };
   if (command_line.density_continuation.has_value()) {
-    output.continuation_path =
+    output.density_continuation_path =
         std::filesystem::absolute(command_line.density_continuation->output_directory)
             .lexically_normal();
     if (command_line.retain_scalar_trace &&
-        (path_starts_with(output.trace_path, output.continuation_path) ||
-         path_starts_with(output.continuation_path, output.trace_path))) {
+        (path_starts_with(output.trace_path, output.density_continuation_path) ||
+         path_starts_with(output.density_continuation_path, output.trace_path))) {
       throw std::invalid_argument(
           "scalar trace and continuation bundle paths must not contain one another");
     }
-    ensure_parent_directory(output.continuation_path);
-    qmc::example::validate_density_continuation_bundle_destination(output.continuation_path);
+    ensure_parent_directory(output.density_continuation_path);
+    qmc::example::validate_density_continuation_bundle_destination(
+        output.density_continuation_path);
+  }
+  if (command_line.hopping_response.has_value()) {
+    output.hopping_response_path =
+        std::filesystem::absolute(command_line.hopping_response->output_directory)
+            .lexically_normal();
+    if (command_line.retain_scalar_trace &&
+        (path_starts_with(output.trace_path, output.hopping_response_path) ||
+         path_starts_with(output.hopping_response_path, output.trace_path))) {
+      throw std::invalid_argument(
+          "scalar trace and hopping-response bundle paths must not contain one another");
+    }
+    if (command_line.density_continuation.has_value() &&
+        (path_starts_with(output.density_continuation_path, output.hopping_response_path) ||
+         path_starts_with(output.hopping_response_path, output.density_continuation_path))) {
+      throw std::invalid_argument(
+          "density and hopping-response bundle paths must not contain one another");
+    }
+    ensure_parent_directory(output.hopping_response_path);
+    qmc::example::validate_hopping_response_bundle_destination(output.hopping_response_path);
   }
   if (command_line.retain_scalar_trace) {
     ensure_parent_directory(output.trace_path);
@@ -444,7 +529,7 @@ std::optional<DensityWorkflow> make_density_workflow(const CommandLine &command_
   const DensityContinuationCommand &density = *command_line.density_continuation;
   if (const auto *modes = std::get_if<qmc::MatsubaraModeSet>(&density.geometry)) {
     return DensityWorkflow{
-        .output_directory = output.continuation_path,
+        .output_directory = output.density_continuation_path,
         .backend =
             MatsubaraDensityWorkflow{
                 .plan = qmc::ContinuousMatsubaraPlan(*modes),
@@ -455,13 +540,33 @@ std::optional<DensityWorkflow> make_density_workflow(const CommandLine &command_
   }
   const auto &lags = std::get<qmc::ImaginaryTimeLagSet>(density.geometry);
   return DensityWorkflow{
-      .output_directory = output.continuation_path,
+      .output_directory = output.density_continuation_path,
       .backend =
           LagDensityWorkflow{
               .plan = qmc::ContinuousDensityLagPlan(lags),
               .accumulator = qmc::DensityLagBlockAccumulator(command_line.model.free, lags,
                                                              density.measurements_per_block),
           },
+  };
+}
+
+struct HoppingWorkflow {
+  std::filesystem::path output_directory;
+  qmc::ContinuousMatsubaraPlan plan;
+  qmc::HoppingResponseBlockAccumulator accumulator;
+};
+
+std::optional<HoppingWorkflow> make_hopping_workflow(const CommandLine &command_line,
+                                                     const PreparedOutputs &output) {
+  if (!command_line.hopping_response.has_value()) {
+    return std::nullopt;
+  }
+  const HoppingResponseCommand &hopping = *command_line.hopping_response;
+  return HoppingWorkflow{
+      .output_directory = output.hopping_response_path,
+      .plan = qmc::ContinuousMatsubaraPlan(hopping.modes),
+      .accumulator = qmc::HoppingResponseBlockAccumulator(command_line.model.free, hopping.modes,
+                                                          hopping.measurements_per_block),
   };
 }
 
@@ -480,7 +585,8 @@ struct ScalarTotals {
 
 ScalarTotals measure_samples(qmc::InteractingSampler &sampler, const CommandLine &command_line,
                              PreparedOutputs &output,
-                             std::optional<DensityWorkflow> &density_workflow) {
+                             std::optional<DensityWorkflow> &density_workflow,
+                             std::optional<HoppingWorkflow> &hopping_workflow) {
   ScalarTotals totals;
   for (std::size_t sample = 0; sample < command_line.samples; ++sample) {
     for (std::size_t thin = 0; thin < command_line.thin; ++thin) {
@@ -493,19 +599,25 @@ ScalarTotals measure_samples(qmc::InteractingSampler &sampler, const CommandLine
                     << value.interaction_energy << ' ' << value.double_occupancy_per_site << ' '
                     << winding << ' ' << value.event_count << '\n';
     }
-    if (density_workflow.has_value()) {
+    if (density_workflow.has_value() || hopping_workflow.has_value()) {
       const qmc::ContinuousMeasurementContext context(sampler.state());
-      std::visit(
-          [&context](auto &backend) {
-            using Backend = std::remove_cvref_t<decltype(backend)>;
-            if constexpr (std::is_same_v<Backend, MatsubaraDensityWorkflow>) {
-              backend.accumulator.observe(qmc::continuous_particle_modes(context, backend.plan));
-            } else {
-              backend.accumulator.observe(
-                  qmc::continuous_density_lag_values(context, backend.plan));
-            }
-          },
-          density_workflow->backend);
+      if (density_workflow.has_value()) {
+        std::visit(
+            [&context](auto &backend) {
+              using Backend = std::remove_cvref_t<decltype(backend)>;
+              if constexpr (std::is_same_v<Backend, MatsubaraDensityWorkflow>) {
+                backend.accumulator.observe(qmc::continuous_particle_modes(context, backend.plan));
+              } else {
+                backend.accumulator.observe(
+                    qmc::continuous_density_lag_values(context, backend.plan));
+              }
+            },
+            density_workflow->backend);
+      }
+      if (hopping_workflow.has_value()) {
+        hopping_workflow->accumulator.observe(
+            qmc::continuous_particle_modes(context, hopping_workflow->plan));
+      }
     }
     totals.energy += value.total_energy;
     totals.occupancy += value.double_occupancy_per_site;
@@ -568,6 +680,45 @@ void publish_density_workflow(DensityWorkflow &workflow, const CommandLine &comm
       workflow.backend);
 }
 
+double largest_flux_response_standard_error(const qmc::HoppingResponseBlockSeries &series) {
+  double largest = 0.0;
+  for (std::size_t frequency = 0; frequency < series.modes().frequency_count(); ++frequency) {
+    for (std::size_t momentum = 0; momentum < series.modes().momentum_count(); ++momentum) {
+      for (std::size_t left = 0; left < series.model().dimension(); ++left) {
+        for (std::size_t right = 0; right < series.model().dimension(); ++right) {
+          largest = std::max(
+              largest, series.flux_response_standard_error(frequency, momentum, left, right,
+                                                           qmc::HoppingResponseComponent::Real));
+          largest = std::max(largest, series.flux_response_standard_error(
+                                          frequency, momentum, left, right,
+                                          qmc::HoppingResponseComponent::Imaginary));
+        }
+      }
+    }
+  }
+  return largest;
+}
+
+void publish_hopping_workflow(HoppingWorkflow &workflow, const CommandLine &command_line) {
+  const qmc::example::HoppingResponseRunProvenance provenance{
+      .model = command_line.model,
+      .seed = command_line.seed,
+      .burn_in_sweeps = command_line.burn_in,
+      .thinning_sweeps = command_line.thin,
+      .sweep = command_line.sweep,
+      .random_seam_stitch = command_line.random_seam_stitch,
+      .scalar_trace_retained = command_line.retain_scalar_trace,
+      .program = "qmc_interacting_demo",
+      .program_version = std::string(qmc::kVersion),
+  };
+  const qmc::HoppingResponseBlockSeries series = workflow.accumulator.finish();
+  qmc::example::write_hopping_response_bundle(workflow.output_directory, series, provenance);
+  std::cout << "hopping-response bundle written to " << workflow.output_directory << '\n';
+  std::cout << "hopping-response blocks = " << series.block_count() << '\n';
+  std::cout << "largest hopping-response standard error = "
+            << largest_flux_response_standard_error(series) << '\n';
+}
+
 void print_run_summary(const qmc::InteractingSampler &sampler, const CommandLine &command_line,
                        const PreparedOutputs &output, const ScalarTotals totals) {
   const auto samples = static_cast<double>(command_line.samples);
@@ -603,14 +754,19 @@ void print_run_summary(const qmc::InteractingSampler &sampler, const CommandLine
 void execute_demo(const CommandLine &command_line) {
   PreparedOutputs output = prepare_outputs(command_line);
   std::optional<DensityWorkflow> density_workflow = make_density_workflow(command_line, output);
+  std::optional<HoppingWorkflow> hopping_workflow = make_hopping_workflow(command_line, output);
   qmc::InteractingSampler sampler(command_line.model, command_line.seed);
   for (std::size_t sweep = 0; sweep < command_line.burn_in; ++sweep) {
     advance_sampler(sampler, command_line);
   }
-  const ScalarTotals totals = measure_samples(sampler, command_line, output, density_workflow);
+  const ScalarTotals totals =
+      measure_samples(sampler, command_line, output, density_workflow, hopping_workflow);
   finish_trace(output);
   if (density_workflow.has_value()) {
     publish_density_workflow(*density_workflow, command_line);
+  }
+  if (hopping_workflow.has_value()) {
+    publish_hopping_workflow(*hopping_workflow, command_line);
   }
   print_run_summary(sampler, command_line, output, totals);
 }

@@ -81,6 +81,12 @@ static_assert(
 static_assert(std::is_same_v<decltype(std::declval<const HoppingResponse &>().modes()),
                              const MatsubaraModeSet &>);
 static_assert(!std::default_initializable<HoppingResponseAccumulator>);
+static_assert(!std::default_initializable<HoppingResponseBlockSeries>);
+static_assert(std::is_same_v<decltype(std::declval<const HoppingResponseBlockSeries &>().model()),
+                             const Model &>);
+static_assert(std::is_same_v<decltype(std::declval<const HoppingResponseBlockSeries &>().modes()),
+                             const MatsubaraModeSet &>);
+static_assert(!std::default_initializable<HoppingResponseBlockAccumulator>);
 
 MatsubaraModeSet make_continuous_modes(const double beta, const TorusLayout &layout,
                                        std::vector<std::vector<std::size_t>> momenta,
@@ -2031,6 +2037,221 @@ TEST(HoppingResponseAccumulatorTest,
   EXPECT_THROW(static_cast<void>(result.diamagnetic(model.dimension())), std::out_of_range);
   EXPECT_THROW(static_cast<void>(result.paramagnetic(modes.frequency_count(), 0, 0, 0)),
                std::out_of_range);
+}
+
+TEST(HoppingResponseBlockAccumulatorTest,
+     ReproducesSimpleMeansAndBlockErrorsForEveryAuthoritativeTerm) {
+  const Model model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 2,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const MatsubaraModeSet modes =
+      make_continuous_modes(model.beta(), TorusLayout(2, 1), {{0}, {1}}, {0, 1});
+  const ContinuousMatsubaraPlan plan(modes);
+  const std::vector configurations{
+      ContinuousConfiguration(model, Permutation({0}),
+                              {ContinuousPath(model.beta(), {0}, {0}, {})}),
+      ContinuousConfiguration(model, Permutation({0}),
+                              {ContinuousPath(model.beta(), {0}, {0},
+                                              {{.time = 0.25, .axis = 0, .direction = 1},
+                                               {.time = 0.75, .axis = 0, .direction = -1}})}),
+      ContinuousConfiguration(model, Permutation({0}),
+                              {ContinuousPath(model.beta(), {0}, {2},
+                                              {{.time = 0.25, .axis = 0, .direction = 1},
+                                               {.time = 0.75, .axis = 0, .direction = 1}})}),
+  };
+  HoppingResponseAccumulator simple_accumulator(model, modes);
+  HoppingResponseBlockAccumulator block_accumulator(model, modes, 1);
+  std::vector<HoppingResponse> block_references;
+  block_references.reserve(configurations.size());
+
+  EXPECT_EQ(block_accumulator.model(), model);
+  EXPECT_EQ(block_accumulator.modes(), modes);
+  EXPECT_EQ(block_accumulator.measurements_per_block(), 1U);
+  EXPECT_EQ(block_accumulator.completed_block_count(), 0U);
+  EXPECT_EQ(block_accumulator.pending_sample_count(), 0U);
+  EXPECT_THROW(static_cast<void>(block_accumulator.finish()), std::logic_error);
+  for (const ContinuousConfiguration &configuration : configurations) {
+    const ContinuousParticleModes values = continuous_particle_modes(configuration, plan);
+    simple_accumulator.observe(values);
+    block_accumulator.observe(values);
+    HoppingResponseAccumulator reference_accumulator(model, modes);
+    reference_accumulator.observe(values);
+    block_references.push_back(reference_accumulator.finish());
+  }
+
+  const HoppingResponse simple = simple_accumulator.finish();
+  const HoppingResponseBlockSeries series = block_accumulator.finish();
+  ASSERT_EQ(series.model(), model);
+  ASSERT_EQ(series.modes(), modes);
+  ASSERT_EQ(series.measurements_per_block(), 1U);
+  ASSERT_EQ(series.block_count(), configurations.size());
+  ASSERT_EQ(series.sample_count(), configurations.size());
+  ASSERT_EQ(block_accumulator.completed_block_count(), configurations.size());
+  ASSERT_EQ(block_accumulator.pending_sample_count(), 0U);
+
+  const auto real_standard_error = [](const std::vector<std::complex<double>> &values) {
+    const double count = static_cast<double>(values.size());
+    double mean = 0.0;
+    for (const std::complex<double> value : values) {
+      mean += value.real() / count;
+    }
+    double squared_difference_sum = 0.0;
+    for (const std::complex<double> value : values) {
+      squared_difference_sum += std::pow(value.real() - mean, 2);
+    }
+    return std::sqrt(squared_difference_sum / (count * (count - 1.0)));
+  };
+  const auto imaginary_standard_error = [](const std::vector<std::complex<double>> &values) {
+    const double count = static_cast<double>(values.size());
+    double mean = 0.0;
+    for (const std::complex<double> value : values) {
+      mean += value.imag() / count;
+    }
+    double squared_difference_sum = 0.0;
+    for (const std::complex<double> value : values) {
+      squared_difference_sum += std::pow(value.imag() - mean, 2);
+    }
+    return std::sqrt(squared_difference_sum / (count * (count - 1.0)));
+  };
+
+  for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+    for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+      std::vector<std::complex<double>> flux_blocks;
+      std::vector<std::complex<double>> response_blocks;
+      std::vector<std::complex<double>> paramagnetic_blocks;
+      for (std::size_t block = 0; block < block_references.size(); ++block) {
+        const HoppingResponse &reference = block_references[block];
+        flux_blocks.push_back(reference.mean_flux(frequency, momentum, 0));
+        response_blocks.push_back(reference.flux_response(frequency, momentum, 0, 0));
+        paramagnetic_blocks.push_back(reference.paramagnetic(frequency, momentum, 0, 0));
+        EXPECT_EQ(series.block_mean_flux(block, frequency, momentum, 0), flux_blocks.back());
+        EXPECT_EQ(series.block_flux_response(block, frequency, momentum, 0, 0),
+                  response_blocks.back());
+        EXPECT_EQ(series.block_paramagnetic(block, frequency, momentum, 0, 0),
+                  paramagnetic_blocks.back());
+      }
+      EXPECT_NEAR(std::abs(series.mean_flux(frequency, momentum, 0) -
+                           simple.mean_flux(frequency, momentum, 0)),
+                  0.0, 1e-15);
+      EXPECT_NEAR(std::abs(series.flux_response(frequency, momentum, 0, 0) -
+                           simple.flux_response(frequency, momentum, 0, 0)),
+                  0.0, 1e-15);
+      EXPECT_NEAR(std::abs(series.paramagnetic(frequency, momentum, 0, 0) -
+                           simple.paramagnetic(frequency, momentum, 0, 0)),
+                  0.0, 1e-15);
+      EXPECT_NEAR(
+          series.mean_flux_standard_error(frequency, momentum, 0, HoppingResponseComponent::Real),
+          real_standard_error(flux_blocks), 1e-15);
+      EXPECT_NEAR(series.mean_flux_standard_error(frequency, momentum, 0,
+                                                  HoppingResponseComponent::Imaginary),
+                  imaginary_standard_error(flux_blocks), 1e-15);
+      EXPECT_NEAR(series.flux_response_standard_error(frequency, momentum, 0, 0,
+                                                      HoppingResponseComponent::Real),
+                  real_standard_error(response_blocks), 1e-15);
+      EXPECT_NEAR(series.flux_response_standard_error(frequency, momentum, 0, 0,
+                                                      HoppingResponseComponent::Imaginary),
+                  imaginary_standard_error(response_blocks), 1e-15);
+      EXPECT_NEAR(series.paramagnetic_standard_error(frequency, momentum, 0, 0,
+                                                     HoppingResponseComponent::Real),
+                  real_standard_error(paramagnetic_blocks), 1e-15);
+      EXPECT_NEAR(series.paramagnetic_standard_error(frequency, momentum, 0, 0,
+                                                     HoppingResponseComponent::Imaginary),
+                  imaginary_standard_error(paramagnetic_blocks), 1e-15);
+      for (std::size_t omitted = 0; omitted < block_references.size(); ++omitted) {
+        const std::size_t left = (omitted + 1) % block_references.size();
+        const std::size_t right = (omitted + 2) % block_references.size();
+        EXPECT_NEAR(std::abs(series.jackknife_mean_flux(omitted, frequency, momentum, 0) -
+                             ((flux_blocks[left] + flux_blocks[right]) / 2.0)),
+                    0.0, 1e-15);
+        EXPECT_NEAR(std::abs(series.jackknife_flux_response(omitted, frequency, momentum, 0, 0) -
+                             ((response_blocks[left] + response_blocks[right]) / 2.0)),
+                    0.0, 1e-15);
+        EXPECT_NEAR(std::abs(series.jackknife_paramagnetic(omitted, frequency, momentum, 0, 0) -
+                             ((paramagnetic_blocks[left] + paramagnetic_blocks[right]) / 2.0)),
+                    0.0, 1e-15);
+      }
+    }
+  }
+
+  std::vector<double> diamagnetic_blocks;
+  for (std::size_t block = 0; block < block_references.size(); ++block) {
+    diamagnetic_blocks.push_back(block_references[block].diamagnetic(0));
+    EXPECT_EQ(series.block_diamagnetic(block, 0), diamagnetic_blocks.back());
+  }
+  double diamagnetic_mean = 0.0;
+  for (const double value : diamagnetic_blocks) {
+    diamagnetic_mean += value / static_cast<double>(diamagnetic_blocks.size());
+  }
+  double diamagnetic_squared_difference_sum = 0.0;
+  for (const double value : diamagnetic_blocks) {
+    diamagnetic_squared_difference_sum += std::pow(value - diamagnetic_mean, 2);
+  }
+  const double diamagnetic_error = std::sqrt(diamagnetic_squared_difference_sum /
+                                             (static_cast<double>(diamagnetic_blocks.size()) *
+                                              static_cast<double>(diamagnetic_blocks.size() - 1)));
+  EXPECT_NEAR(series.diamagnetic(0), simple.diamagnetic(0), 1e-15);
+  EXPECT_NEAR(series.diamagnetic_standard_error(0), diamagnetic_error, 1e-15);
+  for (std::size_t omitted = 0; omitted < block_references.size(); ++omitted) {
+    const std::size_t left = (omitted + 1) % block_references.size();
+    const std::size_t right = (omitted + 2) % block_references.size();
+    EXPECT_NEAR(series.jackknife_diamagnetic(omitted, 0),
+                (diamagnetic_blocks[left] + diamagnetic_blocks[right]) / 2.0, 1e-15);
+  }
+
+  EXPECT_THROW(static_cast<void>(series.block_mean_flux(3, 0, 0, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.block_flux_response(0, 2, 0, 0, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.block_paramagnetic(0, 0, 2, 0, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.block_diamagnetic(0, 1)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.jackknife_diamagnetic(3, 0)), std::out_of_range);
+}
+
+TEST(HoppingResponseBlockAccumulatorTest,
+     RejectsInvalidConstructionAndProvenanceWithoutLosingPendingSamples) {
+  const Model model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const MatsubaraModeSet modes =
+      make_continuous_modes(model.beta(), TorusLayout(3, 1), {{0}, {1}}, {0});
+  EXPECT_THROW(static_cast<void>(HoppingResponseBlockAccumulator(model, modes, 0)),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(HoppingResponseBlockAccumulator(
+                   model, make_continuous_modes(2.0, TorusLayout(3, 1), {{0}}, {0}), 2)),
+               std::invalid_argument);
+
+  const ContinuousConfiguration configuration(model, Permutation({0}),
+                                              {ContinuousPath(model.beta(), {0}, {0}, {})});
+  const ContinuousParticleModes values =
+      continuous_particle_modes(configuration, ContinuousMatsubaraPlan(modes));
+  const Model different_model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 2.0,
+  });
+  const ContinuousConfiguration different_configuration(
+      different_model, Permutation({0}), {ContinuousPath(model.beta(), {0}, {0}, {})});
+  const ContinuousParticleModes different_values =
+      continuous_particle_modes(different_configuration, ContinuousMatsubaraPlan(modes));
+  HoppingResponseBlockAccumulator accumulator(model, modes, 2);
+  accumulator.observe(values);
+  ASSERT_EQ(accumulator.pending_sample_count(), 1U);
+  EXPECT_THROW(accumulator.observe(different_values), std::invalid_argument);
+  EXPECT_EQ(accumulator.pending_sample_count(), 1U);
+  EXPECT_EQ(accumulator.completed_block_count(), 0U);
+  accumulator.observe(values);
+  accumulator.observe(values);
+  EXPECT_THROW(static_cast<void>(accumulator.finish()), std::logic_error);
+  accumulator.observe(values);
+  EXPECT_NO_THROW(static_cast<void>(accumulator.finish()));
 }
 
 TEST(HoppingResponseAccumulatorTest, ZeroModeResponseMatchesWindingAndEventCountIdentities) {

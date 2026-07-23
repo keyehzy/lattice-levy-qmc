@@ -572,6 +572,327 @@ template <class Series> void write_blocks(const std::filesystem::path &path, con
   }
 }
 
+struct ValidatedHoppingBundle {
+  std::size_t response_rows;
+  std::size_t response_block_rows;
+  std::size_t mean_flux_rows;
+  std::size_t mean_flux_block_rows;
+  std::size_t diamagnetic_rows;
+  std::size_t diamagnetic_block_rows;
+  std::size_t sampler_sweeps_per_block;
+};
+
+ValidatedHoppingBundle validate_hopping_bundle(const HoppingResponseBlockSeries &series,
+                                               const HoppingResponseRunProvenance &provenance) {
+  validate_provenance(provenance);
+  if (series.model() != provenance.model.free) {
+    throw std::invalid_argument("hopping response series and run provenance models differ");
+  }
+  const std::size_t dimension = series.model().dimension();
+  const std::size_t mean_flux_rows = checked_product(series.modes().mode_count(), dimension,
+                                                     "hopping mean-flux row count exceeds size_t");
+  const std::size_t response_rows =
+      checked_product(mean_flux_rows, dimension, "hopping response row count exceeds size_t");
+  const std::size_t diamagnetic_rows = dimension;
+  const std::size_t sampler_sweeps_per_block =
+      checked_product(provenance.thinning_sweeps, series.measurements_per_block(),
+                      "hopping response sweeps per block exceed size_t");
+  return {
+      .response_rows = response_rows,
+      .response_block_rows = checked_product(series.block_count(), response_rows,
+                                             "hopping response block row count exceeds size_t"),
+      .mean_flux_rows = mean_flux_rows,
+      .mean_flux_block_rows = checked_product(series.block_count(), mean_flux_rows,
+                                              "hopping mean-flux block row count exceeds size_t"),
+      .diamagnetic_rows = diamagnetic_rows,
+      .diamagnetic_block_rows =
+          checked_product(series.block_count(), diamagnetic_rows,
+                          "hopping diamagnetic block row count exceeds size_t"),
+      .sampler_sweeps_per_block = sampler_sweeps_per_block,
+  };
+}
+
+void write_hopping_manifest(const std::filesystem::path &path,
+                            const HoppingResponseBlockSeries &series,
+                            const HoppingResponseRunProvenance &provenance,
+                            const ValidatedHoppingBundle validated) {
+  std::ofstream output(path, std::ios::binary);
+  if (!output) {
+    throw std::runtime_error("failed to create hopping-response manifest: " + path.string());
+  }
+  configure_table_stream(output);
+  const Model &model = provenance.model.free;
+  output << "key\tvalue\n"
+         << "schema_id\thopping-response\n"
+         << "schema_version\t1\n"
+         << "basis\tbosonic_matsubara\n"
+         << "observable_id\tfull_gauge_flux_response\n"
+         << "source_convention\tpositive_bond_peierls_phase\n"
+         << "spatial_phase\texp(-i*q*bond_midpoint)\n"
+         << "temporal_phase\texp(+i*omega_n*tau)\n"
+         << "flux_response_normalization\tmean_I_left_conj_I_right_over_beta_volume\n"
+         << "diamagnetic_normalization\tmean_axis_event_count_over_beta_volume\n"
+         << "paramagnetic_definition\tdiamagnetic_delta_minus_flux_response\n"
+         << "units_convention\thbar=1;k_B=1;lattice_spacing=1\n"
+         << "response_units\tenergy_per_site\n"
+         << "mean_flux_units\tdimensionless\n"
+         << "model_particle_count\t" << model.particle_count() << '\n'
+         << "model_beta\t" << model.beta() << '\n'
+         << "model_linear_size\t" << model.linear_size() << '\n'
+         << "model_dimension\t" << model.dimension() << '\n'
+         << "model_hopping\t" << model.hopping() << '\n'
+         << "model_interaction\t" << provenance.model.interaction << '\n'
+         << "lattice_volume\t" << model.volume() << '\n'
+         << "seed\t" << provenance.seed << '\n'
+         << "burn_in_sweeps\t" << provenance.burn_in_sweeps << '\n'
+         << "thinning_sweeps\t" << provenance.thinning_sweeps << '\n'
+         << "measurement_advance_order\trandom_seam_stitch_then_sampler_sweep\n"
+         << "sweep_segment_updates\t" << optional_count(provenance.sweep.segment_updates) << '\n'
+         << "sweep_segment_fraction\t" << provenance.sweep.segment_fraction << '\n'
+         << "sweep_cycle_updates\t" << provenance.sweep.cycle_updates << '\n'
+         << "sweep_global_updates\t" << provenance.sweep.global_updates << '\n'
+         << "sweep_stitch_updates\t" << provenance.sweep.stitch_updates << '\n'
+         << "sweep_stitch_fraction\t" << provenance.sweep.stitch_fraction << '\n'
+         << "sweep_stitch_locality_radius\t" << provenance.sweep.stitch_locality_radius << '\n'
+         << "sweep_stitch_global_partner_probability\t"
+         << provenance.sweep.stitch_global_partner_probability << '\n'
+         << "sweep_stitch_strand_counts\t"
+         << comma_separated(provenance.sweep.stitch_mixture.strand_counts) << '\n'
+         << "sweep_stitch_strand_weights\t"
+         << (provenance.sweep.stitch_mixture.strand_weights.empty()
+                 ? "equal"
+                 : comma_separated(provenance.sweep.stitch_mixture.strand_weights))
+         << '\n'
+         << "sweep_time_shift_updates\t" << provenance.sweep.time_shift_updates << '\n'
+         << "random_seam_stitch_updates\t" << optional_count(provenance.random_seam_stitch.updates)
+         << '\n'
+         << "random_seam_stitch_fraction\t" << provenance.random_seam_stitch.fraction << '\n'
+         << "random_seam_stitch_locality_radius\t" << provenance.random_seam_stitch.locality_radius
+         << '\n'
+         << "random_seam_stitch_global_partner_probability\t"
+         << provenance.random_seam_stitch.global_partner_probability << '\n'
+         << "random_seam_stitch_strand_counts\t"
+         << comma_separated(provenance.random_seam_stitch.mixture.strand_counts) << '\n'
+         << "random_seam_stitch_strand_weights\t"
+         << (provenance.random_seam_stitch.mixture.strand_weights.empty()
+                 ? "equal"
+                 : comma_separated(provenance.random_seam_stitch.mixture.strand_weights))
+         << '\n'
+         << "measurements_per_block\t" << series.measurements_per_block() << '\n'
+         << "completed_block_count\t" << series.block_count() << '\n'
+         << "sample_count\t" << series.sample_count() << '\n'
+         << "post_burn_in_sampler_sweeps_per_block\t" << validated.sampler_sweeps_per_block << '\n'
+         << "momentum_count\t" << series.modes().momentum_count() << '\n'
+         << "frequency_count\t" << series.modes().frequency_count() << '\n'
+         << "response_values_row_count\t" << validated.response_rows << '\n'
+         << "response_blocks_row_count\t" << validated.response_block_rows << '\n'
+         << "mean_flux_values_row_count\t" << validated.mean_flux_rows << '\n'
+         << "mean_flux_blocks_row_count\t" << validated.mean_flux_block_rows << '\n'
+         << "diamagnetic_values_row_count\t" << validated.diamagnetic_rows << '\n'
+         << "diamagnetic_blocks_row_count\t" << validated.diamagnetic_block_rows << '\n'
+         << "standard_error_kind\tcompleted_block_standard_error_of_mean\n"
+         << "jackknife_representation\tleave_one_block_out_reconstructible_from_blocks\n"
+         << "conductivity_interpretation\tnone\n"
+         << "scalar_trace_retained\t" << (provenance.scalar_trace_retained ? "true" : "false")
+         << '\n'
+         << "program\t" << provenance.program << '\n'
+         << "program_version\t" << provenance.program_version << '\n';
+  output.close();
+  if (!output) {
+    throw std::runtime_error("failed to write hopping-response manifest: " + path.string());
+  }
+}
+
+void write_hopping_response_values(const std::filesystem::path &path,
+                                   const HoppingResponseBlockSeries &series) {
+  std::ofstream output(path, std::ios::binary);
+  if (!output) {
+    throw std::runtime_error("failed to create hopping-response values: " + path.string());
+  }
+  configure_table_stream(output);
+  const MatsubaraModeSet &modes = series.modes();
+  output << "momentum";
+  for (std::size_t axis = 0; axis < modes.layout().dimension(); ++axis) {
+    output << "\tk_" << axis;
+  }
+  output << "\tfrequency\tn\tomega\tleft_axis\tright_axis"
+            "\tflux_response_mean_real\tflux_response_mean_imag"
+            "\tflux_response_standard_error_real\tflux_response_standard_error_imag"
+            "\tparamagnetic_mean_real\tparamagnetic_mean_imag"
+            "\tparamagnetic_standard_error_real\tparamagnetic_standard_error_imag\n";
+  for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+    for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+      for (std::size_t left = 0; left < series.model().dimension(); ++left) {
+        for (std::size_t right = 0; right < series.model().dimension(); ++right) {
+          const std::complex<double> response =
+              series.flux_response(frequency, momentum, left, right);
+          const std::complex<double> paramagnetic =
+              series.paramagnetic(frequency, momentum, left, right);
+          output << momentum;
+          for (const std::size_t component : modes.momentum_indices(momentum)) {
+            output << '\t' << component;
+          }
+          output << '\t' << frequency << '\t' << modes.frequency_index(frequency) << '\t'
+                 << modes.frequency(frequency) << '\t' << left << '\t' << right << '\t'
+                 << response.real() << '\t' << response.imag() << '\t'
+                 << series.flux_response_standard_error(frequency, momentum, left, right,
+                                                        HoppingResponseComponent::Real)
+                 << '\t'
+                 << series.flux_response_standard_error(frequency, momentum, left, right,
+                                                        HoppingResponseComponent::Imaginary)
+                 << '\t' << paramagnetic.real() << '\t' << paramagnetic.imag() << '\t'
+                 << series.paramagnetic_standard_error(frequency, momentum, left, right,
+                                                       HoppingResponseComponent::Real)
+                 << '\t'
+                 << series.paramagnetic_standard_error(frequency, momentum, left, right,
+                                                       HoppingResponseComponent::Imaginary)
+                 << '\n';
+        }
+      }
+    }
+  }
+  output.close();
+  if (!output) {
+    throw std::runtime_error("failed to write hopping-response values: " + path.string());
+  }
+}
+
+void write_hopping_response_blocks(const std::filesystem::path &path,
+                                   const HoppingResponseBlockSeries &series) {
+  std::ofstream output(path, std::ios::binary);
+  if (!output) {
+    throw std::runtime_error("failed to create hopping-response blocks: " + path.string());
+  }
+  configure_table_stream(output);
+  output << "block\tmomentum\tfrequency\tleft_axis\tright_axis"
+            "\tflux_response_real\tflux_response_imag"
+            "\tparamagnetic_real\tparamagnetic_imag\n";
+  for (std::size_t block = 0; block < series.block_count(); ++block) {
+    for (std::size_t momentum = 0; momentum < series.modes().momentum_count(); ++momentum) {
+      for (std::size_t frequency = 0; frequency < series.modes().frequency_count(); ++frequency) {
+        for (std::size_t left = 0; left < series.model().dimension(); ++left) {
+          for (std::size_t right = 0; right < series.model().dimension(); ++right) {
+            const std::complex<double> response =
+                series.block_flux_response(block, frequency, momentum, left, right);
+            const std::complex<double> paramagnetic =
+                series.block_paramagnetic(block, frequency, momentum, left, right);
+            output << block << '\t' << momentum << '\t' << frequency << '\t' << left << '\t'
+                   << right << '\t' << response.real() << '\t' << response.imag() << '\t'
+                   << paramagnetic.real() << '\t' << paramagnetic.imag() << '\n';
+          }
+        }
+      }
+    }
+  }
+  output.close();
+  if (!output) {
+    throw std::runtime_error("failed to write hopping-response blocks: " + path.string());
+  }
+}
+
+void write_hopping_mean_flux_values(const std::filesystem::path &path,
+                                    const HoppingResponseBlockSeries &series) {
+  std::ofstream output(path, std::ios::binary);
+  if (!output) {
+    throw std::runtime_error("failed to create hopping mean-flux values: " + path.string());
+  }
+  configure_table_stream(output);
+  const MatsubaraModeSet &modes = series.modes();
+  output << "momentum";
+  for (std::size_t axis = 0; axis < modes.layout().dimension(); ++axis) {
+    output << "\tk_" << axis;
+  }
+  output << "\tfrequency\tn\tomega\taxis\tmean_real\tmean_imag"
+            "\tstandard_error_real\tstandard_error_imag\n";
+  for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+    for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+      for (std::size_t axis = 0; axis < series.model().dimension(); ++axis) {
+        const std::complex<double> mean = series.mean_flux(frequency, momentum, axis);
+        output << momentum;
+        for (const std::size_t component : modes.momentum_indices(momentum)) {
+          output << '\t' << component;
+        }
+        output << '\t' << frequency << '\t' << modes.frequency_index(frequency) << '\t'
+               << modes.frequency(frequency) << '\t' << axis << '\t' << mean.real() << '\t'
+               << mean.imag() << '\t'
+               << series.mean_flux_standard_error(frequency, momentum, axis,
+                                                  HoppingResponseComponent::Real)
+               << '\t'
+               << series.mean_flux_standard_error(frequency, momentum, axis,
+                                                  HoppingResponseComponent::Imaginary)
+               << '\n';
+      }
+    }
+  }
+  output.close();
+  if (!output) {
+    throw std::runtime_error("failed to write hopping mean-flux values: " + path.string());
+  }
+}
+
+void write_hopping_mean_flux_blocks(const std::filesystem::path &path,
+                                    const HoppingResponseBlockSeries &series) {
+  std::ofstream output(path, std::ios::binary);
+  if (!output) {
+    throw std::runtime_error("failed to create hopping mean-flux blocks: " + path.string());
+  }
+  configure_table_stream(output);
+  output << "block\tmomentum\tfrequency\taxis\tmean_real\tmean_imag\n";
+  for (std::size_t block = 0; block < series.block_count(); ++block) {
+    for (std::size_t momentum = 0; momentum < series.modes().momentum_count(); ++momentum) {
+      for (std::size_t frequency = 0; frequency < series.modes().frequency_count(); ++frequency) {
+        for (std::size_t axis = 0; axis < series.model().dimension(); ++axis) {
+          const std::complex<double> mean =
+              series.block_mean_flux(block, frequency, momentum, axis);
+          output << block << '\t' << momentum << '\t' << frequency << '\t' << axis << '\t'
+                 << mean.real() << '\t' << mean.imag() << '\n';
+        }
+      }
+    }
+  }
+  output.close();
+  if (!output) {
+    throw std::runtime_error("failed to write hopping mean-flux blocks: " + path.string());
+  }
+}
+
+void write_hopping_diamagnetic_values(const std::filesystem::path &path,
+                                      const HoppingResponseBlockSeries &series) {
+  std::ofstream output(path, std::ios::binary);
+  if (!output) {
+    throw std::runtime_error("failed to create hopping diamagnetic values: " + path.string());
+  }
+  configure_table_stream(output);
+  output << "axis\tmean\tstandard_error\n";
+  for (std::size_t axis = 0; axis < series.model().dimension(); ++axis) {
+    output << axis << '\t' << series.diamagnetic(axis) << '\t'
+           << series.diamagnetic_standard_error(axis) << '\n';
+  }
+  output.close();
+  if (!output) {
+    throw std::runtime_error("failed to write hopping diamagnetic values: " + path.string());
+  }
+}
+
+void write_hopping_diamagnetic_blocks(const std::filesystem::path &path,
+                                      const HoppingResponseBlockSeries &series) {
+  std::ofstream output(path, std::ios::binary);
+  if (!output) {
+    throw std::runtime_error("failed to create hopping diamagnetic blocks: " + path.string());
+  }
+  configure_table_stream(output);
+  output << "block\taxis\tvalue\n";
+  for (std::size_t block = 0; block < series.block_count(); ++block) {
+    for (std::size_t axis = 0; axis < series.model().dimension(); ++axis) {
+      output << block << '\t' << axis << '\t' << series.block_diamagnetic(block, axis) << '\n';
+    }
+  }
+  output.close();
+  if (!output) {
+    throw std::runtime_error("failed to write hopping diamagnetic blocks: " + path.string());
+  }
+}
+
 std::filesystem::path create_temporary_directory(const std::filesystem::path &destination) {
   constexpr std::size_t kMaximumAttempts = 1024;
   for (std::size_t attempt = 0; attempt < kMaximumAttempts; ++attempt) {
@@ -681,6 +1002,46 @@ void write_density_continuation_bundle(const std::filesystem::path &destination,
                                        const DensityLagBlockSeries &series,
                                        const DensityContinuationRunProvenance &provenance) {
   write_bundle(destination, series, provenance);
+}
+
+void validate_hopping_response_bundle_destination(const std::filesystem::path &destination) {
+  validate_density_continuation_bundle_destination(destination);
+}
+
+void write_hopping_response_bundle(const std::filesystem::path &destination,
+                                   const HoppingResponseBlockSeries &series,
+                                   const HoppingResponseRunProvenance &provenance) {
+  const ValidatedHoppingBundle validated = validate_hopping_bundle(series, provenance);
+  validate_hopping_response_bundle_destination(destination);
+
+  const std::filesystem::path temporary = create_temporary_directory(destination);
+  try {
+    write_hopping_manifest(temporary / "manifest.tsv", series, provenance, validated);
+    write_hopping_response_values(temporary / "response_values.tsv", series);
+    write_hopping_response_blocks(temporary / "response_blocks.tsv", series);
+    write_hopping_mean_flux_values(temporary / "mean_flux_values.tsv", series);
+    write_hopping_mean_flux_blocks(temporary / "mean_flux_blocks.tsv", series);
+    write_hopping_diamagnetic_values(temporary / "diamagnetic_values.tsv", series);
+    write_hopping_diamagnetic_blocks(temporary / "diamagnetic_blocks.tsv", series);
+    validate_hopping_response_bundle_destination(destination);
+    std::filesystem::rename(temporary, destination);
+  } catch (const std::exception &error) {
+    const std::string original = error.what();
+    std::error_code cleanup_error;
+    std::filesystem::remove_all(temporary, cleanup_error);
+    if (cleanup_error) {
+      report_cleanup_failure(temporary, original, cleanup_error);
+    }
+    throw;
+  } catch (...) {
+    std::error_code cleanup_error;
+    std::filesystem::remove_all(temporary, cleanup_error);
+    if (cleanup_error) {
+      report_cleanup_failure(temporary, "unknown hopping-response publication failure",
+                             cleanup_error);
+    }
+    throw;
+  }
 }
 
 } // namespace qmc::example

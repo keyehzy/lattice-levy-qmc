@@ -156,6 +156,91 @@ if(NOT lag_block_row_count EQUAL 5)
   message(FATAL_ERROR "requested-lag blocks.tsv has ${lag_block_row_count} lines instead of 5")
 endif()
 
+set(hopping_bundle "${OUTPUT_DIRECTORY}/hopping-response-v1")
+execute_process(
+  COMMAND
+    "${PROGRAM}" --particles=1 --beta=0.5 --linear-size=2 --dimension=1 --hopping=0
+    --interaction=0 --seed=17 --samples=4 --burn-in=0 --thin=1 --segment-updates=0
+    --cycle-updates=0 --global-updates=0 --stitch-updates=0 "--hopping-momenta=0;1"
+    --hopping-frequency-max=0 --hopping-measurements-per-block=2
+    "--hopping-response-dir=${hopping_bundle}" --no-trace
+  RESULT_VARIABLE hopping_result
+  OUTPUT_VARIABLE hopping_output
+  ERROR_VARIABLE hopping_error
+)
+if(NOT hopping_result EQUAL 0)
+  message(
+    FATAL_ERROR
+    "hopping-response demo failed with ${hopping_result}\n"
+    "stdout:\n${hopping_output}\nstderr:\n${hopping_error}"
+  )
+endif()
+if(NOT hopping_output MATCHES "hopping-response blocks = 2")
+  message(FATAL_ERROR "hopping demo did not report its block count\nstdout:\n${hopping_output}")
+endif()
+if(NOT hopping_output MATCHES "largest hopping-response standard error = 0")
+  message(FATAL_ERROR "hopping demo did not report its standard error\nstdout:\n${hopping_output}")
+endif()
+foreach(filename IN ITEMS
+        manifest.tsv
+        response_values.tsv
+        response_blocks.tsv
+        mean_flux_values.tsv
+        mean_flux_blocks.tsv
+        diamagnetic_values.tsv
+        diamagnetic_blocks.tsv)
+  set(path "${hopping_bundle}/${filename}")
+  if(NOT EXISTS "${path}")
+    message(FATAL_ERROR "expected hopping-response output does not exist: ${path}")
+  endif()
+  file(SIZE "${path}" size)
+  if(size EQUAL 0)
+    message(FATAL_ERROR "expected hopping-response output is empty: ${path}")
+  endif()
+endforeach()
+
+file(READ "${hopping_bundle}/manifest.tsv" hopping_manifest)
+foreach(required IN ITEMS
+        "schema_id\thopping-response"
+        "schema_version\t1"
+        "basis\tbosonic_matsubara"
+        "observable_id\tfull_gauge_flux_response"
+        "model_interaction\t0"
+        "measurements_per_block\t2"
+        "completed_block_count\t2"
+        "sample_count\t4"
+        "momentum_count\t2"
+        "frequency_count\t1"
+        "response_values_row_count\t2"
+        "response_blocks_row_count\t4"
+        "mean_flux_values_row_count\t2"
+        "mean_flux_blocks_row_count\t4"
+        "diamagnetic_values_row_count\t1"
+        "diamagnetic_blocks_row_count\t2"
+        "conductivity_interpretation\tnone")
+  string(FIND "${hopping_manifest}" "${required}" found)
+  if(found EQUAL -1)
+    message(FATAL_ERROR "hopping-response manifest is missing: ${required}")
+  endif()
+endforeach()
+
+file(STRINGS "${hopping_bundle}/response_values.tsv" hopping_response_value_rows)
+file(STRINGS "${hopping_bundle}/response_blocks.tsv" hopping_response_block_rows)
+list(LENGTH hopping_response_value_rows hopping_response_value_row_count)
+list(LENGTH hopping_response_block_rows hopping_response_block_row_count)
+if(NOT hopping_response_value_row_count EQUAL 3)
+  message(
+    FATAL_ERROR
+    "response_values.tsv has ${hopping_response_value_row_count} lines instead of 3"
+  )
+endif()
+if(NOT hopping_response_block_row_count EQUAL 5)
+  message(
+    FATAL_ERROR
+    "response_blocks.tsv has ${hopping_response_block_row_count} lines instead of 5"
+  )
+endif()
+
 file(SHA256 "${bundle}/manifest.tsv" manifest_before)
 execute_process(
   COMMAND "${PROGRAM}" ${arguments}

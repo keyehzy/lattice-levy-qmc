@@ -70,6 +70,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `HoppingResponseAccumulator` and `HoppingResponse` for analytically
   centred signed-flux gauge response, axis-resolved diamagnetic terms, derived
   paramagnetic current correlations, and sampled mean-flux diagnostics.
+- Add `HoppingResponseBlockAccumulator` and `HoppingResponseBlockSeries` for
+  complete equal-size response blocks, component-wise standard errors, and
+  leave-one-block-out means that retain the covariance between diamagnetic and
+  flux-response terms.
+- Add an opt-in interacting-demo hopping workflow and atomically published
+  `hopping-response-v1` export with separate response, diamagnetic, and
+  mean-flux value/block tables plus complete run provenance.
 - Add `ContinuousPairDensityModes` and exact occupancy-replay projection of
   unnormalised on-site pair-density Matsubara amplitudes, with atomic
   equal-time groups and an exact pair-overlap zero mode.
@@ -78,8 +85,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   invariance.
 - Add a finite-interaction statistical regression comparing continuous density
   susceptibility, hopping response, and the diamagnetic estimator with
-  small-system exact diagonalisation using public density block statistics and
-  blocked Markov-chain errors, including a continuation-bundle round-trip.
+  small-system exact diagonalisation using public density and hopping block
+  statistics, including both export round-trips.
 - Add self-describing segment, stitch, fixed-seam stitch-sweep, and random-seam
   stitch option values.
 - Add generated compile-time version metadata in `<qmc/version.hpp>`, sourced
