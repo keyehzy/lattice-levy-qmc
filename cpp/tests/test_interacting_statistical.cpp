@@ -137,7 +137,12 @@ TEST(ContinuousMatsubaraAccumulatorTest, MatchesOneParticleLehmannReferences) {
       model.beta(), qmc::TorusLayout(model.linear_size(), model.dimension()),
       qmc::MatsubaraModeRequest{.momentum_indices = {{0}, {1}}, .frequency_indices = {0, 1}});
   const qmc::ContinuousMatsubaraPlan plan(modes);
+  const qmc::ImaginaryTimeLagSet lags(
+      model.beta(), qmc::TorusLayout(model.linear_size(), model.dimension()),
+      qmc::ImaginaryTimeLagRequest{.momentum_indices = {{0}, {1}, {2}}, .lags = {0.0, 0.2, 0.4}});
+  const qmc::ContinuousDensityLagPlan lag_plan(lags);
   qmc::DensityMatsubaraAccumulator density_accumulator(model, modes);
+  qmc::DensityLagBlockAccumulator lag_accumulator(model, lags, 1);
   qmc::HoppingResponseAccumulator hopping_accumulator(model, modes);
   qmc::Random random(20260722);
   std::array<double, 2> density_sums{};
@@ -150,8 +155,10 @@ TEST(ContinuousMatsubaraAccumulatorTest, MatchesOneParticleLehmannReferences) {
   for (std::size_t sample = 0; sample < sample_count; ++sample) {
     const qmc::ContinuousConfiguration configuration =
         qmc::sample_ideal_continuous_configuration(ensemble, random);
-    const qmc::ContinuousParticleModes values = qmc::continuous_particle_modes(configuration, plan);
+    const qmc::ContinuousMeasurementContext context(configuration);
+    const qmc::ContinuousParticleModes values = qmc::continuous_particle_modes(context, plan);
     density_accumulator.observe(values);
+    lag_accumulator.observe(qmc::continuous_density_lag_values(context, lag_plan));
     hopping_accumulator.observe(values);
     for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
       const double density_observation =
@@ -173,8 +180,10 @@ TEST(ContinuousMatsubaraAccumulatorTest, MatchesOneParticleLehmannReferences) {
   }
 
   const qmc::ContinuousMatsubaraDensityCorrelations density_result = density_accumulator.finish();
+  const qmc::DensityLagBlockSeries lag_result = lag_accumulator.finish();
   const qmc::HoppingResponse hopping_result = hopping_accumulator.finish();
   ASSERT_EQ(density_result.sample_count(), sample_count);
+  ASSERT_EQ(lag_result.sample_count(), sample_count);
   ASSERT_EQ(hopping_result.sample_count(), sample_count);
   const std::array exact_density{0.1915077492, 0.0217766472};
   const double count = static_cast<double>(sample_count);
@@ -189,6 +198,25 @@ TEST(ContinuousMatsubaraAccumulatorTest, MatchesOneParticleLehmannReferences) {
     // error bound from exact independent ideal samples.
     EXPECT_NEAR(density_result.at(frequency, 1), exact_density[frequency], 6.0 * standard_error);
     EXPECT_LT(standard_error, frequency == 0 ? 0.0010 : 0.00035);
+  }
+
+  const std::array exact_lag_density{0.3333333333333333, 0.2270763548896555, 0.1955547971340791};
+  for (std::size_t lag = 0; lag < lags.lag_count(); ++lag) {
+    EXPECT_EQ(lag_result.mean(lag, 0), 0.0);
+    EXPECT_EQ(lag_result.standard_error(lag, 0), 0.0);
+    for (const std::size_t momentum : {std::size_t{1}, std::size_t{2}}) {
+      if (lag == 0) {
+        EXPECT_NEAR(lag_result.mean(lag, momentum), exact_lag_density[lag], 1e-13);
+        EXPECT_NEAR(lag_result.standard_error(lag, momentum), 0.0, 1e-15);
+      } else {
+        // Independent one-particle Lehmann values at q=+/-2*pi/3. Each exact
+        // configuration is one block, so this is the ordinary independent-sample
+        // standard error without an autocorrelation assumption.
+        EXPECT_NEAR(lag_result.mean(lag, momentum), exact_lag_density[lag],
+                    6.0 * lag_result.standard_error(lag, momentum));
+        EXPECT_LT(lag_result.standard_error(lag, momentum), 0.001);
+      }
+    }
   }
 
   // Independent one-particle source-derivative values. The mode order is

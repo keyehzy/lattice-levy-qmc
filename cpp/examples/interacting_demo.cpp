@@ -17,13 +17,17 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace {
 
+using DensityContinuationGeometry = std::variant<qmc::MatsubaraModeSet, qmc::ImaginaryTimeLagSet>;
+
 struct DensityContinuationCommand {
-  qmc::MatsubaraModeSet modes;
+  DensityContinuationGeometry geometry;
   std::size_t measurements_per_block;
   std::filesystem::path output_directory;
 };
@@ -110,30 +114,10 @@ bool is_zero_momentum(const std::vector<std::size_t> &momentum) {
   return std::ranges::all_of(momentum, [](const std::size_t component) { return component == 0; });
 }
 
-std::optional<DensityContinuationCommand>
-parse_density_continuation(const cxxopts::ParseResult &result, const qmc::InteractingModel &model,
-                           const std::size_t samples, const bool retain_scalar_trace) {
-  const bool has_destination = result.contains("density-continuation-dir");
-  const bool has_momenta = result.contains("density-momenta");
-  const bool has_frequency = result.contains("density-frequency-max");
-  const bool has_block_size = result.contains("density-measurements-per-block");
-  if (!has_destination) {
-    if (has_momenta || has_frequency || has_block_size) {
-      throw std::invalid_argument(
-          "density continuation options require --density-continuation-dir");
-    }
-    if (!retain_scalar_trace) {
-      throw std::invalid_argument("--no-trace requires --density-continuation-dir");
-    }
-    return std::nullopt;
-  }
-  if (!has_momenta || !has_frequency || !has_block_size) {
-    throw std::invalid_argument(
-        "density continuation requires --density-momenta, --density-frequency-max, and "
-        "--density-measurements-per-block");
-  }
-
-  const std::size_t frequency_max = result["density-frequency-max"].as<std::size_t>();
+qmc::MatsubaraModeSet make_density_matsubara_modes(const qmc::InteractingModel &model,
+                                                   const qmc::TorusLayout &layout,
+                                                   std::vector<std::vector<std::size_t>> momenta,
+                                                   const std::size_t frequency_max) {
   if (frequency_max >
       static_cast<std::size_t>(qmc::ContinuousMatsubaraPlan::kMaximumAbsoluteFrequencyIndex)) {
     throw std::invalid_argument("density Matsubara index exceeds the continuous phase bound");
@@ -146,6 +130,65 @@ parse_density_continuation(const cxxopts::ParseResult &result, const qmc::Intera
   frequencies.reserve(frequency_max + 1);
   for (std::size_t frequency = 0; frequency <= frequency_max; ++frequency) {
     frequencies.push_back(static_cast<std::int64_t>(frequency));
+  }
+  return {model.free.beta(),
+          layout,
+          {.momentum_indices = std::move(momenta), .frequency_indices = std::move(frequencies)}};
+}
+
+DensityContinuationGeometry make_density_geometry(const cxxopts::ParseResult &result,
+                                                  const qmc::InteractingModel &model,
+                                                  std::vector<std::vector<std::size_t>> momenta,
+                                                  const bool has_frequency) {
+  const qmc::TorusLayout layout(model.free.linear_size(), model.free.dimension());
+  if (has_frequency) {
+    return make_density_matsubara_modes(model, layout, std::move(momenta),
+                                        result["density-frequency-max"].as<std::size_t>());
+  }
+  return qmc::ImaginaryTimeLagSet(model.free.beta(), layout,
+                                  {.momentum_indices = std::move(momenta),
+                                   .lags = result["density-lags"].as<std::vector<double>>()});
+}
+
+void validate_density_plan(const DensityContinuationGeometry &geometry) {
+  std::visit(
+      [](const auto &requested_geometry) {
+        using Geometry = std::remove_cvref_t<decltype(requested_geometry)>;
+        if constexpr (std::is_same_v<Geometry, qmc::MatsubaraModeSet>) {
+          static_cast<void>(qmc::ContinuousMatsubaraPlan(requested_geometry));
+        } else {
+          static_cast<void>(qmc::ContinuousDensityLagPlan(requested_geometry));
+        }
+      },
+      geometry);
+}
+
+std::optional<DensityContinuationCommand>
+parse_density_continuation(const cxxopts::ParseResult &result, const qmc::InteractingModel &model,
+                           const std::size_t samples, const bool retain_scalar_trace) {
+  const bool has_destination = result.contains("density-continuation-dir");
+  const bool has_momenta = result.contains("density-momenta");
+  const bool has_frequency = result.contains("density-frequency-max");
+  const bool has_lags = result.contains("density-lags");
+  const bool has_block_size = result.contains("density-measurements-per-block");
+  if (!has_destination) {
+    if (has_momenta || has_frequency || has_lags || has_block_size) {
+      throw std::invalid_argument(
+          "density continuation options require --density-continuation-dir");
+    }
+    if (!retain_scalar_trace) {
+      throw std::invalid_argument("--no-trace requires --density-continuation-dir");
+    }
+    return std::nullopt;
+  }
+  if (!has_momenta || !has_block_size || (!has_frequency && !has_lags)) {
+    throw std::invalid_argument("density continuation requires --density-momenta, "
+                                "--density-measurements-per-block, and exactly one of "
+                                "--density-frequency-max or --density-lags");
+  }
+  if (has_frequency && has_lags) {
+    throw std::invalid_argument(
+        "--density-frequency-max and --density-lags select different continuation bases");
   }
 
   std::vector<std::vector<std::size_t>> momenta =
@@ -167,13 +210,11 @@ parse_density_continuation(const cxxopts::ParseResult &result, const qmc::Intera
   }
 
   DensityContinuationCommand command{
-      .modes = qmc::MatsubaraModeSet(
-          model.free.beta(), qmc::TorusLayout(model.free.linear_size(), model.free.dimension()),
-          {.momentum_indices = std::move(momenta), .frequency_indices = std::move(frequencies)}),
+      .geometry = make_density_geometry(result, model, std::move(momenta), has_frequency),
       .measurements_per_block = measurements_per_block,
       .output_directory = result["density-continuation-dir"].as<std::string>(),
   };
-  static_cast<void>(qmc::ContinuousMatsubaraPlan(command.modes));
+  validate_density_plan(command.geometry);
   return command;
 }
 
@@ -222,6 +263,10 @@ std::optional<CommandLine> parse_command_line(const int argc, char **argv) {
         cxxopts::value<std::string>()},
        {"density-frequency-max", "Largest bosonic Matsubara index in the inclusive range [0,n]",
         cxxopts::value<std::size_t>()},
+       {"density-lags",
+        "Comma-separated imaginary-time lags in the canonical interval [0,beta), mutually "
+        "exclusive with --density-frequency-max",
+        cxxopts::value<std::vector<double>>()},
        {"density-measurements-per-block", "Consecutive density measurements in each block",
         cxxopts::value<std::size_t>()},
        {"density-continuation-dir", "New density-continuation-v1 output directory",
@@ -376,10 +421,19 @@ PreparedOutputs prepare_outputs(const CommandLine &command_line) {
   return output;
 }
 
-struct DensityWorkflow {
-  std::filesystem::path output_directory;
+struct MatsubaraDensityWorkflow {
   qmc::ContinuousMatsubaraPlan plan;
   qmc::DensityMatsubaraBlockAccumulator accumulator;
+};
+
+struct LagDensityWorkflow {
+  qmc::ContinuousDensityLagPlan plan;
+  qmc::DensityLagBlockAccumulator accumulator;
+};
+
+struct DensityWorkflow {
+  std::filesystem::path output_directory;
+  std::variant<MatsubaraDensityWorkflow, LagDensityWorkflow> backend;
 };
 
 std::optional<DensityWorkflow> make_density_workflow(const CommandLine &command_line,
@@ -388,11 +442,26 @@ std::optional<DensityWorkflow> make_density_workflow(const CommandLine &command_
     return std::nullopt;
   }
   const DensityContinuationCommand &density = *command_line.density_continuation;
+  if (const auto *modes = std::get_if<qmc::MatsubaraModeSet>(&density.geometry)) {
+    return DensityWorkflow{
+        .output_directory = output.continuation_path,
+        .backend =
+            MatsubaraDensityWorkflow{
+                .plan = qmc::ContinuousMatsubaraPlan(*modes),
+                .accumulator = qmc::DensityMatsubaraBlockAccumulator(
+                    command_line.model.free, *modes, density.measurements_per_block),
+            },
+    };
+  }
+  const auto &lags = std::get<qmc::ImaginaryTimeLagSet>(density.geometry);
   return DensityWorkflow{
       .output_directory = output.continuation_path,
-      .plan = qmc::ContinuousMatsubaraPlan(density.modes),
-      .accumulator = qmc::DensityMatsubaraBlockAccumulator(command_line.model.free, density.modes,
-                                                           density.measurements_per_block),
+      .backend =
+          LagDensityWorkflow{
+              .plan = qmc::ContinuousDensityLagPlan(lags),
+              .accumulator = qmc::DensityLagBlockAccumulator(command_line.model.free, lags,
+                                                             density.measurements_per_block),
+          },
   };
 }
 
@@ -426,8 +495,17 @@ ScalarTotals measure_samples(qmc::InteractingSampler &sampler, const CommandLine
     }
     if (density_workflow.has_value()) {
       const qmc::ContinuousMeasurementContext context(sampler.state());
-      density_workflow->accumulator.observe(
-          qmc::continuous_particle_modes(context, density_workflow->plan));
+      std::visit(
+          [&context](auto &backend) {
+            using Backend = std::remove_cvref_t<decltype(backend)>;
+            if constexpr (std::is_same_v<Backend, MatsubaraDensityWorkflow>) {
+              backend.accumulator.observe(qmc::continuous_particle_modes(context, backend.plan));
+            } else {
+              backend.accumulator.observe(
+                  qmc::continuous_density_lag_values(context, backend.plan));
+            }
+          },
+          density_workflow->backend);
     }
     totals.energy += value.total_energy;
     totals.occupancy += value.double_occupancy_per_site;
@@ -456,24 +534,38 @@ double largest_standard_error(const qmc::DensityMatsubaraBlockSeries &series) {
   return largest;
 }
 
+double largest_standard_error(const qmc::DensityLagBlockSeries &series) {
+  double largest = 0.0;
+  for (std::size_t momentum = 0; momentum < series.lags().momentum_count(); ++momentum) {
+    for (std::size_t lag = 0; lag < series.lags().lag_count(); ++lag) {
+      largest = std::max(largest, series.standard_error(lag, momentum));
+    }
+  }
+  return largest;
+}
+
 void publish_density_workflow(DensityWorkflow &workflow, const CommandLine &command_line) {
-  const qmc::DensityMatsubaraBlockSeries series = workflow.accumulator.finish();
-  qmc::example::write_density_continuation_bundle(
-      workflow.output_directory, series,
-      {
-          .model = command_line.model,
-          .seed = command_line.seed,
-          .burn_in_sweeps = command_line.burn_in,
-          .thinning_sweeps = command_line.thin,
-          .sweep = command_line.sweep,
-          .random_seam_stitch = command_line.random_seam_stitch,
-          .scalar_trace_retained = command_line.retain_scalar_trace,
-          .program = "qmc_interacting_demo",
-          .program_version = std::string(qmc::kVersion),
-      });
-  std::cout << "continuation bundle written to " << workflow.output_directory << '\n';
-  std::cout << "density blocks = " << series.block_count() << '\n';
-  std::cout << "largest density standard error = " << largest_standard_error(series) << '\n';
+  const qmc::example::DensityContinuationRunProvenance provenance{
+      .model = command_line.model,
+      .seed = command_line.seed,
+      .burn_in_sweeps = command_line.burn_in,
+      .thinning_sweeps = command_line.thin,
+      .sweep = command_line.sweep,
+      .random_seam_stitch = command_line.random_seam_stitch,
+      .scalar_trace_retained = command_line.retain_scalar_trace,
+      .program = "qmc_interacting_demo",
+      .program_version = std::string(qmc::kVersion),
+  };
+  std::visit(
+      [&workflow, &provenance](auto &backend) {
+        const auto series = backend.accumulator.finish();
+        qmc::example::write_density_continuation_bundle(workflow.output_directory, series,
+                                                        provenance);
+        std::cout << "continuation bundle written to " << workflow.output_directory << '\n';
+        std::cout << "density blocks = " << series.block_count() << '\n';
+        std::cout << "largest density standard error = " << largest_standard_error(series) << '\n';
+      },
+      workflow.backend);
 }
 
 void print_run_summary(const qmc::InteractingSampler &sampler, const CommandLine &command_line,

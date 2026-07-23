@@ -6,8 +6,8 @@ Status: staged implementation specification. The exact continuous-time
 Matsubara density estimator, its block-resolved statistics, and the versioned
 continuation-data export/demo workflow are implemented. The exact primitive
 requested-lag plan, interval-overlap projector, and block-resolved statistics
-are also implemented; requested-lag export and demo integration are not
-implemented.
+are also implemented, together with requested-lag export, demo integration,
+and a small-system Lehmann regression.
 
 ## Goal and boundary
 
@@ -521,6 +521,8 @@ The interacting demo has opt-in density-continuation arguments for:
   components;
 - `--density-frequency-max`, selecting the inclusive nonnegative range from
   zero through the supplied Matsubara index;
+- `--density-lags`, selecting comma-separated canonical evaluation points in
+  `[0,beta)` for the mutually exclusive `imaginary_time_lag` basis;
 - `--density-measurements-per-block`;
 - `--density-continuation-dir`; and
 - `--no-trace`, when the existing scalar trace should not be retained beside
@@ -611,9 +613,9 @@ loop.
 6. **Block statistics completed 2026-07-23:** Add the requested-lag block
    accumulator and provenance-owning series with signed block values,
    per-momentum cross-lag covariance, standard errors, and jackknife means.
-7. Extend the versioned bundle and demo workflow to the
-   `imaginary_time_lag` basis, and add small-system Lehmann tests when a
-   direct-`tau` consumer is selected.
+7. **Completed 2026-07-23:** Extend the versioned bundle and demo workflow to
+   the `imaginary_time_lag` basis, and add a small-system Lehmann regression at
+   several requested lags and momenta.
 8. Provide thin, separately maintained adapters for concrete continuation
    programs only after their input conventions are pinned by integration
    tests. Do not add a continuation solver to the QMC core by default.

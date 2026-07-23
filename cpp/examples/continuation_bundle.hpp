@@ -30,12 +30,15 @@ struct DensityContinuationRunProvenance {
 // destination must not exist and its parent must already be a directory.
 void validate_density_continuation_bundle_destination(const std::filesystem::path &destination);
 
-// Writes density-continuation-v1 as four UTF-8 TSV files. All series and
-// provenance data are validated before a sibling temporary directory is
-// created. Existing destinations are rejected; successful publication renames
-// the complete sibling directory into place.
+// Writes density-continuation-v1 as four UTF-8 TSV files in the requested
+// series basis. All series and provenance data are validated before a sibling
+// temporary directory is created. Existing destinations are rejected;
+// successful publication renames the complete sibling directory into place.
 void write_density_continuation_bundle(const std::filesystem::path &destination,
                                        const DensityMatsubaraBlockSeries &series,
+                                       const DensityContinuationRunProvenance &provenance);
+void write_density_continuation_bundle(const std::filesystem::path &destination,
+                                       const DensityLagBlockSeries &series,
                                        const DensityContinuationRunProvenance &provenance);
 
 } // namespace qmc::example

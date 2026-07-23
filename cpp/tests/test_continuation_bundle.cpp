@@ -96,6 +96,36 @@ DensityMatsubaraBlockSeries make_series(const Model &model, const MatsubaraModeS
   return accumulator.finish();
 }
 
+ImaginaryTimeLagSet test_lags(const Model &model,
+                              std::vector<std::vector<std::size_t>> momenta = {{0}, {1}},
+                              std::vector<double> lags = {0.0, 0.5}) {
+  return {model.beta(),
+          TorusLayout(model.linear_size(), model.dimension()),
+          {.momentum_indices = std::move(momenta), .lags = std::move(lags)}};
+}
+
+DensityLagBlockSeries make_lag_series(const Model &model, const ImaginaryTimeLagSet &lags) {
+  const ContinuousDensityLagPlan plan(lags);
+  const ContinuousConfiguration static_configuration(model, Permutation({0}),
+                                                     {ContinuousPath(model.beta(), {0}, {0}, {})});
+  const ContinuousConfiguration moving_configuration(
+      model, Permutation({0}),
+      {ContinuousPath(model.beta(), {0}, {0},
+                      {{.time = 0.25, .axis = 0, .direction = 1},
+                       {.time = 0.75, .axis = 0, .direction = -1}})});
+  const ContinuousDensityLagValues static_values =
+      continuous_density_lag_values(static_configuration, plan);
+  const ContinuousDensityLagValues moving_values =
+      continuous_density_lag_values(moving_configuration, plan);
+  DensityLagBlockAccumulator accumulator(model, lags, 2);
+  for (const ContinuousDensityLagValues *values :
+       {&static_values, &static_values, &static_values, &moving_values, &moving_values,
+        &moving_values}) {
+    accumulator.observe(*values);
+  }
+  return accumulator.finish();
+}
+
 DensityContinuationRunProvenance test_provenance(const InteractingModel &model) {
   return {
       .model = model,
@@ -294,6 +324,99 @@ TEST(DensityContinuationBundleTest, WritesReproducibleTablesAndCompleteProvenanc
   }
 }
 
+TEST(DensityContinuationBundleTest, WritesSignedImaginaryTimeLagBasisAndReproducibleStatistics) {
+  const InteractingModel model = test_model();
+  const ImaginaryTimeLagSet lags = test_lags(model.free);
+  const DensityLagBlockSeries series = make_lag_series(model.free, lags);
+  ScopedTemporaryDirectory temporary;
+  const std::filesystem::path destination = temporary.path() / "density-continuation-v1";
+
+  write_density_continuation_bundle(destination, series, test_provenance(model));
+
+  const auto manifest = read_manifest(destination / "manifest.tsv");
+  EXPECT_EQ(manifest.at("schema_id"), "density-continuation");
+  EXPECT_EQ(manifest.at("schema_version"), "1");
+  EXPECT_EQ(manifest.at("basis"), "imaginary_time_lag");
+  EXPECT_EQ(manifest.at("fourier_temporal_phase"), "not_applicable");
+  EXPECT_EQ(manifest.at("normalization_id"),
+            "mean_connected_density_time_overlap_over_beta_volume");
+  EXPECT_EQ(manifest.at("value_units"), "dimensionless_per_site");
+  EXPECT_EQ(manifest.at("lag_units"), "inverse_energy");
+  EXPECT_EQ(manifest.at("momentum_count"), "2");
+  EXPECT_EQ(manifest.at("lag_count"), "2");
+  EXPECT_EQ(manifest.at("values_row_count"), "4");
+  EXPECT_EQ(manifest.at("covariance_row_count"), "8");
+  EXPECT_EQ(manifest.at("blocks_row_count"), "12");
+  EXPECT_EQ(manifest.at("covariance_scope"), "independent_dense_lag_matrix_per_momentum");
+  EXPECT_EQ(manifest.at("row_roles_present"), "measured,exact_constraint");
+
+  const auto block_rows = read_table(destination / "blocks.tsv");
+  ASSERT_EQ(block_rows.size(), 13U);
+  EXPECT_EQ(block_rows.front(),
+            std::vector<std::string>({"block", "momentum", "frequency_or_lag", "value"}));
+  std::map<std::tuple<std::size_t, std::size_t, std::size_t>, double> blocks;
+  bool found_negative_block = false;
+  for (std::size_t row = 1; row < block_rows.size(); ++row) {
+    ASSERT_EQ(block_rows[row].size(), 4U);
+    const std::size_t block = std::stoull(block_rows[row][0]);
+    const std::size_t momentum = std::stoull(block_rows[row][1]);
+    const std::size_t lag = std::stoull(block_rows[row][2]);
+    const double value = std::stod(block_rows[row][3]);
+    blocks.emplace(std::make_tuple(block, momentum, lag), value);
+    EXPECT_DOUBLE_EQ(value, series.block_value(block, lag, momentum));
+    found_negative_block = found_negative_block || value < 0.0;
+  }
+  EXPECT_TRUE(found_negative_block);
+  for (std::size_t omitted = 0; omitted < series.block_count(); ++omitted) {
+    for (std::size_t momentum = 0; momentum < lags.momentum_count(); ++momentum) {
+      for (std::size_t lag = 0; lag < lags.lag_count(); ++lag) {
+        double jackknife = 0.0;
+        for (std::size_t block = 0; block < series.block_count(); ++block) {
+          if (block != omitted) {
+            jackknife +=
+                blocks.at({block, momentum, lag}) / static_cast<double>(series.block_count() - 1);
+          }
+        }
+        EXPECT_DOUBLE_EQ(series.jackknife_mean(omitted, lag, momentum), jackknife);
+      }
+    }
+  }
+
+  const auto value_rows = read_table(destination / "values.tsv");
+  ASSERT_EQ(value_rows.size(), 5U);
+  EXPECT_EQ(value_rows.front(), std::vector<std::string>({"momentum", "k_0", "lag", "tau", "mean",
+                                                          "standard_error", "exact_constraint"}));
+  for (std::size_t row = 1; row < value_rows.size(); ++row) {
+    ASSERT_EQ(value_rows[row].size(), 7U);
+    const std::size_t momentum = std::stoull(value_rows[row][0]);
+    const std::size_t lag = std::stoull(value_rows[row][2]);
+    EXPECT_DOUBLE_EQ(std::stod(value_rows[row][3]), lags.lag(lag));
+    double mean = 0.0;
+    for (std::size_t block = 0; block < series.block_count(); ++block) {
+      mean += blocks.at({block, momentum, lag}) / static_cast<double>(series.block_count());
+    }
+    EXPECT_DOUBLE_EQ(std::stod(value_rows[row][4]), mean);
+    EXPECT_DOUBLE_EQ(std::stod(value_rows[row][5]), series.standard_error(lag, momentum));
+    EXPECT_EQ(value_rows[row][6], momentum == 0 ? "1" : "0");
+  }
+
+  const auto covariance_rows = read_table(destination / "covariance.tsv");
+  ASSERT_EQ(covariance_rows.size(), 9U);
+  for (std::size_t row = 1; row < covariance_rows.size(); ++row) {
+    ASSERT_EQ(covariance_rows[row].size(), 4U);
+    const std::size_t momentum = std::stoull(covariance_rows[row][0]);
+    const std::size_t left = std::stoull(covariance_rows[row][1]);
+    const std::size_t right = std::stoull(covariance_rows[row][2]);
+    double covariance = 0.0;
+    for (std::size_t block = 0; block < series.block_count(); ++block) {
+      covariance += (blocks.at({block, momentum, left}) - series.mean(left, momentum)) *
+                    (blocks.at({block, momentum, right}) - series.mean(right, momentum));
+    }
+    covariance /= static_cast<double>(series.block_count() * (series.block_count() - 1));
+    EXPECT_NEAR(std::stod(covariance_rows[row][3]), covariance, 1e-17);
+  }
+}
+
 TEST(DensityContinuationBundleTest, RejectsExistingDestinationWithoutOverwritingIt) {
   const InteractingModel model = test_model();
   const MatsubaraModeSet modes = test_modes(model.free);
@@ -328,6 +451,36 @@ TEST(DensityContinuationBundleTest, RejectsInvalidRowsBeforeCreatingTemporaryOut
   const DensityMatsubaraBlockSeries negative_series = make_series(model.free, negative_modes);
   EXPECT_THROW(
       write_density_continuation_bundle(destination, negative_series, test_provenance(model)),
+      std::invalid_argument);
+  EXPECT_FALSE(std::filesystem::exists(destination));
+  EXPECT_EQ(std::distance(std::filesystem::directory_iterator(temporary.path()),
+                          std::filesystem::directory_iterator()),
+            0);
+
+  const ImaginaryTimeLagSet measured_lags = test_lags(model.free, {{1}}, {0.0, 0.5});
+  const DensityLagBlockSeries measured_lag_series = make_lag_series(model.free, measured_lags);
+  const InteractingModel different_model{
+      .free = Model(ModelParameters{
+          .particle_count = 1,
+          .beta = 1.0,
+          .linear_size = 2,
+          .dimension = 1,
+          .hopping = 2.0,
+      }),
+      .interaction = model.interaction,
+  };
+  EXPECT_THROW(write_density_continuation_bundle(destination, measured_lag_series,
+                                                 test_provenance(different_model)),
+               std::invalid_argument);
+  EXPECT_FALSE(std::filesystem::exists(destination));
+  EXPECT_EQ(std::distance(std::filesystem::directory_iterator(temporary.path()),
+                          std::filesystem::directory_iterator()),
+            0);
+
+  const ImaginaryTimeLagSet zero_lags = test_lags(model.free, {{0}}, {0.0, 0.5});
+  const DensityLagBlockSeries zero_lag_series = make_lag_series(model.free, zero_lags);
+  EXPECT_THROW(
+      write_density_continuation_bundle(destination, zero_lag_series, test_provenance(model)),
       std::invalid_argument);
   EXPECT_FALSE(std::filesystem::exists(destination));
   EXPECT_EQ(std::distance(std::filesystem::directory_iterator(temporary.path()),

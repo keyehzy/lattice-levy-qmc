@@ -15,6 +15,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -23,6 +24,102 @@ namespace {
 
 constexpr std::string_view kSchemaIdentifier = "density-continuation";
 constexpr std::string_view kSchemaVersion = "1";
+
+struct BundleBasisMetadata {
+  std::string_view basis;
+  std::string_view temporal_phase;
+  std::string_view normalization;
+  std::string_view value_units;
+  std::string_view point_units_key;
+  std::string_view point_units;
+  std::string_view point_count_key;
+  std::string_view covariance_scope;
+  bool values_may_be_negative;
+};
+
+BundleBasisMetadata bundle_metadata([[maybe_unused]] const DensityMatsubaraBlockSeries &series) {
+  return {
+      .basis = "bosonic_matsubara",
+      .temporal_phase = "exp(+i*omega_n*tau)",
+      .normalization = "mean_abs_centered_density_amplitude_squared_over_beta_volume",
+      .value_units = "inverse_energy_per_site",
+      .point_units_key = "frequency_units",
+      .point_units = "energy",
+      .point_count_key = "frequency_count",
+      .covariance_scope = "independent_dense_frequency_matrix_per_momentum",
+      .values_may_be_negative = false,
+  };
+}
+
+BundleBasisMetadata bundle_metadata([[maybe_unused]] const DensityLagBlockSeries &series) {
+  return {
+      .basis = "imaginary_time_lag",
+      .temporal_phase = "not_applicable",
+      .normalization = "mean_connected_density_time_overlap_over_beta_volume",
+      .value_units = "dimensionless_per_site",
+      .point_units_key = "lag_units",
+      .point_units = "inverse_energy",
+      .point_count_key = "lag_count",
+      .covariance_scope = "independent_dense_lag_matrix_per_momentum",
+      .values_may_be_negative = true,
+  };
+}
+
+const MatsubaraModeSet &series_geometry(const DensityMatsubaraBlockSeries &series) {
+  return series.modes();
+}
+
+const ImaginaryTimeLagSet &series_geometry(const DensityLagBlockSeries &series) {
+  return series.lags();
+}
+
+std::size_t series_point_count(const DensityMatsubaraBlockSeries &series) {
+  return series.modes().frequency_count();
+}
+
+std::size_t series_point_count(const DensityLagBlockSeries &series) {
+  return series.lags().lag_count();
+}
+
+double series_mean(const DensityMatsubaraBlockSeries &series, const std::size_t point,
+                   const std::size_t momentum) {
+  return series.mean(point, momentum);
+}
+
+double series_mean(const DensityLagBlockSeries &series, const std::size_t point,
+                   const std::size_t momentum) {
+  return series.mean(point, momentum);
+}
+
+double series_standard_error(const DensityMatsubaraBlockSeries &series, const std::size_t point,
+                             const std::size_t momentum) {
+  return series.standard_error(point, momentum);
+}
+
+double series_standard_error(const DensityLagBlockSeries &series, const std::size_t point,
+                             const std::size_t momentum) {
+  return series.standard_error(point, momentum);
+}
+
+double series_covariance(const DensityMatsubaraBlockSeries &series, const std::size_t momentum,
+                         const std::size_t left, const std::size_t right) {
+  return series.covariance_of_mean(momentum, left, right);
+}
+
+double series_covariance(const DensityLagBlockSeries &series, const std::size_t momentum,
+                         const std::size_t left, const std::size_t right) {
+  return series.covariance_of_mean(momentum, left, right);
+}
+
+double series_block_value(const DensityMatsubaraBlockSeries &series, const std::size_t block,
+                          const std::size_t point, const std::size_t momentum) {
+  return series.block_value(block, point, momentum);
+}
+
+double series_block_value(const DensityLagBlockSeries &series, const std::size_t block,
+                          const std::size_t point, const std::size_t momentum) {
+  return series.block_value(block, point, momentum);
+}
 
 std::size_t checked_product(const std::size_t left, const std::size_t right,
                             const char *description) {
@@ -41,8 +138,9 @@ void validate_tsv_atom(const std::string_view value, const char *description) {
   }
 }
 
-bool is_zero_momentum(const MatsubaraModeSet &modes, const std::size_t momentum) {
-  return std::ranges::all_of(modes.momentum_indices(momentum),
+template <class Geometry>
+bool is_zero_momentum(const Geometry &geometry, const std::size_t momentum) {
+  return std::ranges::all_of(geometry.momentum_indices(momentum),
                              [](const std::size_t component) { return component == 0; });
 }
 
@@ -129,17 +227,18 @@ void validate_provenance(const DensityContinuationRunProvenance &provenance) {
 
 struct ValidatedBundle {
   bool has_exact_constraints;
+  std::size_t point_count;
   std::size_t value_rows;
   std::size_t covariance_rows;
   std::size_t block_rows;
   std::size_t sampler_sweeps_per_block;
 };
 
-bool validate_momentum_roles(const MatsubaraModeSet &modes) {
+template <class Geometry> bool validate_momentum_roles(const Geometry &geometry) {
   bool has_measured_momentum = false;
   bool has_exact_constraints = false;
-  for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
-    if (is_zero_momentum(modes, momentum)) {
+  for (std::size_t momentum = 0; momentum < geometry.momentum_count(); ++momentum) {
+    if (is_zero_momentum(geometry, momentum)) {
       has_exact_constraints = true;
     } else {
       has_measured_momentum = true;
@@ -162,35 +261,38 @@ void validate_frequencies(const MatsubaraModeSet &modes) {
   }
 }
 
-void validate_value_rows(const DensityMatsubaraBlockSeries &series, const std::size_t momentum,
-                         const bool exact) {
-  for (std::size_t frequency = 0; frequency < series.modes().frequency_count(); ++frequency) {
-    const double mean = series.mean(frequency, momentum);
-    const double error = series.standard_error(frequency, momentum);
-    if (!std::isfinite(mean) || mean < 0.0 || !std::isfinite(error) || error < 0.0) {
+template <class Series>
+void validate_value_rows(const Series &series, const std::size_t momentum, const bool exact,
+                         const bool values_may_be_negative) {
+  for (std::size_t point = 0; point < series_point_count(series); ++point) {
+    const double mean = series_mean(series, point, momentum);
+    const double error = series_standard_error(series, point, momentum);
+    if (!std::isfinite(mean) || (!values_may_be_negative && mean < 0.0) || !std::isfinite(error) ||
+        error < 0.0) {
       throw std::invalid_argument("a continuation value or standard error is invalid");
     }
     if (exact && (mean != 0.0 || error != 0.0)) {
       throw std::invalid_argument("fixed-particle-number q=0 rows must be exact zero");
     }
     for (std::size_t block = 0; block < series.block_count(); ++block) {
-      const double value = series.block_value(block, frequency, momentum);
-      if (!std::isfinite(value) || value < 0.0 || (exact && value != 0.0)) {
+      const double value = series_block_value(series, block, point, momentum);
+      if (!std::isfinite(value) || (!values_may_be_negative && value < 0.0) ||
+          (exact && value != 0.0)) {
         throw std::invalid_argument("a continuation block value is invalid");
       }
     }
   }
 }
 
-void validate_covariance_rows(const DensityMatsubaraBlockSeries &series, const std::size_t momentum,
-                              const bool exact) {
-  for (std::size_t left = 0; left < series.modes().frequency_count(); ++left) {
-    for (std::size_t right = 0; right < series.modes().frequency_count(); ++right) {
-      const double covariance = series.covariance_of_mean(momentum, left, right);
+template <class Series>
+void validate_covariance_rows(const Series &series, const std::size_t momentum, const bool exact) {
+  for (std::size_t left = 0; left < series_point_count(series); ++left) {
+    for (std::size_t right = 0; right < series_point_count(series); ++right) {
+      const double covariance = series_covariance(series, momentum, left, right);
       const std::array<std::size_t, 2> transposed{right, left};
       if (!std::isfinite(covariance) ||
           covariance !=
-              series.covariance_of_mean(momentum, transposed.front(), transposed.back()) ||
+              series_covariance(series, momentum, transposed.front(), transposed.back()) ||
           (left == right && covariance < 0.0) || (exact && covariance != 0.0)) {
         throw std::invalid_argument("a continuation covariance matrix is invalid");
       }
@@ -198,7 +300,8 @@ void validate_covariance_rows(const DensityMatsubaraBlockSeries &series, const s
   }
 }
 
-ValidatedBundle validate_bundle(const DensityMatsubaraBlockSeries &series,
+template <class Series>
+ValidatedBundle validate_bundle(const Series &series,
                                 const DensityContinuationRunProvenance &provenance) {
   validate_provenance(provenance);
   if (series.model() != provenance.model.free) {
@@ -206,21 +309,24 @@ ValidatedBundle validate_bundle(const DensityMatsubaraBlockSeries &series,
         "continuation interacting model and density block series have different free models");
   }
 
-  const MatsubaraModeSet &modes = series.modes();
-  const bool has_exact_constraints = validate_momentum_roles(modes);
-  validate_frequencies(modes);
-  for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
-    const bool exact = is_zero_momentum(modes, momentum);
-    validate_value_rows(series, momentum, exact);
+  const auto &geometry = series_geometry(series);
+  const BundleBasisMetadata metadata = bundle_metadata(series);
+  const bool has_exact_constraints = validate_momentum_roles(geometry);
+  if constexpr (std::is_same_v<Series, DensityMatsubaraBlockSeries>) {
+    validate_frequencies(geometry);
+  }
+  for (std::size_t momentum = 0; momentum < geometry.momentum_count(); ++momentum) {
+    const bool exact = is_zero_momentum(geometry, momentum);
+    validate_value_rows(series, momentum, exact, metadata.values_may_be_negative);
     validate_covariance_rows(series, momentum, exact);
   }
-  const std::size_t value_rows = checked_product(modes.momentum_count(), modes.frequency_count(),
+  const std::size_t point_count = series_point_count(series);
+  const std::size_t value_rows = checked_product(geometry.momentum_count(), point_count,
                                                  "continuation value row count exceeds size_t");
-  const std::size_t frequency_square =
-      checked_product(modes.frequency_count(), modes.frequency_count(),
-                      "continuation covariance frequency extent exceeds size_t");
+  const std::size_t point_square = checked_product(
+      point_count, point_count, "continuation covariance point extent exceeds size_t");
   const std::size_t covariance_rows = checked_product(
-      modes.momentum_count(), frequency_square, "continuation covariance row count exceeds size_t");
+      geometry.momentum_count(), point_square, "continuation covariance row count exceeds size_t");
   const std::size_t block_rows = checked_product(series.block_count(), value_rows,
                                                  "continuation block row count exceeds size_t");
   const std::size_t sampler_sweeps_per_block =
@@ -228,6 +334,7 @@ ValidatedBundle validate_bundle(const DensityMatsubaraBlockSeries &series,
                       "continuation sweeps per block exceed size_t");
   return {
       .has_exact_constraints = has_exact_constraints,
+      .point_count = point_count,
       .value_rows = value_rows,
       .covariance_rows = covariance_rows,
       .block_rows = block_rows,
@@ -257,7 +364,8 @@ void configure_table_stream(std::ofstream &output) {
   output << std::setprecision(std::numeric_limits<double>::max_digits10);
 }
 
-void write_manifest(const std::filesystem::path &path, const DensityMatsubaraBlockSeries &series,
+template <class Series>
+void write_manifest(const std::filesystem::path &path, const Series &series,
                     const DensityContinuationRunProvenance &provenance,
                     const ValidatedBundle validated) {
   std::ofstream output(path, std::ios::binary);
@@ -266,24 +374,26 @@ void write_manifest(const std::filesystem::path &path, const DensityMatsubaraBlo
   }
   configure_table_stream(output);
   const Model &model = provenance.model.free;
+  const auto &geometry = series_geometry(series);
+  const BundleBasisMetadata metadata = bundle_metadata(series);
   const std::size_t covariance_rank_upper_bound =
-      std::min(series.modes().frequency_count(), series.block_count() - 1);
-  const bool full_rank_possible = series.block_count() > series.modes().frequency_count();
+      std::min(validated.point_count, series.block_count() - 1);
+  const bool full_rank_possible = series.block_count() > validated.point_count;
   const char *const row_roles =
       validated.has_exact_constraints ? "measured,exact_constraint" : "measured";
 
   output << "key\tvalue\n"
          << "schema_id\t" << kSchemaIdentifier << '\n'
          << "schema_version\t" << kSchemaVersion << '\n'
-         << "basis\tbosonic_matsubara\n"
+         << "basis\t" << metadata.basis << '\n'
          << "observable_id\tconnected_density_per_site\n"
          << "kernel_convention_id\tpositive_density_spectrum_bosonic_v1\n"
          << "fourier_spatial_phase\texp(-i*q*x)\n"
-         << "fourier_temporal_phase\texp(+i*omega_n*tau)\n"
-         << "normalization_id\tmean_abs_centered_density_amplitude_squared_over_beta_volume\n"
+         << "fourier_temporal_phase\t" << metadata.temporal_phase << '\n'
+         << "normalization_id\t" << metadata.normalization << '\n'
          << "units_convention\thbar=1;k_B=1;lattice_spacing=1\n"
-         << "value_units\tinverse_energy_per_site\n"
-         << "frequency_units\tenergy\n"
+         << "value_units\t" << metadata.value_units << '\n'
+         << metadata.point_units_key << '\t' << metadata.point_units << '\n'
          << "model_particle_count\t" << model.particle_count() << '\n'
          << "model_beta\t" << model.beta() << '\n'
          << "model_linear_size\t" << model.linear_size() << '\n'
@@ -330,15 +440,15 @@ void write_manifest(const std::filesystem::path &path, const DensityMatsubaraBlo
          << "completed_block_count\t" << series.block_count() << '\n'
          << "sample_count\t" << series.sample_count() << '\n'
          << "post_burn_in_sampler_sweeps_per_block\t" << validated.sampler_sweeps_per_block << '\n'
-         << "momentum_count\t" << series.modes().momentum_count() << '\n'
-         << "frequency_count\t" << series.modes().frequency_count() << '\n'
+         << "momentum_count\t" << geometry.momentum_count() << '\n'
+         << metadata.point_count_key << '\t' << validated.point_count << '\n'
          << "values_row_count\t" << validated.value_rows << '\n'
          << "covariance_row_count\t" << validated.covariance_rows << '\n'
          << "blocks_row_count\t" << validated.block_rows << '\n'
          << "row_roles_present\t" << row_roles << '\n'
          << "exact_constraint_rule\tfixed_particle_number_q_zero\n"
          << "covariance_kind\tstatistical_covariance_of_mean\n"
-         << "covariance_scope\tindependent_dense_frequency_matrix_per_momentum\n"
+         << "covariance_scope\t" << metadata.covariance_scope << '\n'
          << "covariance_rank_upper_bound\t" << covariance_rank_upper_bound << '\n'
          << "covariance_full_rank_possible\t" << (full_rank_possible ? "true" : "false") << '\n'
          << "covariance_rank_status\t"
@@ -386,20 +496,50 @@ void write_values(const std::filesystem::path &path, const DensityMatsubaraBlock
   }
 }
 
-void write_covariance(const std::filesystem::path &path,
-                      const DensityMatsubaraBlockSeries &series) {
+void write_values(const std::filesystem::path &path, const DensityLagBlockSeries &series) {
+  std::ofstream output(path, std::ios::binary);
+  if (!output) {
+    throw std::runtime_error("failed to create continuation values: " + path.string());
+  }
+  configure_table_stream(output);
+  const ImaginaryTimeLagSet &lags = series.lags();
+  output << "momentum";
+  for (std::size_t axis = 0; axis < lags.layout().dimension(); ++axis) {
+    output << "\tk_" << axis;
+  }
+  output << "\tlag\ttau\tmean\tstandard_error\texact_constraint\n";
+  for (std::size_t momentum = 0; momentum < lags.momentum_count(); ++momentum) {
+    const bool exact = is_zero_momentum(lags, momentum);
+    for (std::size_t lag = 0; lag < lags.lag_count(); ++lag) {
+      output << momentum;
+      for (const std::size_t component : lags.momentum_indices(momentum)) {
+        output << '\t' << component;
+      }
+      output << '\t' << lag << '\t' << lags.lag(lag) << '\t' << series.mean(lag, momentum) << '\t'
+             << series.standard_error(lag, momentum) << '\t' << (exact ? 1 : 0) << '\n';
+    }
+  }
+  output.close();
+  if (!output) {
+    throw std::runtime_error("failed to write continuation values: " + path.string());
+  }
+}
+
+template <class Series>
+void write_covariance(const std::filesystem::path &path, const Series &series) {
   std::ofstream output(path, std::ios::binary);
   if (!output) {
     throw std::runtime_error("failed to create continuation covariance: " + path.string());
   }
   configure_table_stream(output);
-  const MatsubaraModeSet &modes = series.modes();
+  const auto &geometry = series_geometry(series);
+  const std::size_t point_count = series_point_count(series);
   output << "momentum\tleft\tright\tcovariance_of_mean\n";
-  for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
-    for (std::size_t left = 0; left < modes.frequency_count(); ++left) {
-      for (std::size_t right = 0; right < modes.frequency_count(); ++right) {
+  for (std::size_t momentum = 0; momentum < geometry.momentum_count(); ++momentum) {
+    for (std::size_t left = 0; left < point_count; ++left) {
+      for (std::size_t right = 0; right < point_count; ++right) {
         output << momentum << '\t' << left << '\t' << right << '\t'
-               << series.covariance_of_mean(momentum, left, right) << '\n';
+               << series_covariance(series, momentum, left, right) << '\n';
       }
     }
   }
@@ -409,19 +549,20 @@ void write_covariance(const std::filesystem::path &path,
   }
 }
 
-void write_blocks(const std::filesystem::path &path, const DensityMatsubaraBlockSeries &series) {
+template <class Series> void write_blocks(const std::filesystem::path &path, const Series &series) {
   std::ofstream output(path, std::ios::binary);
   if (!output) {
     throw std::runtime_error("failed to create continuation blocks: " + path.string());
   }
   configure_table_stream(output);
-  const MatsubaraModeSet &modes = series.modes();
+  const auto &geometry = series_geometry(series);
+  const std::size_t point_count = series_point_count(series);
   output << "block\tmomentum\tfrequency_or_lag\tvalue\n";
   for (std::size_t block = 0; block < series.block_count(); ++block) {
-    for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
-      for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
-        output << block << '\t' << momentum << '\t' << frequency << '\t'
-               << series.block_value(block, frequency, momentum) << '\n';
+    for (std::size_t momentum = 0; momentum < geometry.momentum_count(); ++momentum) {
+      for (std::size_t point = 0; point < point_count; ++point) {
+        output << block << '\t' << momentum << '\t' << point << '\t'
+               << series_block_value(series, block, point, momentum) << '\n';
       }
     }
   }
@@ -497,9 +638,9 @@ void validate_density_continuation_bundle_destination(const std::filesystem::pat
   }
 }
 
-void write_density_continuation_bundle(const std::filesystem::path &destination,
-                                       const DensityMatsubaraBlockSeries &series,
-                                       const DensityContinuationRunProvenance &provenance) {
+template <class Series>
+void write_bundle(const std::filesystem::path &destination, const Series &series,
+                  const DensityContinuationRunProvenance &provenance) {
   const ValidatedBundle validated = validate_bundle(series, provenance);
   validate_density_continuation_bundle_destination(destination);
 
@@ -528,6 +669,18 @@ void write_density_continuation_bundle(const std::filesystem::path &destination,
     }
     throw;
   }
+}
+
+void write_density_continuation_bundle(const std::filesystem::path &destination,
+                                       const DensityMatsubaraBlockSeries &series,
+                                       const DensityContinuationRunProvenance &provenance) {
+  write_bundle(destination, series, provenance);
+}
+
+void write_density_continuation_bundle(const std::filesystem::path &destination,
+                                       const DensityLagBlockSeries &series,
+                                       const DensityContinuationRunProvenance &provenance) {
+  write_bundle(destination, series, provenance);
 }
 
 } // namespace qmc::example

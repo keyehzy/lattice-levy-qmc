@@ -93,6 +93,69 @@ if(NOT block_row_count EQUAL 5)
   message(FATAL_ERROR "blocks.tsv has ${block_row_count} lines instead of 5")
 endif()
 
+set(lag_bundle "${OUTPUT_DIRECTORY}/density-lag-continuation-v1")
+execute_process(
+  COMMAND
+    "${PROGRAM}" --particles=1 --beta=0.5 --linear-size=2 --dimension=1 --hopping=0
+    --interaction=0 --seed=17 --samples=4 --burn-in=0 --thin=1 --segment-updates=0
+    --cycle-updates=0 --global-updates=0 --stitch-updates=0 --density-momenta=1
+    --density-lags=0,0.25 --density-measurements-per-block=2
+    "--density-continuation-dir=${lag_bundle}" --no-trace
+  RESULT_VARIABLE lag_result
+  OUTPUT_VARIABLE lag_output
+  ERROR_VARIABLE lag_error
+)
+if(NOT lag_result EQUAL 0)
+  message(
+    FATAL_ERROR
+    "requested-lag continuation demo failed with ${lag_result}\n"
+    "stdout:\n${lag_output}\nstderr:\n${lag_error}"
+  )
+endif()
+if(NOT lag_output MATCHES "density blocks = 2")
+  message(FATAL_ERROR "requested-lag demo did not report its block count\nstdout:\n${lag_output}")
+endif()
+
+file(READ "${lag_bundle}/manifest.tsv" lag_manifest)
+foreach(required IN ITEMS
+        "schema_id\tdensity-continuation"
+        "schema_version\t1"
+        "basis\timaginary_time_lag"
+        "fourier_temporal_phase\tnot_applicable"
+        "normalization_id\tmean_connected_density_time_overlap_over_beta_volume"
+        "value_units\tdimensionless_per_site"
+        "lag_units\tinverse_energy"
+        "lag_count\t2"
+        "values_row_count\t2"
+        "covariance_row_count\t4"
+        "blocks_row_count\t4"
+        "covariance_scope\tindependent_dense_lag_matrix_per_momentum"
+        "covariance_rank_status\trank_deficient_by_completed_block_count")
+  string(FIND "${lag_manifest}" "${required}" found)
+  if(found EQUAL -1)
+    message(FATAL_ERROR "requested-lag manifest is missing: ${required}")
+  endif()
+endforeach()
+
+file(STRINGS "${lag_bundle}/values.tsv" lag_value_rows)
+file(STRINGS "${lag_bundle}/covariance.tsv" lag_covariance_rows)
+file(STRINGS "${lag_bundle}/blocks.tsv" lag_block_rows)
+list(LENGTH lag_value_rows lag_value_row_count)
+list(LENGTH lag_covariance_rows lag_covariance_row_count)
+list(LENGTH lag_block_rows lag_block_row_count)
+if(NOT lag_value_row_count EQUAL 3)
+  message(FATAL_ERROR "requested-lag values.tsv has ${lag_value_row_count} lines instead of 3")
+endif()
+if(NOT lag_covariance_row_count EQUAL 5)
+  message(
+    FATAL_ERROR
+    "requested-lag covariance.tsv has ${lag_covariance_row_count} lines instead of 5"
+  )
+endif()
+if(NOT lag_block_row_count EQUAL 5)
+  message(FATAL_ERROR "requested-lag blocks.tsv has ${lag_block_row_count} lines instead of 5")
+endif()
+
 file(SHA256 "${bundle}/manifest.tsv" manifest_before)
 execute_process(
   COMMAND "${PROGRAM}" ${arguments}
@@ -154,6 +217,52 @@ if(NOT zero_result EQUAL 1)
 endif()
 if(EXISTS "${zero_bundle}")
   message(FATAL_ERROR "q=0-only request created ${zero_bundle}")
+endif()
+
+set(ambiguous_bundle "${OUTPUT_DIRECTORY}/ambiguous-basis-bundle")
+execute_process(
+  COMMAND
+    "${PROGRAM}" --particles=1 --beta=0.5 --linear-size=2 --dimension=1 --hopping=0
+    --interaction=0 --samples=4 --burn-in=0 --segment-updates=0 --cycle-updates=0
+    --global-updates=0 --stitch-updates=0 --density-momenta=1 --density-frequency-max=1
+    --density-lags=0,0.25 --density-measurements-per-block=2
+    "--density-continuation-dir=${ambiguous_bundle}" --no-trace
+  RESULT_VARIABLE ambiguous_result
+  OUTPUT_VARIABLE ambiguous_output
+  ERROR_VARIABLE ambiguous_error
+)
+if(NOT ambiguous_result EQUAL 1)
+  message(
+    FATAL_ERROR
+    "ambiguous continuation basis returned ${ambiguous_result} instead of 1\n"
+    "stdout:\n${ambiguous_output}\nstderr:\n${ambiguous_error}"
+  )
+endif()
+if(EXISTS "${ambiguous_bundle}")
+  message(FATAL_ERROR "ambiguous continuation basis created ${ambiguous_bundle}")
+endif()
+
+set(invalid_lag_bundle "${OUTPUT_DIRECTORY}/invalid-lag-bundle")
+execute_process(
+  COMMAND
+    "${PROGRAM}" --particles=1 --beta=0.5 --linear-size=2 --dimension=1 --hopping=0
+    --interaction=0 --samples=4 --burn-in=0 --segment-updates=0 --cycle-updates=0
+    --global-updates=0 --stitch-updates=0 --density-momenta=1 --density-lags=0,0.5
+    --density-measurements-per-block=2 "--density-continuation-dir=${invalid_lag_bundle}"
+    --no-trace
+  RESULT_VARIABLE invalid_lag_result
+  OUTPUT_VARIABLE invalid_lag_output
+  ERROR_VARIABLE invalid_lag_error
+)
+if(NOT invalid_lag_result EQUAL 1)
+  message(
+    FATAL_ERROR
+    "noncanonical lag returned ${invalid_lag_result} instead of 1\n"
+    "stdout:\n${invalid_lag_output}\nstderr:\n${invalid_lag_error}"
+  )
+endif()
+if(EXISTS "${invalid_lag_bundle}")
+  message(FATAL_ERROR "noncanonical lag request created ${invalid_lag_bundle}")
 endif()
 
 set(retained_bundle "${OUTPUT_DIRECTORY}/retained-trace-bundle")

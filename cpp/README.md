@@ -230,9 +230,8 @@ See [`docs/MEASUREMENTS.md`](../docs/MEASUREMENTS.md) for estimator definitions,
 normalizations, exactness, and retained-grid conventions. The event-based
 continuous measurement design is documented in
 [`docs/CONTINUOUS_TIME_MEASUREMENTS.md`](../docs/CONTINUOUS_TIME_MEASUREMENTS.md).
-The implemented Matsubara and requested-lag block statistics, Matsubara
-continuation-data export, and remaining requested-lag export workflow are
-specified in
+The implemented Matsubara and requested-lag block statistics and continuation
+data export workflows are specified in
 [`docs/ANALYTIC_CONTINUATION_DATA.md`](../docs/ANALYTIC_CONTINUATION_DATA.md).
 
 ## Measurement and plotting demo
@@ -297,3 +296,17 @@ For multiple dimensions, separate components with commas and momentum rows
 with semicolons, for example `--density-momenta '1,0;0,1'`. The measurement
 count must provide at least two complete blocks. Existing bundle directories
 are never overwritten.
+
+To export exact selected imaginary-time correlations instead, replace
+`--density-frequency-max` with comma-separated canonical lags. This selects
+the mutually exclusive `imaginary_time_lag` basis without introducing a
+retained time grid:
+
+```sh
+./build/dev/examples/qmc_interacting_demo \
+  --particles 6 --beta 1.5 --linear-size 8 --dimension 1 \
+  --hopping 1.0 --interaction 2.0 --burn-in 500 --samples 3000 \
+  --density-momenta '1' --density-lags 0,0.25,0.5,0.75 \
+  --density-measurements-per-block 30 \
+  --density-continuation-dir density-lag-continuation-v1 --no-trace
+```

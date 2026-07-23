@@ -56,10 +56,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   standard errors, leave-one-block-out means, and exact fixed-particle-number
   zero-momentum constraints.
 - Add an opt-in interacting-demo density continuation workflow that publishes
-  a validated `density-continuation-v1` bundle with values, per-momentum
-  frequency covariance, normalized blocks, full interacting run provenance,
+  a validated `density-continuation-v1` bundle in either the
+  `bosonic_matsubara` or `imaginary_time_lag` basis, with values,
+  per-momentum covariance, normalized blocks, full interacting run provenance,
   rank diagnostics, exact fixed-particle-number constraints, and atomic
   no-overwrite directory publication.
+- Add a one-particle Lehmann regression for exact requested-lag density
+  correlations at several imaginary-time evaluation points and momenta.
 - Add `HoppingResponseAccumulator` and `HoppingResponse` for analytically
   centred signed-flux gauge response, axis-resolved diamagnetic terms, derived
   paramagnetic current correlations, and sampled mean-flux diagnostics.
