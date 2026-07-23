@@ -13,8 +13,12 @@ two related samplers:
 The code is deliberately small and explicit. [Architecture and
 algorithms](docs/ARCHITECTURE.md) explains how it works; [C++ porting
 guide](docs/CPP_PORT.md) records the data structures, interfaces, invariants,
-and numerical details that a rewrite should preserve. The C++ topology update
-is derived in [random-seam heat-bath Lévy stitching](docs/RANDOM_SEAM_STITCH.md).
+and numerical details that a rewrite should preserve. Measurement conventions
+are collected in [the measurement guide](docs/MEASUREMENTS.md), with
+continuation-ready density statistics and export designed separately in
+[analytic-continuation data](docs/ANALYTIC_CONTINUATION_DATA.md). The C++
+topology update is derived in
+[random-seam heat-bath Lévy stitching](docs/RANDOM_SEAM_STITCH.md).
 
 ## Model
 
@@ -58,6 +62,9 @@ statistical error bars.
 | `python/test_lattice_levy.py` | Free-kernel, recursion, winding, bridge, and configuration tests |
 | `python/test_interacting_lattice_levy.py` | Continuous-path, action, update, and state-invariant tests |
 | `cpp/` | C++20 ideal and interacting libraries, examples, CMake build, and GoogleTests |
+| `docs/MEASUREMENTS.md` | Retained and exact continuous-time estimator conventions |
+| `docs/CONTINUOUS_TIME_MEASUREMENTS.md` | Implemented event-based Matsubara measurement design |
+| `docs/ANALYTIC_CONTINUATION_DATA.md` | Block statistics, covariance, export, and requested-lag design |
 | `docs/RANDOM_SEAM_STITCH.md` | Closed permutation reconnection, detailed balance, and local action updates |
 | `interacting_ed_validation.txt` | Checked-in reference output from the exact-diagonalization comparison |
 

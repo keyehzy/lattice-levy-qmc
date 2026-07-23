@@ -2,22 +2,24 @@
 
 Date: 2026-07-23
 
-Status: implementation in progress. The shared Matsubara mode/result-shape
-layer, retained-result migration, and continuous phase plan (step 1), plus the
-owning continuous measurement context and deterministic event-sweep boundary
-tests (step 2), plus the combined density/flux primitive and its deterministic
-identity tests (step 3), plus the connected density accumulator and its
-deterministic and Lehmann-reference tests (step 4), plus the hopping-response
-accumulator and its zero/finite-momentum Lehmann-reference tests (step 5), plus
-the shared event-sweep migration of full pair-overlap evaluation (step 6), plus
-the occupancy-based on-site pair-density projector and its deterministic
-boundary/identity tests (step 7), were completed through step 4 on 2026-07-22
-and through step 7 on 2026-07-23. The deterministic global covering-space
-translation-covariance and auto-response-invariance check was completed on
-2026-07-23. The finite-interaction sampler-to-accumulator comparison with
-small-system exact diagonalisation and blocked Markov-chain errors was also
-completed on 2026-07-23. This document remains the design specification and
-contains no implementation.
+Status: core implementation complete. Steps 1--4 were completed on 2026-07-22
+and steps 5--7 on 2026-07-23. The global covering-space translation check and
+the finite-interaction sampler-to-accumulator comparison with blocked
+Markov-chain errors were completed on 2026-07-23. This document remains the
+design specification and contains no implementation.
+
+Continuation-ready block statistics/export and exact requested-lag density
+output have moved to
+[`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md) and are tracked
+by [issues 12](https://github.com/keyehzy/lattice-levy-qmc/issues/12) and
+[13](https://github.com/keyehzy/lattice-levy-qmc/issues/13). The two remaining
+physics regressions are tracked by
+[issue 14](https://github.com/keyehzy/lattice-levy-qmc/issues/14), and
+benchmark-gated projector optimisations by
+[issue 15](https://github.com/keyehzy/lattice-levy-qmc/issues/15). A future
+ensemble pair-density response is tracked by
+[issue 16](https://github.com/keyehzy/lattice-levy-qmc/issues/16). They are
+follow-up work rather than unfinished parts of the public measurement layer.
 
 ## Scope and recommendation
 
@@ -68,9 +70,9 @@ there are several real consumers.
 
 ## Current-state evidence reviewed
 
-This design was checked against commit `ef114cb` and the user-supplied
-[`conversation.txt`](../conversation.txt). The most relevant implementation
-boundaries are:
+This design was checked against commit `ef114cb` and the user-supplied design
+conversation, which is not retained as a repository artifact. The most
+relevant implementation boundaries are:
 
 - [`path.hpp`](../cpp/include/qmc/path.hpp) and
   [`path.cpp`](../cpp/src/path.cpp): valid-by-construction event paths,
@@ -262,8 +264,11 @@ permission to mix different particle counts or hopping laws.
 The on-site interaction is not part of `ContinuousConfiguration`, and neither
 density nor flux geometry needs it. Mixing different `U` chains therefore
 remains run-level provenance, just as it is for the existing scalar trace. A
-future trace/checkpoint schema should record the `InteractingModel` alongside
-the plan and result.
+trace/checkpoint schema should record the `InteractingModel` alongside the plan
+and result. Continuation-bundle provenance is specified in
+[`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md); general
+streaming/checkpoint provenance remains tracked by
+[issue 5](https://github.com/keyehzy/lattice-levy-qmc/issues/5).
 
 Separating the small immutable descriptor from the numerical plan lets result
 objects own exact Fourier provenance without copying a potentially large phase
@@ -276,8 +281,12 @@ The plan can precompute momentum components and the
 per-axis factors `exp(-i*q_alpha)` and `exp(-i*s*q_alpha/2)`. A full
 `momentum_count * volume` site-phase table may be worthwhile for repeated
 samples, but should be selected by a benchmark and a checked memory policy. It
-should later share the transform workspace contemplated for retained
-observables rather than creating a competing Fourier convention.
+should share the transform workspace contemplated for retained observables
+rather than creating a competing Fourier convention. The benchmark and
+selection work is tracked by
+[issue 15](https://github.com/keyehzy/lattice-levy-qmc/issues/15), with retained
+transform planning in
+[issue 2](https://github.com/keyehzy/lattice-levy-qmc/issues/2).
 
 All plan allocation and validation happens in its constructor. Projection is
 `const`, uses caller-owned temporaries, and has no lazy mutable cache or hidden
@@ -439,7 +448,8 @@ The combined baseline intentionally keeps the continuity-related fields
 together. If profiling later shows that density-only runs are common and flux
 projection is material, add a concrete density-only projector over the same
 context and plan; do not put optional, possibly absent arrays into the primitive
-result.
+result. That profiling decision is part of
+[issue 15](https://github.com/keyehzy/lattice-levy-qmc/issues/15).
 
 ### Per-configuration on-site pair-density modes
 
@@ -499,7 +509,9 @@ P_{\mathbf0,0}
 This value is accumulated directly from the integer pair count and installed
 as the authoritative zero mode, avoiding a second numerically different sum.
 An ensemble pair-density accumulator is deferred until a concrete correlation
-or interaction-energy workflow defines its centring and normalization.
+or interaction-energy workflow defines its centring and normalization; that
+semantics-first follow-up is tracked by
+[issue 16](https://github.com/keyehzy/lattice-levy-qmc/issues/16).
 
 ### Typed ensemble accumulators
 
@@ -1017,12 +1029,13 @@ also treats worldline discontinuities as the route to Green functions; see
 Prokof'ev, Svistunov, and Tupitsyn,
 [Exact, Complete, and Universal Continuous-Time Worldline Monte Carlo](https://arxiv.org/abs/cond-mat/9703200).
 
-For an imaginary-time result `C(r,tau)` rather than Matsubara modes, add a
-separate requested-lag backend later. It can compute exact overlap lengths of
-piecewise-constant periodic intervals at each requested lag. Such lags are
-evaluation points, not a Trotter or retained measurement grid. Inverting a
-finite Matsubara set is useful for presentation but is not an exact continuous-
-time `tau` estimator and may ring at the frequency cutoff.
+The separate requested-lag backend and its block/covariance workflow are now
+specified in
+[`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md) and tracked by
+[issue 13](https://github.com/keyehzy/lattice-levy-qmc/issues/13). It computes
+exact overlap lengths of piecewise-constant periodic intervals at requested
+lags; it does not invert a truncated Matsubara set or introduce a Trotter or
+retained measurement grid.
 
 ## Numerical and complexity details
 
@@ -1131,8 +1144,9 @@ cpp/tests/CMakeLists.txt
 geometry-only mode descriptor belongs with the lattice-transform code in
 `qmc_ideal`; all sources that mention continuous paths belong to
 `qmc_interacting`. `qmc_ideal` must not depend on continuous paths. Reusable
-spatial phase planning may later move to an ideal-independent internal utility
-when retained transforms adopt the same convention.
+spatial phase planning and the final target boundary are tracked by
+[issues 2](https://github.com/keyehzy/lattice-levy-qmc/issues/2) and
+[11](https://github.com/keyehzy/lattice-levy-qmc/issues/11).
 
 Do not move the accepted-state `OccupancyIndex` into the public measurement
 layer. It is mutable transactional sampler state optimised for replacements.
@@ -1141,10 +1155,12 @@ small event/state primitives without sharing that ownership model.
 
 Because this adds public result and measurement APIs, implementation should
 also update `cpp/CHANGELOG.md`, the continuous-observable section of the user
-documentation, and the example output schema if the interacting demo starts
-emitting these results. The retained-wrapper migration unconditionally updates
-the ideal demo, its output verification, and retained-observable documentation.
-Keep the derivation here rather than duplicating it in source comments; public
+documentation, and retained-observable documentation. The interacting demo
+intentionally remains a scalar trace; its opt-in continuation-data output is
+specified separately in
+[`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md) and
+[issue 12](https://github.com/keyehzy/lattice-levy-qmc/issues/12). Keep the
+derivation here rather than duplicating it in source comments; public
 declarations need only concise units, signs, indexing, ownership, and failure
 behavior.
 
@@ -1206,14 +1222,16 @@ behavior.
 
 ### Physics comparisons
 
-- Small canonical exact-diagonalisation/Lehmann comparisons of
-  `chi_nn(q,i*omega_n)`.
-- Compare event response against `D - Lambda^p` from exact diagonalisation at
-  both zero and finite momentum. Comparing event flux directly with
-  `Lambda^p` would test the wrong quantity.
-- Check `D_alpha` against the axis-resolved event-count kinetic estimator.
+- **Completed 2026-07-22:** Small canonical exact-diagonalisation/Lehmann
+  comparisons of `chi_nn(q,i*omega_n)`.
+- **Completed 2026-07-23:** Compare event response against
+  `D - Lambda^p` from exact diagonalisation at both zero and finite momentum.
+  Comparing event flux directly with `Lambda^p` would test the wrong quantity.
+- **Completed 2026-07-23:** Check `D_alpha` against the axis-resolved
+  event-count kinetic estimator.
 - Verify the high-frequency approach `R_aa -> D_a` and
-  `Lambda^p_aa -> 0` statistically.
+  `Lambda^p_aa -> 0` statistically
+  ([issue 14](https://github.com/keyehzy/lattice-levy-qmc/issues/14)).
 - **Completed 2026-07-23:** At `U == 0`, compare the exact continuous result
   with the deterministic canonical/Lehmann answer. At finite `U`, the
   `N=2`, `L=3`, `beta=0.8`, `t=1`, `U=1.2` regression compares density,
@@ -1221,17 +1239,21 @@ behavior.
   small-system ED using blocked Markov-chain errors.
 - As a secondary regression, show convergence of the retained-grid density
   transform toward the continuous result as `M` increases. The retained value
-  is not the reference at finite `M`.
+  is not the reference at finite `M`
+  ([issue 14](https://github.com/keyehzy/lattice-levy-qmc/issues/14)).
 
 Hard-coded small Lehmann tables and algebraic identities belong in the fast
 interacting unit target. Monte Carlo convergence, high-frequency limits, and
 finite-`U` sampled comparisons belong in the labelled statistical target with
 documented seeds, sample counts, and uncertainty-derived tolerances.
 
-Autocorrelation analysis, blocking/jackknife errors, covariance between output
-modes, and analytic continuation are run-analysis concerns. The core
-accumulator should retain raw sample count and well-defined first/second mode
-moments so those tools can be built without changing the physics convention.
+Autocorrelation analysis, block/jackknife errors, statistical covariance
+between output modes, continuation-data export, and direct requested-lag
+output are specified separately in
+[`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md). The
+Matsubara workflow is tracked by
+[issue 12](https://github.com/keyehzy/lattice-levy-qmc/issues/12) and the lag
+backend by [issue 13](https://github.com/keyehzy/lattice-levy-qmc/issues/13).
 
 ### Design-time numerical checks
 
@@ -1321,9 +1343,45 @@ derivative and returned decomposition explicit.
    pair-overlap identity, conjugation, and time-rotation tests. Retain the
    three concrete loops until another projector demonstrates a useful smaller
    generic contract.
-8. Add requested-lag imaginary-time output, block/covariance tooling, or
-   transform optimisations only in response to a concrete workflow and
-   benchmark.
+
+Continuation data, requested-lag output, remaining statistical regressions,
+benchmark-gated optimisations, and an ensemble pair-density response are
+deliberately outside this completed implementation order. They are specified
+or tracked by
+[`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md) and
+[issues 12](https://github.com/keyehzy/lattice-levy-qmc/issues/12),
+[13](https://github.com/keyehzy/lattice-levy-qmc/issues/13),
+[14](https://github.com/keyehzy/lattice-levy-qmc/issues/14),
+[15](https://github.com/keyehzy/lattice-levy-qmc/issues/15), and
+[16](https://github.com/keyehzy/lattice-levy-qmc/issues/16).
+
+### Follow-up classification
+
+Every concrete follow-up named by this design is now tracked:
+
+- retained transform planning:
+  [issue 2](https://github.com/keyehzy/lattice-levy-qmc/issues/2);
+- streaming runs and complete trace/checkpoint provenance:
+  [issue 5](https://github.com/keyehzy/lattice-levy-qmc/issues/5);
+- the free/retained/continuous target boundary:
+  [issue 11](https://github.com/keyehzy/lattice-levy-qmc/issues/11);
+- continuation-ready block statistics and export:
+  [issue 12](https://github.com/keyehzy/lattice-levy-qmc/issues/12);
+- exact requested-lag density correlations:
+  [issue 13](https://github.com/keyehzy/lattice-levy-qmc/issues/13);
+- remaining physics regressions:
+  [issue 14](https://github.com/keyehzy/lattice-levy-qmc/issues/14); and
+- benchmark-gated continuous-projector optimisations:
+  [issue 15](https://github.com/keyehzy/lattice-levy-qmc/issues/15); and
+- ensemble pair-density centring and response semantics:
+  [issue 16](https://github.com/keyehzy/lattice-levy-qmc/issues/16).
+
+Other forward-looking statements in this document are extension conditions,
+not untracked commitments: a public `MomentumId`, unknown-mean or
+background-field centring policies beyond the pair-density case,
+state-dependent impulses, conductivity, a public custom-observable framework,
+and a numerical backend beyond the documented frequency bound each require a
+concrete consumer and a separate design before becoming implementation work.
 
 ## Design conclusion
 

@@ -231,6 +231,13 @@ the sampled uncentred complex amplitude as a symmetry diagnostic. The response
 tensor is Hermitian by construction. `R`, `D`, and `Lambda^p` have units of
 energy per site in the repository's `k_B=1`, unit-lattice-spacing convention.
 
+Block-resolved density statistics, cross-frequency sampling covariance,
+continuation-data export, and the separate exact requested-lag backend are
+specified in
+[`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md). They are
+analysis/workflow extensions to the implemented Matsubara estimator, not
+alternate normalizations of it.
+
 ## Exactness and checks
 
 The canonical calculations are deterministic up to floating-point rounding.

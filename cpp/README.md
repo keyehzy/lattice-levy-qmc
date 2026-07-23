@@ -220,6 +220,9 @@ See [`docs/MEASUREMENTS.md`](../docs/MEASUREMENTS.md) for estimator definitions,
 normalizations, exactness, and retained-grid conventions. The event-based
 continuous measurement design is documented in
 [`docs/CONTINUOUS_TIME_MEASUREMENTS.md`](../docs/CONTINUOUS_TIME_MEASUREMENTS.md).
+Block-resolved statistics, continuation-data export, and exact requested-lag
+density output are designed in
+[`docs/ANALYTIC_CONTINUATION_DATA.md`](../docs/ANALYTIC_CONTINUATION_DATA.md).
 
 ## Measurement and plotting demo
 
