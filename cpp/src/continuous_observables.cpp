@@ -8,9 +8,11 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <limits>
 #include <numbers>
 #include <span>
 #include <stdexcept>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -451,6 +453,173 @@ private:
   std::vector<std::uint8_t> zero_momenta_;
 };
 
+using PairDensityOccupancyMap = std::unordered_map<SiteId, std::uint64_t, SiteIdHash>;
+
+void add_pair_count(std::uint64_t &pair_count, const std::uint64_t additional) {
+  if (pair_count > std::numeric_limits<std::uint64_t>::max() - additional) {
+    throw std::overflow_error("continuous on-site pair count exceeds uint64 range");
+  }
+  pair_count += additional;
+}
+
+class ContinuousPairDensityProjector {
+public:
+  ContinuousPairDensityProjector(const ContinuousMeasurementContext &context,
+                                 const MatsubaraModeSet &modes)
+      : context_(context), modes_(modes), momentum_count_(modes.momentum_count()),
+        frequency_count_(modes.frequency_count()), mode_count_(modes.mode_count()),
+        pair_amplitudes_(make_checked_vector<CompensatedComplexSum>(
+            mode_count_, "continuous pair-density extent exceeds vector capacity")),
+        current_pair_density_(make_checked_vector<CompensatedComplexSum>(
+            momentum_count_, "continuous pair-density state exceeds vector capacity")),
+        positions_(context.seam_positions().begin(), context.seam_positions().end()),
+        zero_momenta_(make_checked_vector<std::uint8_t>(
+            momentum_count_, "continuous pair-density zero-momentum extent exceeds capacity")) {
+    occupancies_.reserve(context.model().particle_count());
+    initialize_zero_momenta();
+    initialize_occupancies();
+  }
+
+  [[nodiscard]] std::vector<std::complex<double>> project() {
+    double previous_time = 0.0;
+    for (std::size_t group = 0; group < context_.event_group_count(); ++group) {
+      const double time = context_.event_time(group);
+      add_residence_interval(previous_time, time);
+      apply_event_group(group);
+      previous_time = time;
+    }
+    add_residence_interval(previous_time, modes_.beta());
+    return finish();
+  }
+
+private:
+  void initialize_zero_momenta() {
+    for (std::size_t momentum = 0; momentum < momentum_count_; ++momentum) {
+      zero_momenta_[momentum] = is_zero_momentum(modes_, momentum) ? 1U : 0U;
+    }
+  }
+
+  void initialize_occupancies() {
+    for (const SiteId position : positions_) {
+      auto [entry, inserted] = occupancies_.try_emplace(position, 0);
+      static_cast<void>(inserted);
+      const std::uint64_t previous_occupancy = entry->second;
+      add_pair_count(pair_count_, previous_occupancy);
+      add_pair_density_change(position, static_cast<double>(previous_occupancy));
+      if (entry->second == std::numeric_limits<std::uint64_t>::max()) {
+        throw std::overflow_error("continuous site occupancy exceeds uint64 range");
+      }
+      ++entry->second;
+    }
+  }
+
+  void add_residence_interval(const double begin, const double end) {
+    const double contribution = (end - begin) * static_cast<double>(pair_count_);
+    pair_overlap_ += contribution;
+    if (!std::isfinite(pair_overlap_)) {
+      throw std::overflow_error("continuous pair-density zero mode is non-finite");
+    }
+
+    for (std::size_t frequency = 0; frequency < frequency_count_; ++frequency) {
+      const std::complex<double> interval = detail::matsubara_interval_transform(
+          modes_.frequency_index(frequency), begin, end, modes_.beta());
+      for (std::size_t momentum = 0; momentum < momentum_count_; ++momentum) {
+        pair_amplitudes_[mode_index(frequency, momentum)].add(
+            current_pair_density_[momentum].value() * interval);
+      }
+    }
+  }
+
+  void apply_event_group(const std::size_t group) {
+    // Occupancy-dependent residence values are sampled only before and after
+    // the complete zero-duration group, never from transient hop order.
+    for (const ContinuousHop &hop : context_.hops_at(group)) {
+      apply_hop(hop);
+    }
+  }
+
+  void apply_hop(const ContinuousHop &hop) {
+    const auto particle = static_cast<std::size_t>(hop.particle);
+    if (particle >= positions_.size()) {
+      throw std::logic_error("pair-density hop contains an invalid particle label");
+    }
+    SiteId &position = positions_[particle];
+    if (position != hop.departure) {
+      throw std::logic_error("pair-density replay disagrees with the shared event sweep");
+    }
+
+    auto departure = occupancies_.find(position);
+    if (departure == occupancies_.end() || departure->second == 0) {
+      throw std::logic_error("pair-density occupancy state is inconsistent");
+    }
+    const std::uint64_t removed_pairs = departure->second - 1;
+    pair_count_ -= removed_pairs;
+    add_pair_density_change(position, -static_cast<double>(removed_pairs));
+    --departure->second;
+    if (departure->second == 0) {
+      occupancies_.erase(departure);
+    }
+
+    position = hop.arrival;
+    auto [arrival, inserted] = occupancies_.try_emplace(position, 0);
+    static_cast<void>(inserted);
+    const std::uint64_t added_pairs = arrival->second;
+    add_pair_count(pair_count_, added_pairs);
+    add_pair_density_change(position, static_cast<double>(added_pairs));
+    if (arrival->second == std::numeric_limits<std::uint64_t>::max()) {
+      throw std::overflow_error("continuous site occupancy exceeds uint64 range");
+    }
+    ++arrival->second;
+  }
+
+  void add_pair_density_change(const SiteId site, const double coefficient) {
+    if (coefficient == 0.0) {
+      return;
+    }
+    for (std::size_t momentum = 0; momentum < momentum_count_; ++momentum) {
+      current_pair_density_[momentum].add(coefficient *
+                                          detail::matsubara_site_phase(modes_, momentum, site));
+    }
+  }
+
+  [[nodiscard]] std::vector<std::complex<double>> finish() const {
+    auto values = make_checked_vector<std::complex<double>>(
+        mode_count_, "continuous pair-density result extent exceeds vector capacity");
+    for (std::size_t frequency = 0; frequency < frequency_count_; ++frequency) {
+      for (std::size_t momentum = 0; momentum < momentum_count_; ++momentum) {
+        const std::size_t mode = mode_index(frequency, momentum);
+        std::complex<double> value = pair_amplitudes_[mode].value();
+        if (zero_momenta_[momentum] != 0U && modes_.frequency_index(frequency) == 0) {
+          value = {pair_overlap_, 0.0};
+        }
+        if (!is_finite(value)) {
+          throw std::overflow_error("continuous pair-density amplitude is non-finite");
+        }
+        values[mode] = value;
+      }
+    }
+    return values;
+  }
+
+  [[nodiscard]] std::size_t mode_index(const std::size_t frequency,
+                                       const std::size_t momentum) const noexcept {
+    return (frequency * momentum_count_) + momentum;
+  }
+
+  const ContinuousMeasurementContext &context_;
+  const MatsubaraModeSet &modes_;
+  std::size_t momentum_count_;
+  std::size_t frequency_count_;
+  std::size_t mode_count_;
+  std::vector<CompensatedComplexSum> pair_amplitudes_;
+  std::vector<CompensatedComplexSum> current_pair_density_;
+  std::vector<SiteId> positions_;
+  PairDensityOccupancyMap occupancies_;
+  std::vector<std::uint8_t> zero_momenta_;
+  std::uint64_t pair_count_ = 0;
+  double pair_overlap_ = 0.0;
+};
+
 } // namespace
 
 ContinuousMatsubaraPlan::ContinuousMatsubaraPlan(MatsubaraModeSet modes)
@@ -556,6 +725,18 @@ std::size_t ContinuousParticleModes::axis_event_count(const std::size_t axis) co
     throw std::out_of_range("continuous event-count axis is out of range");
   }
   return axis_event_counts_[axis];
+}
+
+ContinuousPairDensityModes::ContinuousPairDensityModes(
+    Model model, MatsubaraModeSet modes, std::vector<std::complex<double>> pair_density_values)
+    : model_(model), pair_density_(std::move(modes), std::move(pair_density_values)) {
+  validate_model_mode_geometry(model_, pair_density_.modes(),
+                               "continuous pair-density model and Matsubara geometry differ");
+  for (const std::complex<double> value : pair_density_.values()) {
+    if (!is_finite(value)) {
+      throw std::invalid_argument("continuous pair-density amplitude is non-finite");
+    }
+  }
 }
 
 ContinuousMatsubaraDensityCorrelations::ContinuousMatsubaraDensityCorrelations(
@@ -899,6 +1080,21 @@ ContinuousParticleModes continuous_particle_modes(const ContinuousMeasurementCon
 ContinuousParticleModes continuous_particle_modes(const ContinuousConfiguration &configuration,
                                                   const ContinuousMatsubaraPlan &plan) {
   return continuous_particle_modes(ContinuousMeasurementContext(configuration), plan);
+}
+
+ContinuousPairDensityModes
+continuous_pair_density_modes(const ContinuousMeasurementContext &context,
+                              const ContinuousMatsubaraPlan &plan) {
+  const MatsubaraModeSet &modes = plan.modes();
+  validate_projection_geometry(context, modes);
+  ContinuousPairDensityProjector projector(context, modes);
+  return {context.model(), modes, projector.project()};
+}
+
+ContinuousPairDensityModes
+continuous_pair_density_modes(const ContinuousConfiguration &configuration,
+                              const ContinuousMatsubaraPlan &plan) {
+  return continuous_pair_density_modes(ContinuousMeasurementContext(configuration), plan);
 }
 
 namespace detail {

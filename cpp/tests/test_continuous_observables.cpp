@@ -2,6 +2,7 @@
 #include "continuous_test_fixtures.hpp"
 #include "lattice_transform_detail.hpp"
 #include "qmc/continuous_observables.hpp"
+#include "qmc/interaction.hpp"
 
 #include <algorithm>
 #include <array>
@@ -40,6 +41,11 @@ static_assert(!std::default_initializable<ContinuousParticleModes>);
 static_assert(std::is_same_v<decltype(std::declval<const ContinuousParticleModes &>().model()),
                              const Model &>);
 static_assert(std::is_same_v<decltype(std::declval<const ContinuousParticleModes &>().modes()),
+                             const MatsubaraModeSet &>);
+static_assert(!std::default_initializable<ContinuousPairDensityModes>);
+static_assert(std::is_same_v<decltype(std::declval<const ContinuousPairDensityModes &>().model()),
+                             const Model &>);
+static_assert(std::is_same_v<decltype(std::declval<const ContinuousPairDensityModes &>().modes()),
                              const MatsubaraModeSet &>);
 static_assert(!std::default_initializable<ContinuousMatsubaraDensityCorrelations>);
 static_assert(
@@ -103,6 +109,25 @@ ContinuousConfiguration winding_projection_configuration() {
                                 {.time = 0.8, .axis = 0, .direction = 1},
                                 {.time = 1.0, .axis = 1, .direction = -1}});
   return ContinuousConfiguration(model, Permutation({0}), {winding});
+}
+
+ContinuousConfiguration atomic_pair_density_configuration() {
+  const Model model(ModelParameters{
+      .particle_count = 2,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const ContinuousPath first(1.0, {0}, {1},
+                             {{.time = 0.0, .axis = 0, .direction = 1},
+                              {.time = 0.5, .axis = 0, .direction = -1},
+                              {.time = 1.0, .axis = 0, .direction = 1}});
+  const ContinuousPath second(1.0, {1}, {0},
+                              {{.time = 0.0, .axis = 0, .direction = -1},
+                               {.time = 0.5, .axis = 0, .direction = 1},
+                               {.time = 1.0, .axis = 0, .direction = -1}});
+  return ContinuousConfiguration(model, Permutation({1, 0}), {first, second});
 }
 
 TEST(ContinuousMatsubaraPlanTest, OwnsModesAndEnforcesSymmetricFrequencyBound) {
@@ -578,6 +603,211 @@ TEST(ContinuousParticleModesTest, RejectsContextAndPlanGeometryMismatch) {
                std::invalid_argument);
   EXPECT_THROW(static_cast<void>(continuous_particle_modes(context, wrong_layout)),
                std::invalid_argument);
+}
+
+TEST(ContinuousPairDensityModesTest, ProjectsStaticOnsitePairsWithOwnedProvenance) {
+  const Model model(ModelParameters{
+      .particle_count = 3,
+      .beta = 1.5,
+      .linear_size = 4,
+      .dimension = 1,
+      .hopping = 0.75,
+  });
+  const ContinuousConfiguration configuration(model, Permutation({0, 1, 2}),
+                                              {ContinuousPath(model.beta(), {1}, {1}, {}),
+                                               ContinuousPath(model.beta(), {1}, {1}, {}),
+                                               ContinuousPath(model.beta(), {3}, {3}, {})});
+  const MatsubaraModeSet modes =
+      make_continuous_modes(model.beta(), TorusLayout(4, 1), {{0}, {1}, {3}}, {-1, 0, 1});
+  const ContinuousPairDensityModes values =
+      continuous_pair_density_modes(configuration, ContinuousMatsubaraPlan(modes));
+
+  EXPECT_EQ(values.model(), model);
+  EXPECT_EQ(values.modes(), modes);
+  for (const std::size_t frequency : {std::size_t{0}, std::size_t{2}}) {
+    for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+      EXPECT_EQ(values.pair_density(frequency, momentum), std::complex<double>(0.0, 0.0));
+    }
+  }
+  EXPECT_EQ(values.pair_density(1, 0), std::complex<double>(model.beta(), 0.0));
+  EXPECT_NEAR(std::abs(values.pair_density(1, 1) - std::complex<double>(0.0, -model.beta())), 0.0,
+              2e-15);
+  EXPECT_NEAR(std::abs(values.pair_density(1, 2) - std::complex<double>(0.0, model.beta())), 0.0,
+              2e-15);
+
+  EXPECT_THROW(static_cast<void>(values.pair_density(modes.frequency_count(), 0)),
+               std::out_of_range);
+  EXPECT_THROW(static_cast<void>(values.pair_density(0, modes.momentum_count())),
+               std::out_of_range);
+}
+
+TEST(ContinuousPairDensityModesTest, IntegratesDynamicPairResidenceExactly) {
+  const Model model(ModelParameters{
+      .particle_count = 2,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const ContinuousConfiguration configuration(
+      model, Permutation({0, 1}),
+      {ContinuousPath(model.beta(), {2}, {2}, {}),
+       ContinuousPath(model.beta(), {2}, {2},
+                      {{.time = 0.25, .axis = 0, .direction = -1},
+                       {.time = 0.75, .axis = 0, .direction = 1}})});
+  const MatsubaraModeSet modes =
+      make_continuous_modes(model.beta(), TorusLayout(3, 1), {{0}, {1}, {2}}, {-1, 0, 1});
+  const ContinuousPairDensityModes values =
+      continuous_pair_density_modes(configuration, ContinuousMatsubaraPlan(modes));
+
+  ASSERT_DOUBLE_EQ(pair_overlap_time(configuration), 0.5);
+  for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+    const std::complex<double> site_phase =
+        detail::matsubara_site_phase(modes, momentum, SiteId(2));
+    EXPECT_NEAR(std::abs(values.pair_density(0, momentum) - site_phase / std::numbers::pi), 0.0,
+                2e-15);
+    EXPECT_NEAR(std::abs(values.pair_density(1, momentum) - 0.5 * site_phase), 0.0, 2e-15);
+    EXPECT_NEAR(std::abs(values.pair_density(2, momentum) - site_phase / std::numbers::pi), 0.0,
+                2e-15);
+  }
+}
+
+TEST(ContinuousPairDensityModesTest, EqualTimeSwapsNeverExposeTransientOccupancies) {
+  const ContinuousConfiguration configuration = atomic_pair_density_configuration();
+  const Model model = configuration.model();
+  const MatsubaraModeSet modes =
+      make_continuous_modes(model.beta(), TorusLayout(3, 1), {{0}, {1}, {2}}, {-2, -1, 0, 1, 2});
+  const ContinuousPairDensityModes values =
+      continuous_pair_density_modes(configuration, ContinuousMatsubaraPlan(modes));
+
+  ASSERT_EQ(ContinuousMeasurementContext(configuration).event_group_count(), 3U);
+  EXPECT_EQ(pair_overlap_time(configuration), 0.0);
+  for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+    for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+      EXPECT_EQ(values.pair_density(frequency, momentum), std::complex<double>(0.0, 0.0));
+    }
+  }
+}
+
+TEST(ContinuousPairDensityModesTest, ZeroModeExactlyMatchesSharedPairOverlapSweep) {
+  const ContinuousConfiguration configuration = test::coincident_seam_configuration();
+  const Model model = configuration.model();
+  const MatsubaraModeSet modes =
+      make_continuous_modes(model.beta(), TorusLayout(5, 1), {{0}, {1}, {4}}, {-2, -1, 0, 1, 2});
+  const ContinuousMatsubaraPlan plan(modes);
+  const ContinuousMeasurementContext context(configuration);
+  const ContinuousPairDensityModes from_context = continuous_pair_density_modes(context, plan);
+  const ContinuousPairDensityModes convenience = continuous_pair_density_modes(configuration, plan);
+
+  ASSERT_DOUBLE_EQ(pair_overlap_time(configuration), 0.5);
+  EXPECT_EQ(from_context.pair_density(2, 0),
+            std::complex<double>(pair_overlap_time(configuration), 0.0));
+  for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+    for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+      EXPECT_EQ(convenience.pair_density(frequency, momentum),
+                from_context.pair_density(frequency, momentum));
+    }
+  }
+}
+
+TEST(ContinuousPairDensityModesTest, ObeysSiteFieldConjugationAndTimeOriginRotation) {
+  const ContinuousConfiguration configuration = test::coincident_seam_configuration();
+  const double shift = 0.25;
+  const ContinuousConfiguration rotated = rotate_configuration_time_origin(configuration, shift);
+  const MatsubaraModeSet modes = make_continuous_modes(
+      configuration.model().beta(), TorusLayout(5, 1), {{0}, {1}, {4}}, {-2, -1, 0, 1, 2});
+  const ContinuousMatsubaraPlan plan(modes);
+  const ContinuousPairDensityModes original = continuous_pair_density_modes(configuration, plan);
+  const ContinuousPairDensityModes shifted = continuous_pair_density_modes(rotated, plan);
+  const std::array<std::size_t, 5> opposite_frequency{4, 3, 2, 1, 0};
+  const std::array<std::size_t, 3> opposite_momentum{0, 2, 1};
+
+  for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+    const std::complex<double> rotation = std::conj(
+        detail::matsubara_time_phase(modes.frequency_index(frequency), shift, modes.beta()));
+    for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+      EXPECT_NEAR(std::abs(std::conj(original.pair_density(frequency, momentum)) -
+                           original.pair_density(opposite_frequency[frequency],
+                                                 opposite_momentum[momentum])),
+                  0.0, 3e-13);
+      EXPECT_NEAR(std::abs(shifted.pair_density(frequency, momentum) -
+                           rotation * original.pair_density(frequency, momentum)),
+                  0.0, 3e-13);
+    }
+  }
+}
+
+TEST(ContinuousPairDensityModesTest, RejectsContextAndPlanGeometryMismatch) {
+  const ContinuousConfiguration configuration = test::coincident_seam_configuration();
+  const ContinuousMeasurementContext context(configuration);
+  const ContinuousMatsubaraPlan wrong_beta(
+      make_continuous_modes(2.0, TorusLayout(5, 1), {{0}}, {0}));
+  const ContinuousMatsubaraPlan wrong_layout(
+      make_continuous_modes(1.0, TorusLayout(4, 1), {{0}}, {0}));
+
+  EXPECT_THROW(static_cast<void>(continuous_pair_density_modes(context, wrong_beta)),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(continuous_pair_density_modes(context, wrong_layout)),
+               std::invalid_argument);
+}
+
+TEST(ContinuousPairDensityModesTest, HandlesEmptyAndSingleSiteConfigurations) {
+  const Model empty_model(ModelParameters{
+      .particle_count = 0,
+      .beta = 1.25,
+      .linear_size = 1,
+      .dimension = 2,
+      .hopping = 0.8,
+  });
+  const MatsubaraModeSet empty_modes =
+      make_continuous_modes(empty_model.beta(), TorusLayout(1, 2), {{0, 0}}, {-1, 0, 1});
+  const ContinuousPairDensityModes empty =
+      continuous_pair_density_modes(ContinuousConfiguration(empty_model, Permutation(), {}),
+                                    ContinuousMatsubaraPlan(empty_modes));
+  for (std::size_t frequency = 0; frequency < empty_modes.frequency_count(); ++frequency) {
+    EXPECT_EQ(empty.pair_density(frequency, 0), std::complex<double>(0.0, 0.0));
+  }
+
+  const Model single_site_model(ModelParameters{
+      .particle_count = 2,
+      .beta = 1.0,
+      .linear_size = 1,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const ContinuousConfiguration single_site(
+      single_site_model, Permutation({0, 1}),
+      {ContinuousPath(
+           single_site_model.beta(), {0}, {0},
+           {{.time = 0.25, .axis = 0, .direction = 1}, {.time = 0.75, .axis = 0, .direction = -1}}),
+       ContinuousPath(single_site_model.beta(), {0}, {0}, {})});
+  const MatsubaraModeSet single_site_modes =
+      make_continuous_modes(single_site_model.beta(), TorusLayout(1, 1), {{0}}, {-1, 0, 1});
+  const ContinuousPairDensityModes values =
+      continuous_pair_density_modes(single_site, ContinuousMatsubaraPlan(single_site_modes));
+
+  EXPECT_NEAR(std::abs(values.pair_density(0, 0)), 0.0, 1e-15);
+  EXPECT_EQ(values.pair_density(1, 0), std::complex<double>(1.0, 0.0));
+  EXPECT_NEAR(std::abs(values.pair_density(2, 0)), 0.0, 1e-15);
+}
+
+TEST(ContinuousPairDensityModesTest, RejectsANonFiniteProjectedZeroMode) {
+  const Model model(ModelParameters{
+      .particle_count = 3,
+      .beta = std::numeric_limits<double>::max() * 0.75,
+      .linear_size = 1,
+      .dimension = 1,
+      .hopping = 0.0,
+  });
+  const ContinuousConfiguration configuration(model, Permutation({0, 1, 2}),
+                                              {ContinuousPath(model.beta(), {0}, {0}, {}),
+                                               ContinuousPath(model.beta(), {0}, {0}, {}),
+                                               ContinuousPath(model.beta(), {0}, {0}, {})});
+  const ContinuousMatsubaraPlan plan(
+      make_continuous_modes(model.beta(), TorusLayout(1, 1), {{0}}, {0}));
+
+  EXPECT_THROW(static_cast<void>(continuous_pair_density_modes(configuration, plan)),
+               std::overflow_error);
 }
 
 TEST(DensityMatsubaraAccumulatorTest, UsesAnalyticCenteringAndPublishesCompleteResultProvenance) {

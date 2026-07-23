@@ -9,9 +9,11 @@ tests (step 2), plus the combined density/flux primitive and its deterministic
 identity tests (step 3), plus the connected density accumulator and its
 deterministic and Lehmann-reference tests (step 4), plus the hopping-response
 accumulator and its zero/finite-momentum Lehmann-reference tests (step 5), plus
-the shared event-sweep migration of full pair-overlap evaluation (step 6), were
-completed through step 4 on 2026-07-22 and through step 6 on 2026-07-23. This
-document remains the design specification and contains no implementation.
+the shared event-sweep migration of full pair-overlap evaluation (step 6), plus
+the occupancy-based on-site pair-density projector and its deterministic
+boundary/identity tests (step 7), were completed through step 4 on 2026-07-22
+and through step 7 on 2026-07-23. This document remains the design
+specification and contains no implementation.
 
 ## Scope and recommendation
 
@@ -48,8 +50,8 @@ types, not a public `Observable` base class:
    once from a `ContinuousConfiguration`.
 2. `MatsubaraModeSet` owns validated Fourier geometry, while
    `ContinuousMatsubaraPlan` adds reusable phase data.
-3. A per-configuration projector produces unnormalised density and hopping-flux
-   mode amplitudes in one event pass.
+3. Per-configuration projectors produce unnormalised density/hopping-flux and
+   on-site pair-density mode amplitudes from the same event geometry.
 4. Typed accumulators own ensemble statistics and return shape-safe,
    convention-bearing results.
 
@@ -434,6 +436,66 @@ together. If profiling later shows that density-only runs are common and flux
 projection is material, add a concrete density-only projector over the same
 context and plan; do not put optional, possibly absent arrays into the primitive
 result.
+
+### Per-configuration on-site pair-density modes
+
+The third concrete projector is the occupancy-based on-site pair density
+
+\[
+p_{\mathbf q}(\tau)=
+\sum_{\mathbf x}e^{-i\mathbf q\cdot\mathbf x}
+\binom{n_{\mathbf x}(\tau)}{2},\qquad
+P_{\mathbf qn}=\int_0^\beta
+e^{i\omega_n\tau}p_{\mathbf q}(\tau)\,d\tau.
+\]
+
+Its public per-configuration result is:
+
+```cpp
+class ContinuousPairDensityModes {
+public:
+  [[nodiscard]] const Model &model() const noexcept;
+  [[nodiscard]] const MatsubaraModeSet &modes() const noexcept;
+  [[nodiscard]] std::complex<double>
+  pair_density(std::size_t frequency, std::size_t momentum) const;
+};
+
+[[nodiscard]] ContinuousPairDensityModes
+continuous_pair_density_modes(const ContinuousMeasurementContext &context,
+                              const ContinuousMatsubaraPlan &plan);
+
+// One-off convenience overload.
+[[nodiscard]] ContinuousPairDensityModes
+continuous_pair_density_modes(const ContinuousConfiguration &configuration,
+                              const ContinuousMatsubaraPlan &plan);
+```
+
+The result is unnormalised and owns its complete free `Model` and
+`MatsubaraModeSet`. No interaction value is required: the projected field is a
+geometric property of the configuration, while multiplying it by `U` or
+forming ensemble moments is a later observable policy.
+
+The projector seeds a sparse physical-site occupancy map from
+`seam_positions()`. It caches `p_q` and integrates it over the residence
+interval preceding each event group. Every hop in the group then updates the
+occupancy state and `p_q`; the updated value is visible only to the next
+positive-duration interval. Thus a coincident swap never exposes the
+order-dependent temporary double occupancy created by replaying one hop before
+the other.
+
+At zero momentum and frequency the projector preserves the exact scalar
+identity
+
+\[
+P_{\mathbf0,0}
+=\int_0^\beta d\tau\sum_{\mathbf x}\binom{n_{\mathbf x}(\tau)}{2}
+=\texttt{pair_overlap_time(configuration)}.
+\]
+
+This value is accumulated directly from the integer pair count and installed
+as the authoritative zero mode, avoiding a second numerically different sum.
+An ensemble pair-density accumulator is deferred until a concrete correlation
+or interaction-energy workflow defines its centring and normalization.
 
 ### Typed ensemble accumulators
 
@@ -932,10 +994,15 @@ The segment-plus-impulse formula covers a useful, well-defined family.
 
 Adding one of these should require an observable-specific projector and result
 type, while reusing the context, exact interval kernel, plan, shape owner, and
-mode-moment accumulation. Once at least three projectors demonstrate a stable
-common callable contract, a constrained internal `project_continuous_signal`
-template may remove boilerplate. It should remain private until there is a real
-external custom-observable requirement.
+mode-moment accumulation. The third concrete projector did not establish a
+useful generic callable contract: conserved particle modes need per-particle
+phases and event impulses, while pair density needs sparse occupancy replay and
+an exact scalar zero-mode identity. The implementation therefore retains three
+small concrete loops and shares the context, phase kernels, shape owner, and
+compensated sums. A constrained internal `project_continuous_signal` template
+should wait for another projector that demonstrates a smaller stable contract;
+it should remain private until there is a real external custom-observable
+requirement.
 
 This abstraction does **not** make every quantum observable measurable in the
 closed worldline sector. Single-particle Green functions and other off-diagonal
@@ -1015,10 +1082,12 @@ With `E` hops, `Q` requested momenta, and `F` requested frequencies, context
 construction is initially `O(N + E log E)` time and `O(N + E)` storage. A
 straight combined projector is `O(NQ + EQF)` time and
 `O(QF(1+d) + d)` per-sample output storage. This is independent of an arbitrary
-imaginary-time resolution. For density alone a path-local `O(N+E)` traversal
-without global sorting is possible (the `QF` projection work remains), but one
-shared ordered context is the more valuable baseline once occupancy observables
-are included; benchmarks can justify a density-only fast path later.
+imaginary-time resolution. The pair-density projector is
+`O((N+E)Q + GQF)` time for `G` event groups and `O(N + QF)` working/result
+storage. For density alone a path-local `O(N+E)` traversal without global
+sorting is possible (the `QF` projection work remains), but one shared ordered
+context is the more valuable baseline once occupancy observables are included;
+benchmarks can justify a density-only fast path later.
 
 ## Files and dependency boundary
 
@@ -1085,6 +1154,9 @@ behavior.
 - Static paths: exact interval amplitudes, including small `omega*(b-a)`.
 - `q == 0` canonical density identities for zero, positive, and negative
   frequency indices.
+- On-site pair-density static spatial phases, site-field conjugation, and
+  time-origin rotation; its `(q,n)=(0,0)` amplitude exactly equals the shared
+  full pair-overlap sweep.
 - `I(0,0) == L*W` in every axis, including boundary-crossing hops.
 - The configuration-level Ward identity over several dimensions, momenta, and
   signed frequencies.
@@ -1095,6 +1167,8 @@ behavior.
   remain unchanged.
 - Equal-time event groups, multiple events on one particle, events at `0` and
   `beta`, and right-continuous seam handling.
+- Coincident pair swaps at `0`, an interior time, and `beta` never expose
+  order-dependent transient occupancies to the pair-density residence signal.
 - Reuse the coincident `0`, internal-seam, and `beta` fixture in
   `CursorRotationMatchesCoincidentSeamTraversalExactly` so rotation and
   measurement prove the same boundary convention rather than maintaining two
@@ -1235,9 +1309,11 @@ derivative and returned decomposition explicit.
 6. **Completed 2026-07-23:** Migrate full pair-overlap evaluation to the shared
    private event sweep, with exact equivalence tests proving unchanged action
    and tie semantics.
-7. Add an occupancy-based diagonal projector as the third use case; then decide
-   whether a private generic projection template is clearer than three small
-   concrete loops.
+7. **Completed 2026-07-23:** Add exact on-site pair-density Matsubara modes as
+   the occupancy-based third projector, with atomic equal-time replay,
+   pair-overlap identity, conjugation, and time-rotation tests. Retain the
+   three concrete loops until another projector demonstrates a useful smaller
+   generic contract.
 8. Add requested-lag imaginary-time output, block/covariance tooling, or
    transform optimisations only in response to a concrete workflow and
    benchmark.

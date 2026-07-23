@@ -15,6 +15,7 @@ namespace qmc {
 
 class ContinuousMeasurementContext;
 class ContinuousParticleModes;
+class ContinuousPairDensityModes;
 class DensityMatsubaraAccumulator;
 class HoppingResponseAccumulator;
 
@@ -119,6 +120,33 @@ private:
   MatsubaraModeField<std::complex<double>> density_;
   std::vector<std::complex<double>> flux_values_;
   std::vector<std::size_t> axis_event_counts_;
+};
+
+// Unnormalised on-site pair-density residence amplitudes for one continuous
+// configuration. The scalar site field is choose(n_x, 2), values use
+// frequency-major Matsubara mode order, and the result owns its complete
+// free-model and Fourier provenance.
+class ContinuousPairDensityModes {
+public:
+  [[nodiscard]] const Model &model() const noexcept { return model_; }
+  [[nodiscard]] const MatsubaraModeSet &modes() const noexcept { return pair_density_.modes(); }
+  // Integral d-tau exp(+i*omega*tau) sum_x exp(-i*q*x) choose(n_x(tau), 2);
+  // units 1/energy. Checked mode access throws out_of_range.
+  [[nodiscard]] std::complex<double> pair_density(std::size_t frequency,
+                                                  std::size_t momentum) const {
+    return pair_density_.at(frequency, momentum);
+  }
+
+private:
+  friend ContinuousPairDensityModes
+  continuous_pair_density_modes(const ContinuousMeasurementContext &context,
+                                const ContinuousMatsubaraPlan &plan);
+
+  ContinuousPairDensityModes(Model model, MatsubaraModeSet modes,
+                             std::vector<std::complex<double>> pair_density_values);
+
+  Model model_;
+  MatsubaraModeField<std::complex<double>> pair_density_;
 };
 
 // Connected density susceptibility for one homogeneous fixed-particle-number
@@ -265,6 +293,21 @@ continuous_particle_modes(const ContinuousMeasurementContext &context,
 [[nodiscard]] ContinuousParticleModes
 continuous_particle_modes(const ContinuousConfiguration &configuration,
                           const ContinuousMatsubaraPlan &plan);
+
+// Projects the exact residence integral of the on-site pair density
+// choose(n_x, 2). Equal-time event groups are applied atomically between
+// positive-duration intervals. Throws invalid_argument when context and plan
+// geometry differ and overflow_error/length_error when an amplitude or result
+// shape is not finite and representable.
+[[nodiscard]] ContinuousPairDensityModes
+continuous_pair_density_modes(const ContinuousMeasurementContext &context,
+                              const ContinuousMatsubaraPlan &plan);
+
+// One-off convenience overload that first owns the configuration's event
+// geometry in a ContinuousMeasurementContext.
+[[nodiscard]] ContinuousPairDensityModes
+continuous_pair_density_modes(const ContinuousConfiguration &configuration,
+                              const ContinuousMatsubaraPlan &plan);
 
 } // namespace qmc
 

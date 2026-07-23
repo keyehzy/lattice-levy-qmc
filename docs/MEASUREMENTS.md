@@ -165,6 +165,36 @@ real nonnegative susceptibility. Both accessors use the selected mode set's
 frequency-major ordering and check each index. The result retains its complete
 model, modes, and nonzero sample count as provenance.
 
+## Exact continuous-time on-site pair density
+
+`continuous_pair_density_modes(context, plan)` reuses the same event geometry
+and selected Matsubara modes to project the exact, unnormalised diagonal field
+
+\[
+P_{\mathbf qn}=\int_0^\beta d\tau\,
+e^{i\omega_n\tau}\sum_{\mathbf x}
+e^{-i\mathbf q\cdot\mathbf x}\binom{n_{\mathbf x}(\tau)}{2}.
+\]
+
+The projector replays a sparse physical-site occupancy map. It integrates the
+current pair field over each positive-duration interval, then applies every hop
+in a coincident event group before the next interval. Order-dependent
+intermediate occupancies inside a zero-duration group are therefore never
+measured. The `ContinuousPairDensityModes` result owns the complete free
+`Model` and selected modes; `pair_density(frequency, momentum)` checks both
+indices and has units of inverse energy.
+
+The zero mode is exactly the existing interaction geometry:
+
+\[
+P_{\mathbf0,0}
+=\texttt{pair_overlap_time(configuration)}.
+\]
+
+The result does not multiply by `U` and does not perform ensemble
+normalization. Those choices belong to a later interaction-energy or
+pair-density correlation workflow.
+
 ## Exact continuous-time hopping response
 
 The same `ContinuousParticleModes` projection returns the dimensionless signed
@@ -216,5 +246,7 @@ Useful exact checks are:
 - `sum_r <n_r> == N` and `S(0) == N`;
 - the spatial sum of connected fixed-`N` density correlations is zero;
 - every exact continuous-time `q == 0` density susceptibility is zero;
+- `P_(0,0)` from continuous pair-density modes equals the exact integrated
+  on-site pair count returned by `pair_overlap_time`;
 - each retained displacement distribution sums to one for `N > 0`;
 - twist curvature agrees with `<W_alpha^2>/beta`.

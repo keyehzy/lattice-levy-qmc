@@ -210,6 +210,11 @@ same primitive sample and returns the full signed-flux gauge response
 `R=<I I^*>/(beta*V)`, axis-resolved diamagnetic term
 `D=<K_axis>/(beta*V)`, and derived paramagnetic current correlation
 `Lambda^p=D*delta-R`, together with sampled complex mean flux diagnostics.
+`continuous_pair_density_modes(context, plan)` is the separate
+occupancy-based diagonal projector. Its unnormalised
+`ContinuousPairDensityModes` result contains the exact residence transform of
+`sum_x exp(-i*q*x)*choose(n_x,2)`; coincident event groups are atomic, and its
+zero-momentum, zero-frequency value exactly matches `pair_overlap_time`.
 
 See [`docs/MEASUREMENTS.md`](../docs/MEASUREMENTS.md) for estimator definitions,
 normalizations, exactness, and retained-grid conventions. The event-based
