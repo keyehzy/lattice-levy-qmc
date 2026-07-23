@@ -224,9 +224,8 @@ See [`docs/MEASUREMENTS.md`](../docs/MEASUREMENTS.md) for estimator definitions,
 normalizations, exactness, and retained-grid conventions. The event-based
 continuous measurement design is documented in
 [`docs/CONTINUOUS_TIME_MEASUREMENTS.md`](../docs/CONTINUOUS_TIME_MEASUREMENTS.md).
-The implemented block-resolved statistics and the remaining
-continuation-data export and exact requested-lag density output are specified
-in
+The implemented block-resolved statistics and continuation-data export, along
+with the remaining exact requested-lag density output, are specified in
 [`docs/ANALYTIC_CONTINUATION_DATA.md`](../docs/ANALYTIC_CONTINUATION_DATA.md).
 
 ## Measurement and plotting demo
@@ -273,3 +272,21 @@ strand mixture remains pair-only and global ideal-gas proposals default to
 zero. Use `--help` for scheduling, locality, collective strand mixtures,
 thinning, seed, and output options. The derivation is in
 [`docs/RANDOM_SEAM_STITCH.md`](../docs/RANDOM_SEAM_STITCH.md).
+
+Continuation-ready density data are opt-in. This example measures the
+nonzero one-dimensional momentum `k=1`, Matsubara indices `0` through `8`, and
+writes four self-describing TSV tables without retaining the scalar trace:
+
+```sh
+./build/dev/examples/qmc_interacting_demo \
+  --particles 6 --beta 1.5 --linear-size 8 --dimension 1 \
+  --hopping 1.0 --interaction 2.0 --burn-in 500 --samples 3000 \
+  --density-momenta '1' --density-frequency-max 8 \
+  --density-measurements-per-block 30 \
+  --density-continuation-dir density-continuation-v1 --no-trace
+```
+
+For multiple dimensions, separate components with commas and momentum rows
+with semicolons, for example `--density-momenta '1,0;0,1'`. The measurement
+count must provide at least two complete blocks. Existing bundle directories
+are never overwritten.

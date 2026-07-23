@@ -18,7 +18,17 @@ qmc_enable_clang_tidy(qmc_ideal_demo)
 qmc_enable_sanitizers(qmc_ideal_demo)
 
 add_executable(qmc_interacting_demo interacting_demo.cpp)
-target_link_libraries(qmc_interacting_demo PRIVATE qmc::interacting cxxopts::cxxopts)
+add_library(qmc_continuation_bundle STATIC continuation_bundle.cpp)
+target_link_libraries(qmc_continuation_bundle PUBLIC qmc::interacting)
+target_include_directories(qmc_continuation_bundle PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+qmc_set_project_warnings(qmc_continuation_bundle)
+qmc_enable_clang_tidy(qmc_continuation_bundle)
+qmc_enable_sanitizers(qmc_continuation_bundle)
+
+target_link_libraries(
+  qmc_interacting_demo
+  PRIVATE qmc_continuation_bundle cxxopts::cxxopts
+)
 qmc_set_project_warnings(qmc_interacting_demo)
 qmc_enable_clang_tidy(qmc_interacting_demo)
 qmc_enable_sanitizers(qmc_interacting_demo)
@@ -83,4 +93,13 @@ if(BUILD_TESTING)
       --output=${CMAKE_CURRENT_BINARY_DIR}/interacting-demo-smoke.dat
   )
   set_tests_properties(qmc_interacting_demo_smoke PROPERTIES LABELS unit)
+
+  add_test(
+    NAME qmc_interacting_demo_continuation_bundle
+    COMMAND
+      "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:qmc_interacting_demo>"
+      "-DOUTPUT_DIRECTORY=${QMC_DEMO_TEST_OUTPUT}/continuation" -P
+      "${CMAKE_CURRENT_SOURCE_DIR}/verify_continuation_bundle.cmake"
+  )
+  set_tests_properties(qmc_interacting_demo_continuation_bundle PROPERTIES LABELS unit)
 endif()

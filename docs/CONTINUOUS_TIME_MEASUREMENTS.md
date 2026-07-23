@@ -1156,8 +1156,8 @@ small event/state primitives without sharing that ownership model.
 Because this adds public result and measurement APIs, implementation should
 also update `cpp/CHANGELOG.md`, the continuous-observable section of the user
 documentation, and retained-observable documentation. The interacting demo
-intentionally remains a scalar trace; its opt-in continuation-data output is
-specified separately in
+retains its scalar trace by default and now provides the opt-in
+continuation-data output specified separately in
 [`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md) and
 [issue 12](https://github.com/keyehzy/lattice-levy-qmc/issues/12). Keep the
 derivation here rather than duplicating it in source comments; public
@@ -1247,13 +1247,12 @@ interacting unit target. Monte Carlo convergence, high-frequency limits, and
 finite-`U` sampled comparisons belong in the labelled statistical target with
 documented seeds, sample counts, and uncertainty-derived tolerances.
 
-Autocorrelation analysis, block/jackknife errors, statistical covariance
-between output modes, continuation-data export, and direct requested-lag
-output are specified separately in
-[`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md). The
-Matsubara workflow is tracked by
-[issue 12](https://github.com/keyehzy/lattice-levy-qmc/issues/12) and the lag
-backend by [issue 13](https://github.com/keyehzy/lattice-levy-qmc/issues/13).
+Implemented block/jackknife data, cross-frequency statistical covariance, and
+continuation-data export, along with the remaining autocorrelation analysis
+and direct requested-lag output, are specified separately in
+[`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md). The lag
+backend is tracked by
+[issue 13](https://github.com/keyehzy/lattice-levy-qmc/issues/13).
 
 ### Design-time numerical checks
 

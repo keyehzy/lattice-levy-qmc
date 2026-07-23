@@ -3,8 +3,9 @@
 Date: 2026-07-23
 
 Status: staged implementation specification. The exact continuous-time
-Matsubara density estimator and its block-resolved statistics are implemented.
-Continuation-data export and direct requested-lag output are not implemented.
+Matsubara density estimator, its block-resolved statistics, and the versioned
+continuation-data export/demo workflow are implemented. Direct requested-lag
+output is not implemented.
 
 ## Goal and boundary
 
@@ -330,11 +331,10 @@ the result at construction, but it must not lazily mutate through a `const`
 accessor. Because `g` is real, the sampling covariance is a real symmetric
 matrix; calculate one triangle and mirror it structurally.
 
-## Versioned continuation-data bundle
+## Implemented versioned continuation-data bundle
 
-The initial interchange format should be a directory of small UTF-8,
-tab-separated files rather than a solver-specific input file or a new binary
-dependency:
+The initial interchange format is a directory of small UTF-8, tab-separated
+files rather than a solver-specific input file or a new binary dependency:
 
 ```text
 density-continuation-v1/
@@ -390,10 +390,10 @@ stochastic-continuation input format, but the QMC demo should not emit a format
 that implies one downstream implementation is authoritative.
 
 The writer validates all tables and metadata before creating the destination.
-It should write to a sibling temporary directory and atomically rename the
-complete bundle where the platform supports it. It must reject an existing
-destination by default and report partial cleanup failures. Output code belongs
-with the example/run workflow rather than the core measurement types.
+It writes to a sibling temporary directory and atomically renames the complete
+bundle where the platform supports it. It rejects an existing destination and
+reports partial cleanup failures. The private writer support code belongs to
+the example/run workflow rather than the core measurement types.
 
 The complete `InteractingModel` is run provenance even though primitive
 particle modes own only the free `Model`. A bundle must never infer `U` from a
@@ -506,19 +506,23 @@ streaming-run work tracked separately by repository issue 5 is implemented, a
 caller can construct the plan and block accumulator around the existing
 explicit sampling loop.
 
-The interacting demo should gain opt-in density-continuation arguments for:
+The interacting demo has opt-in density-continuation arguments for:
 
-- one or more momentum component rows;
-- a nonnegative Matsubara-index range or explicit lag list;
-- measurements per block;
-- continuation-bundle output directory; and
-- whether to retain the existing scalar trace alongside the bundle.
+- `--density-momenta`, using semicolon-separated rows and comma-separated
+  components;
+- `--density-frequency-max`, selecting the inclusive nonnegative range from
+  zero through the supplied Matsubara index;
+- `--density-measurements-per-block`;
+- `--density-continuation-dir`; and
+- `--no-trace`, when the existing scalar trace should not be retained beside
+  the bundle.
 
-The defaults should preserve the current inexpensive scalar demo. Request
-validation and all output-path checks occur before burn-in or random draws.
-The requested measurement count must form complete blocks. The demo supplies
-the complete interacting model and run schedule to the bundle writer and
-prints the number of completed blocks plus the largest standard error.
+The defaults preserve the current inexpensive scalar demo. Continuation
+request validation and all output-path checks occur before sampler
+construction. The requested measurement count must form at least two complete
+blocks. The demo supplies the complete interacting model and run schedule to
+the bundle writer and prints the number of completed blocks plus the largest
+standard error.
 
 When a general streaming observer becomes available, the demo should adopt it
 without changing the block-series or bundle formats. The measurement observer
@@ -587,8 +591,9 @@ loop.
    modes.
 2. **Completed 2026-07-23:** Add per-momentum covariance, standard-error, and
    leave-one-block-out accessors with deterministic table tests.
-3. Add the versioned bundle writer and opt-in interacting-demo workflow,
-   including complete run and interaction provenance.
+3. **Completed 2026-07-23:** Add the versioned bundle writer and opt-in
+   interacting-demo workflow, including complete run and interaction
+   provenance.
 4. Extend the finite-`U` statistical regression to exercise the public block
    workflow and exported values.
 5. Add the separate requested-lag plan, exact interval-overlap projector, block

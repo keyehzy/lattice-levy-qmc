@@ -54,6 +54,16 @@ qmc_set_project_warnings(qmc_interacting_unit_tests)
 qmc_enable_sanitizers(qmc_interacting_unit_tests)
 gtest_discover_tests(qmc_interacting_unit_tests PROPERTIES LABELS unit)
 
+if(TARGET qmc_continuation_bundle)
+  target_sources(
+    qmc_interacting_unit_tests
+    PRIVATE
+      test_continuation_bundle.cpp
+      "${PROJECT_SOURCE_DIR}/examples/continuation_bundle.cpp"
+  )
+  target_include_directories(qmc_interacting_unit_tests PRIVATE "${PROJECT_SOURCE_DIR}/examples")
+endif()
+
 if(QMC_BUILD_STATISTICAL_TESTS)
   add_executable(
     qmc_statistical_tests
