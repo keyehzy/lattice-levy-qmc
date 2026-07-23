@@ -952,10 +952,12 @@ TEST(ContinuousParticleModesTest, ZeroModeFluxIsExactCoveringDisplacement) {
 
   ASSERT_EQ(winding_number, Site({1, -1}));
   EXPECT_EQ(values.density(0, 0), std::complex<double>(1.0, 0.0));
-  EXPECT_EQ(values.flux(0, 0, 0),
-            std::complex<double>(model.linear_size() * winding_number[0], 0.0));
-  EXPECT_EQ(values.flux(0, 0, 1),
-            std::complex<double>(model.linear_size() * winding_number[1], 0.0));
+  EXPECT_EQ(values.flux(0, 0, 0), std::complex<double>(static_cast<double>(model.linear_size()) *
+                                                           static_cast<double>(winding_number[0]),
+                                                       0.0));
+  EXPECT_EQ(values.flux(0, 0, 1), std::complex<double>(static_cast<double>(model.linear_size()) *
+                                                           static_cast<double>(winding_number[1]),
+                                                       0.0));
   EXPECT_EQ(values.axis_event_count(0), 3U);
   EXPECT_EQ(values.axis_event_count(1), 3U);
 }

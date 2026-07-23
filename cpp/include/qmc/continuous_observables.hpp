@@ -495,7 +495,7 @@ private:
 
 // Selects one Cartesian component when reporting a standard error for a
 // complex blocked observable.
-enum class HoppingResponseComponent {
+enum class HoppingResponseComponent : std::uint8_t {
   Real,
   Imaginary,
 };

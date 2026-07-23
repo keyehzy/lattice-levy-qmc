@@ -151,6 +151,7 @@ TEST(ContinuousMatsubaraAccumulatorTest, MatchesOneParticleLehmannReferences) {
   std::array<double, 4> response_square_sums{};
   double diamagnetic_sum = 0.0;
   double diamagnetic_square_sum = 0.0;
+  const double normalization = model.beta() * static_cast<double>(model.volume());
 
   for (std::size_t sample = 0; sample < sample_count; ++sample) {
     const qmc::ContinuousConfiguration configuration =
@@ -161,20 +162,19 @@ TEST(ContinuousMatsubaraAccumulatorTest, MatchesOneParticleLehmannReferences) {
     lag_accumulator.observe(qmc::continuous_density_lag_values(context, lag_plan));
     hopping_accumulator.observe(values);
     for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
-      const double density_observation =
-          std::norm(values.density(frequency, 1)) / (model.beta() * model.volume());
+      const double density_observation = std::norm(values.density(frequency, 1)) / normalization;
       density_sums[frequency] += density_observation;
       density_square_sums[frequency] += density_observation * density_observation;
       for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
         const std::size_t mode = (frequency * modes.momentum_count()) + momentum;
         const double response_observation =
-            std::norm(values.flux(frequency, momentum, 0)) / (model.beta() * model.volume());
+            std::norm(values.flux(frequency, momentum, 0)) / normalization;
         response_sums[mode] += response_observation;
         response_square_sums[mode] += response_observation * response_observation;
       }
     }
     const double diamagnetic_observation =
-        static_cast<double>(values.axis_event_count(0)) / (model.beta() * model.volume());
+        static_cast<double>(values.axis_event_count(0)) / normalization;
     diamagnetic_sum += diamagnetic_observation;
     diamagnetic_square_sum += diamagnetic_observation * diamagnetic_observation;
   }
@@ -277,9 +277,13 @@ TEST(InteractingDistributionTest, MatchesSmallSystemExactDiagonalizationReferenc
       .cycle_updates = 0,
       .global_updates = 1,
       .stitch_updates = 0,
+      .stitch_mixture = {},
       .time_shift_updates = 0,
   };
-  const qmc::RandomSeamStitchOptions random_seam_stitch{.updates = 0};
+  const qmc::RandomSeamStitchOptions random_seam_stitch{
+      .updates = 0,
+      .mixture = {},
+  };
   qmc::InteractingSampler sampler(model, seed);
   const auto advance = [&sampler, &sweep, &random_seam_stitch] {
     sampler.random_seam_stitch_sweep(random_seam_stitch);
@@ -544,12 +548,14 @@ TEST(InteractingDistributionTest, StrongCouplingStitchKernelMatchesExactDiagonal
       .updates = model.free.particle_count(),
       // Strong-coupling calibration: redraw a slab of duration 5/U.
       .fraction = 5.0 / (interaction * beta),
+      .mixture = {},
   };
   const qmc::SweepOptions local_geometry{
       .segment_updates = model.free.particle_count(),
       .segment_fraction = 0.35,
       .cycle_updates = 1,
       .global_updates = 0,
+      .stitch_mixture = {},
   };
   const auto advance = [&sampler, &stitches, &local_geometry] {
     sampler.random_seam_stitch_sweep(stitches);

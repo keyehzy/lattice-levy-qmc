@@ -1088,7 +1088,11 @@ private:
     const std::size_t maximum_boundary_count = detail::checked_add_size(
         maximum_interval_count, 1, "continuous density-lag boundary count exceeds size_t");
 
-    DensityResidenceSeries residence{.momentum_count = momentum_count_};
+    DensityResidenceSeries residence{
+        .momentum_count = momentum_count_,
+        .boundaries = {},
+        .values = {},
+    };
     if (maximum_boundary_count > residence.boundaries.max_size() ||
         maximum_value_count > residence.values.max_size()) {
       throw std::length_error("continuous density-lag residence data exceed vector capacity");
