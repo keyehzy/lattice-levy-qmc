@@ -58,6 +58,8 @@ statistical error bars.
 | `python/interacting_lattice_levy.py` | Event-driven paths, interaction action, update moves, observables, and the finite-\(U\) sampler |
 | `python/demo.py` | One-dimensional ideal-world-line plot |
 | `python/demo_interacting.py` | Finite-\(U\) trace and acceptance-rate demo |
+| `python/qmc_maxent.py` | Single-momentum bosonic MaxEnt adapter |
+| `python/qmc_dynamic_structure.py` | Batch \(S(q,\omega)\), jackknife, and plotting workflow |
 | `python/validate_interacting_ed.py` | Small-system comparison with exact diagonalization |
 | `python/test_lattice_levy.py` | Free-kernel, recursion, winding, bridge, and configuration tests |
 | `python/test_interacting_lattice_levy.py` | Continuous-path, action, update, and state-invariant tests |
@@ -213,8 +215,19 @@ python3 python/qmc_maxent.py density-continuation-v1 \
   --output-dir density-maxent-v1
 ```
 
+To continue every measured nonzero momentum, convert to the per-particle
+dynamic structure factor, propagate block jackknife errors, and write combined
+tables and plots:
+
+```bash
+python3 python/qmc_dynamic_structure.py density-continuation-v1 \
+  --omega-max 12 --omega-points 200 \
+  --output-dir dynamic-structure-v1
+```
+
 See [the MaxEnt integration guide](docs/MAXENT.md) for bundle generation,
-kernel conventions, output tables, and analysis controls.
+kernel conventions, batch output tables, jackknife semantics, and analysis
+controls.
 
 ## Important conventions
 

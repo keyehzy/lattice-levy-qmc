@@ -67,6 +67,13 @@ class DensityContinuationData:
 
 
 @dataclass(frozen=True)
+class DensityContinuationMomentum:
+    ordinal: int
+    indices: tuple[int, ...]
+    exact_constraint: bool
+
+
+@dataclass(frozen=True)
 class PreparedMaxEntInput:
     omega: np.ndarray
     kernel: np.ndarray
@@ -239,6 +246,82 @@ def _validate_manifest(manifest: Mapping[str, str]) -> tuple[str, float]:
     return basis, beta
 
 
+def list_density_continuation_momenta(
+    bundle: str | Path,
+) -> tuple[DensityContinuationMomentum, ...]:
+    """Return the validated momentum catalog of a continuation bundle."""
+
+    bundle_path = Path(bundle).resolve()
+    manifest = _read_manifest(bundle_path / "manifest.tsv")
+    basis, _ = _validate_manifest(manifest)
+    momentum_count = _manifest_int(manifest, "momentum_count")
+    dimension = _manifest_int(manifest, "model_dimension")
+    expected_point_count = _manifest_int(
+        manifest, "frequency_count" if basis == "bosonic_matsubara" else "lag_count"
+    )
+    point_column = "frequency" if basis == "bosonic_matsubara" else "lag"
+    rows = _read_tsv(bundle_path / "values.tsv")
+    momentum_columns = [f"k_{axis}" for axis in range(dimension)]
+    catalog: list[DensityContinuationMomentum] = []
+    for ordinal in range(momentum_count):
+        selected = [
+            row
+            for row in rows
+            if _parse_int(row, "momentum", "values.tsv") == ordinal
+        ]
+        if len(selected) != expected_point_count:
+            raise BundleFormatError(
+                f"values.tsv has {len(selected)} rows for momentum {ordinal}, "
+                f"expected {expected_point_count}"
+            )
+        selected.sort(key=lambda row: _parse_int(row, point_column, "values.tsv"))
+        point_ordinals = np.array(
+            [_parse_int(row, point_column, "values.tsv") for row in selected],
+            dtype=int,
+        )
+        if not np.array_equal(point_ordinals, np.arange(expected_point_count)):
+            raise BundleFormatError(
+                f"values.tsv point ordinals for momentum {ordinal} are not contiguous"
+            )
+        try:
+            indices = tuple(
+                _parse_int(selected[0], key, "values.tsv")
+                for key in momentum_columns
+            )
+        except IndexError as error:
+            raise BundleFormatError(
+                f"values.tsv contains no rows for momentum {ordinal}"
+            ) from error
+        constraints = {
+            _parse_int(row, "exact_constraint", "values.tsv") for row in selected
+        }
+        if not constraints <= {0, 1} or len(constraints) != 1:
+            raise BundleFormatError(
+                f"values.tsv has inconsistent exact constraints for momentum {ordinal}"
+            )
+        for row in selected[1:]:
+            row_indices = tuple(
+                _parse_int(row, key, "values.tsv") for key in momentum_columns
+            )
+            if row_indices != indices:
+                raise BundleFormatError(
+                    f"values.tsv momentum components vary within momentum {ordinal}"
+                )
+        exact_constraint = constraints == {1}
+        if exact_constraint != all(component == 0 for component in indices):
+            raise BundleFormatError(
+                f"values.tsv exact-constraint role disagrees with momentum {ordinal}"
+            )
+        catalog.append(
+            DensityContinuationMomentum(
+                ordinal=ordinal,
+                indices=indices,
+                exact_constraint=exact_constraint,
+            )
+        )
+    return tuple(catalog)
+
+
 def load_density_continuation_bundle(
     bundle: str | Path, momentum_ordinal: int = 0
 ) -> DensityContinuationData:
@@ -376,6 +459,43 @@ def load_density_continuation_bundle(
         standard_errors=standard_errors,
         covariance=covariance,
     )
+
+
+def load_density_block_values(data: DensityContinuationData) -> np.ndarray:
+    """Load one momentum's complete block-by-point observation matrix."""
+
+    block_count = _manifest_int(data.manifest, "completed_block_count")
+    if block_count < 2:
+        raise BundleFormatError("density block data requires at least two blocks")
+    blocks = np.empty((block_count, data.point_count), dtype=float)
+    seen = np.zeros_like(blocks, dtype=bool)
+    for row in _read_tsv(data.bundle / "blocks.tsv"):
+        if _parse_int(row, "momentum", "blocks.tsv") != data.momentum_ordinal:
+            continue
+        block = _parse_int(row, "block", "blocks.tsv")
+        point = _parse_int(row, "frequency_or_lag", "blocks.tsv")
+        if not (0 <= block < block_count and 0 <= point < data.point_count):
+            raise BundleFormatError("blocks.tsv contains an out-of-range matrix index")
+        if seen[block, point]:
+            raise BundleFormatError("blocks.tsv contains a duplicate selected entry")
+        blocks[block, point] = _parse_float(row, "value", "blocks.tsv")
+        seen[block, point] = True
+    if not np.all(seen):
+        raise BundleFormatError(
+            "blocks.tsv does not contain a complete selected block matrix"
+        )
+    reconstructed_mean = np.mean(blocks, axis=0)
+    mean_scale = max(1.0, float(np.max(np.abs(data.means))))
+    if not np.allclose(
+        reconstructed_mean,
+        data.means,
+        rtol=2.0e-12,
+        atol=2.0e-14 * mean_scale,
+    ):
+        raise BundleFormatError(
+            "blocks.tsv selected block means disagree with values.tsv"
+        )
+    return blocks
 
 
 def regularized_bosonic_kernel(

@@ -109,6 +109,84 @@ in `run.json`; no ridge or diagonal replacement is applied. Generate more
 blocks than input points when possible, and repeat the QMC blocking analysis
 until errors are stable.
 
+## Batch dynamic structure factor
+
+`python/qmc_dynamic_structure.py` runs the adapter for every measured nonzero
+momentum in one bundle and converts the per-site dissipative spectrum to the
+conventional positive-frequency, per-particle dynamic structure factor
+
+\[
+S(\mathbf q,\omega)
+=\frac{V}{N}\frac{A_{\mathbf q}(\omega)}
+ {1-\exp(-\beta\omega)},\qquad \omega>0.
+\]
+
+Because the adapter continues \(B_{\mathbf q}(\omega)=A_{\mathbf
+q}(\omega)/\omega\), the regular mesh-origin value is
+
+\[
+S(\mathbf q,0)=\frac{V}{N\beta}B_{\mathbf q}(0).
+\]
+
+The C++ run must request every desired momentum row. For example, a complete
+one-dimensional \(L=8\) lattice grid is
+`--density-momenta '0;1;2;3;4;5;6;7'`. The zero row is useful as an exact
+normalization diagnostic in the bundle but is skipped by batch continuation.
+
+Run all nonzero momenta and propagate the block jackknife through MaxEnt with:
+
+```sh
+python3 python/qmc_dynamic_structure.py density-continuation-v1 \
+  --omega-max 12 \
+  --omega-points 200 \
+  --output-dir dynamic-structure-v1
+```
+
+Use `--momentum-ordinals 1,3,5` to select bundle momentum rows explicitly.
+The default skips the exact fixed-\(N\), zero-momentum constraint and processes
+every other row. `--no-jackknife` performs only the full-sample reconstruction
+when iterating on the real-frequency mesh or other MaxEnt controls.
+
+The batch result contains:
+
+- `dynamic_structure_factor.tsv`: combined \(S(\mathbf q,\omega)\), jackknife
+  standard error, \(A_{\mathbf q}\), and \(B_{\mathbf q}\);
+- `momentum_summary.tsv`: continuum-integrated static weight, peak frequency,
+  their jackknife errors, selected alpha, covariance chi-squared, and retained
+  covariance rank;
+- `dynamic_structure_factor_map.png`: the \(q\)-\(\omega\) intensity map;
+- `dynamic_structure_factor_linecuts.png`: selected momentum line cuts with
+  jackknife error bands;
+- `peak_dispersion.png`: the maximum-intensity frequency versus momentum;
+- `momentum-NNNN/`: the original MaxEnt result plus per-momentum dynamic and
+  jackknife tables; and
+- `batch_run.json`: normalization, wavevector, MaxEnt, and jackknife
+  provenance.
+
+For one-dimensional bundles the plots use the centered first Brillouin zone.
+For higher-dimensional bundles, every wavevector component is retained in the
+tables and plots use the momentum-row axis because a general list of vectors
+does not define a unique path through momentum space.
+
+For every leave-one-block-out reconstruction, the adapter holds fixed the
+covariance matrix and retained eigenspace, real-frequency mesh, default model,
+alpha mesh, and analyzer. Only the jackknife mean changes. The analyzer still
+selects its result from the same alpha mesh for each replicate, and the
+selected alpha is recorded. `jackknife_spectra.tsv` retains every reconstructed
+replicate rather than only the final standard error.
+
+The reported continuum static sum is
+
+\[
+S(\mathbf q)=\frac{V}{N}\int_0^\infty d\omega\,
+A_{\mathbf q}(\omega)\coth(\beta\omega/2).
+\]
+
+It excludes the same elastic zero-frequency delta peak as the MaxEnt
+parameterization. Peak positions are real-frequency-mesh observables and their
+uncertainty cannot be smaller than the chosen mesh spacing without a separate
+peak-interpolation model.
+
 ## Installation boundary
 
 The array-based adapter uses NumPy, SciPy, and the vendored pure-Python MaxEnt

@@ -10,7 +10,10 @@ are also implemented, together with requested-lag export, demo integration,
 small-system Lehmann regression, and a deterministic exact cross-backend
 Fourier-identity regression. A separately maintained adapter for the vendored
 TRIQS/maxent `DataKernel` is implemented in `python/qmc_maxent.py`; it is not
-part of the QMC measurement library.
+part of the QMC measurement library. The downstream
+`python/qmc_dynamic_structure.py` workflow batches that adapter over momenta,
+converts to per-particle \(S(q,\omega)\), propagates block jackknife errors,
+and writes combined tables and plots.
 
 ## Goal and boundary
 

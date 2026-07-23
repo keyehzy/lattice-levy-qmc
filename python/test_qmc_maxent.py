@@ -10,11 +10,20 @@ import pytest
 from qmc_maxent import (
     BundleFormatError,
     MaxEntRunOptions,
+    list_density_continuation_momenta,
+    load_density_block_values,
     load_density_continuation_bundle,
     prepare_maxent_input,
     regularized_bosonic_kernel,
     run_maxent,
     write_adapter_output,
+)
+from qmc_dynamic_structure import (
+    dynamic_structure_factor,
+    integrated_static_structure_factor,
+    jackknife_standard_error,
+    momentum_geometry,
+    run_dynamic_structure_batch,
 )
 
 
@@ -37,7 +46,11 @@ def _synthetic_bundle(path: Path, basis: str = "bosonic_matsubara") -> Path:
         "kernel_convention_id": "positive_density_spectrum_bosonic_v1",
         "model_beta": str(beta),
         "model_dimension": "1",
+        "model_particle_count": "2",
+        "model_linear_size": "4",
+        "lattice_volume": "4",
         "momentum_count": "1",
+        "completed_block_count": "2",
         "frequency_count" if basis == "bosonic_matsubara" else "lag_count": str(
             point_count
         ),
@@ -130,11 +143,19 @@ def test_regularized_kernels_have_finite_origin_limits():
 @pytest.mark.parametrize("basis", ["bosonic_matsubara", "imaginary_time_lag"])
 def test_loads_both_bundle_bases_and_prepares_covariance(tmp_path, basis):
     bundle = _synthetic_bundle(tmp_path / basis, basis)
+    catalog = list_density_continuation_momenta(bundle)
     data = load_density_continuation_bundle(bundle)
+    blocks = load_density_block_values(data)
     options = MaxEntRunOptions(omega_max=8.0, omega_points=51, quiet=True)
     prepared = prepare_maxent_input(data, options)
+    assert len(catalog) == 1
+    assert catalog[0].ordinal == 0
+    assert catalog[0].indices == (1,)
+    assert not catalog[0].exact_constraint
     assert data.basis == basis
     assert data.momentum_indices == (1,)
+    assert blocks.shape == (2, 6)
+    assert np.allclose(np.mean(blocks, axis=0), data.means)
     assert prepared.kernel.shape == (6, 51)
     assert prepared.transformed_kernel.shape == (6, 51)
     assert prepared.retained_covariance_rank == 6
@@ -182,3 +203,81 @@ def test_runs_vendored_data_kernel_and_writes_reconstruction(tmp_path):
     assert metadata["status"] == "completed"
     assert metadata["triqs_maxent_version"] == "4.0.0"
     assert metadata["physical_spectrum"] == "A_density(omega)=omega*B(omega)"
+
+
+def test_dynamic_structure_conversion_and_jackknife_helpers():
+    omega = np.array([0.0, 0.5, 1.0])
+    rescaled = np.array([2.0, 2.0, 2.0])
+    density = omega * rescaled
+    structure = dynamic_structure_factor(
+        omega,
+        rescaled,
+        density,
+        beta=2.0,
+        volume=6,
+        particle_count=3,
+    )
+    assert structure[0] == 2.0
+    assert np.all(structure >= 0.0)
+    static = integrated_static_structure_factor(
+        omega,
+        rescaled,
+        density,
+        beta=2.0,
+        volume=6,
+        particle_count=3,
+    )
+    assert static > 0.0
+
+    replicates = np.array([[1.0, 2.0], [2.0, 4.0], [3.0, 6.0]])
+    assert np.allclose(
+        jackknife_standard_error(replicates),
+        [np.sqrt(4.0 / 3.0), np.sqrt(16.0 / 3.0)],
+    )
+    geometry = momentum_geometry((3,), 4)
+    assert np.allclose(geometry.canonical_wavevector, [1.5 * np.pi])
+    assert np.allclose(geometry.centered_wavevector, [-0.5 * np.pi])
+
+
+def test_batches_maxent_structure_factor_with_jackknife_and_plots(tmp_path):
+    bundle = _synthetic_bundle(tmp_path / "bundle")
+    destination = tmp_path / "dynamic"
+    options = MaxEntRunOptions(
+        omega_max=8.0,
+        omega_points=40,
+        alpha_min=1.0e-2,
+        alpha_max=1.0e2,
+        alpha_points=8,
+        max_iterations=500,
+        quiet=True,
+    )
+
+    output = run_dynamic_structure_batch(
+        bundle,
+        destination,
+        options,
+        jackknife=True,
+        max_linecuts=2,
+    )
+
+    assert output == destination.resolve()
+    for filename in (
+        "dynamic_structure_factor.tsv",
+        "momentum_summary.tsv",
+        "dynamic_structure_factor_map.png",
+        "dynamic_structure_factor_linecuts.png",
+        "peak_dispersion.png",
+        "batch_run.json",
+    ):
+        assert (destination / filename).is_file()
+    momentum_directory = destination / "momentum-0000"
+    assert (momentum_directory / "spectrum.tsv").is_file()
+    assert (momentum_directory / "dynamic_structure_factor.tsv").is_file()
+    assert (momentum_directory / "jackknife_spectra.tsv").is_file()
+    assert (momentum_directory / "jackknife_summary.tsv").is_file()
+
+    metadata = json.loads((destination / "batch_run.json").read_text())
+    assert metadata["schema"] == "qmc-dynamic-structure-factor-v1"
+    assert metadata["momentum_ordinals"] == [0]
+    assert metadata["jackknife_enabled"]
+    assert metadata["jackknife_block_count"] == 2
