@@ -69,8 +69,10 @@ if(QMC_BUILD_STATISTICAL_TESTS)
     qmc_statistical_tests
     test_interacting_statistical.cpp
     test_sampling_statistical.cpp
+    "${PROJECT_SOURCE_DIR}/examples/continuation_bundle.cpp"
   )
   target_link_libraries(qmc_statistical_tests PRIVATE qmc::interacting GTest::gtest_main)
+  target_include_directories(qmc_statistical_tests PRIVATE "${PROJECT_SOURCE_DIR}/examples")
   qmc_set_project_warnings(qmc_statistical_tests)
   qmc_enable_sanitizers(qmc_statistical_tests)
   gtest_discover_tests(qmc_statistical_tests PROPERTIES LABELS statistical)

@@ -63,7 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   invariance.
 - Add a finite-interaction statistical regression comparing continuous density
   susceptibility, hopping response, and the diamagnetic estimator with
-  small-system exact diagonalisation using blocked Markov-chain errors.
+  small-system exact diagonalisation using public density block statistics and
+  blocked Markov-chain errors, including a continuation-bundle round-trip.
 - Add self-describing segment, stitch, fixed-seam stitch-sweep, and random-seam
   stitch option values.
 - Add generated compile-time version metadata in `<qmc/version.hpp>`, sourced

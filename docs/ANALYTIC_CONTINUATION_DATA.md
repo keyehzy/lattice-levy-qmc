@@ -594,8 +594,8 @@ loop.
 3. **Completed 2026-07-23:** Add the versioned bundle writer and opt-in
    interacting-demo workflow, including complete run and interaction
    provenance.
-4. Extend the finite-`U` statistical regression to exercise the public block
-   workflow and exported values.
+4. **Completed 2026-07-23:** Extend the finite-`U` statistical regression to
+   exercise the public block workflow and exported values.
 5. Add the separate requested-lag plan, exact interval-overlap projector, block
    accumulator, and deterministic/Lehmann tests when a direct-`tau` consumer is
    selected.

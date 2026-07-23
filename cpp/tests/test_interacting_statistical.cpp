@@ -1,14 +1,99 @@
+#include "continuation_bundle.hpp"
 #include "qmc/continuous_observables.hpp"
 #include "qmc/interacting_sampler.hpp"
 #include "qmc/path.hpp"
+#include "qmc/version.hpp"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
+#include <stdexcept>
+#include <string>
+#include <system_error>
+#include <vector>
 
 namespace {
+
+class ScopedTemporaryDirectory {
+public:
+  ScopedTemporaryDirectory() {
+    static std::atomic<std::uint64_t> sequence = 0;
+    const auto timestamp =
+        static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+    for (std::uint64_t attempt = 0; attempt < 1024; ++attempt) {
+      path_ = std::filesystem::temp_directory_path() /
+              ("qmc-continuation-statistical-" + std::to_string(timestamp) + "-" +
+               std::to_string(sequence.fetch_add(1)) + "-" + std::to_string(attempt));
+      std::error_code error;
+      if (std::filesystem::create_directory(path_, error)) {
+        return;
+      }
+      if (error && error != std::errc::file_exists) {
+        throw std::filesystem::filesystem_error("failed to create statistical test directory",
+                                                path_, error);
+      }
+    }
+    throw std::runtime_error("failed to reserve a statistical test directory");
+  }
+
+  ~ScopedTemporaryDirectory() {
+    std::error_code error;
+    std::filesystem::remove_all(path_, error);
+  }
+
+  ScopedTemporaryDirectory(const ScopedTemporaryDirectory &) = delete;
+  ScopedTemporaryDirectory &operator=(const ScopedTemporaryDirectory &) = delete;
+
+  [[nodiscard]] const std::filesystem::path &path() const noexcept { return path_; }
+
+private:
+  std::filesystem::path path_;
+};
+
+std::vector<std::string> split_tsv(const std::string &line) {
+  std::vector<std::string> fields;
+  std::size_t begin = 0;
+  while (begin <= line.size()) {
+    const std::size_t end = line.find('\t', begin);
+    fields.push_back(
+        line.substr(begin, end == std::string::npos ? line.size() - begin : end - begin));
+    if (end == std::string::npos) {
+      break;
+    }
+    begin = end + 1;
+  }
+  return fields;
+}
+
+std::vector<std::vector<std::string>> read_tsv(const std::filesystem::path &path) {
+  std::ifstream input(path);
+  if (!input) {
+    throw std::runtime_error("failed to read statistical continuation table: " + path.string());
+  }
+  std::vector<std::vector<std::string>> rows;
+  std::string line;
+  while (std::getline(input, line)) {
+    rows.push_back(split_tsv(line));
+  }
+  return rows;
+}
+
+std::string manifest_value(const std::vector<std::vector<std::string>> &rows,
+                           const std::string &key) {
+  for (std::size_t row = 1; row < rows.size(); ++row) {
+    if (rows[row].size() == 2 && rows[row][0] == key) {
+      return rows[row][1];
+    }
+  }
+  throw std::runtime_error("missing continuation manifest key: " + key);
+}
 
 TEST(ContinuousBridgeDistributionTest, EventCountMatchesConditionedPoissonLaw) {
   constexpr double duration = 0.8;
@@ -140,6 +225,7 @@ TEST(ContinuousMatsubaraAccumulatorTest, MatchesOneParticleLehmannReferences) {
 }
 
 TEST(InteractingDistributionTest, MatchesSmallSystemExactDiagonalizationReference) {
+  constexpr std::uint64_t seed = 20260717;
   constexpr std::size_t burn_in = 2'000;
   constexpr std::size_t sample_count = 30'000;
   constexpr std::size_t block_size = 100;
@@ -155,24 +241,37 @@ TEST(InteractingDistributionTest, MatchesSmallSystemExactDiagonalizationReferenc
       qmc::MatsubaraModeRequest{.momentum_indices = {{1}}, .frequency_indices = {0, 1}});
   const qmc::ContinuousMatsubaraPlan plan(modes);
   qmc::DensityMatsubaraAccumulator density_accumulator(model.free, modes);
+  qmc::DensityMatsubaraBlockAccumulator density_block_accumulator(model.free, modes, block_size);
   qmc::HoppingResponseAccumulator hopping_accumulator(model.free, modes);
-  qmc::InteractingSampler sampler(model, 20260717);
+  const qmc::SweepOptions sweep{
+      .segment_updates = 0,
+      .cycle_updates = 0,
+      .global_updates = 1,
+      .stitch_updates = 0,
+      .time_shift_updates = 0,
+  };
+  const qmc::RandomSeamStitchOptions random_seam_stitch{.updates = 0};
+  qmc::InteractingSampler sampler(model, seed);
+  const auto advance = [&sampler, &sweep, &random_seam_stitch] {
+    sampler.random_seam_stitch_sweep(random_seam_stitch);
+    sampler.sweep(sweep);
+  };
   for (std::size_t update = 0; update < burn_in; ++update) {
-    static_cast<void>(sampler.global_update());
+    advance();
   }
 
   double total_energy = 0.0;
   double kinetic_energy = 0.0;
   double interaction_energy = 0.0;
   double pair_count = 0.0;
-  // Batch means account for autocorrelation in the Markov chain. Entries are
-  // density (n=0,1), finite-frequency flux response, and the diamagnetic term.
-  std::array<double, 4> block_sums{};
-  std::array<double, 4> block_mean_sums{};
-  std::array<double, 4> block_mean_square_sums{};
+  // Density blocking uses the public continuation-data accumulator. Hopping
+  // observables retain local batch means because they have no block-series API.
+  std::array<double, 2> hopping_block_sums{};
+  std::array<double, 2> hopping_block_mean_sums{};
+  std::array<double, 2> hopping_block_mean_square_sums{};
   const double normalization = model.free.beta() * static_cast<double>(model.free.volume());
   for (std::size_t sample = 0; sample < sample_count; ++sample) {
-    static_cast<void>(sampler.global_update());
+    advance();
     const auto value = sampler.observables();
     total_energy += value.total_energy;
     kinetic_energy += value.kinetic_energy;
@@ -182,22 +281,21 @@ TEST(InteractingDistributionTest, MatchesSmallSystemExactDiagonalizationReferenc
     const qmc::ContinuousParticleModes modes_sample =
         qmc::continuous_particle_modes(sampler.state(), plan);
     density_accumulator.observe(modes_sample);
+    density_block_accumulator.observe(modes_sample);
     hopping_accumulator.observe(modes_sample);
-    const std::array observations{
-        std::norm(modes_sample.density(0, 0)) / normalization,
-        std::norm(modes_sample.density(1, 0)) / normalization,
+    const std::array hopping_observations{
         std::norm(modes_sample.flux(1, 0, 0)) / normalization,
         static_cast<double>(modes_sample.axis_event_count(0)) / normalization,
     };
-    for (std::size_t observable = 0; observable < observations.size(); ++observable) {
-      block_sums[observable] += observations[observable];
+    for (std::size_t observable = 0; observable < hopping_observations.size(); ++observable) {
+      hopping_block_sums[observable] += hopping_observations[observable];
     }
     if ((sample + 1) % block_size == 0) {
-      for (std::size_t observable = 0; observable < observations.size(); ++observable) {
-        const double block_mean = block_sums[observable] / static_cast<double>(block_size);
-        block_mean_sums[observable] += block_mean;
-        block_mean_square_sums[observable] += block_mean * block_mean;
-        block_sums[observable] = 0.0;
+      for (std::size_t observable = 0; observable < hopping_observations.size(); ++observable) {
+        const double block_mean = hopping_block_sums[observable] / static_cast<double>(block_size);
+        hopping_block_mean_sums[observable] += block_mean;
+        hopping_block_mean_square_sums[observable] += block_mean * block_mean;
+        hopping_block_sums[observable] = 0.0;
       }
     }
   }
@@ -209,47 +307,182 @@ TEST(InteractingDistributionTest, MatchesSmallSystemExactDiagonalizationReferenc
   EXPECT_NEAR(interaction_energy / denominator, 0.3419709598, 0.018);
   EXPECT_NEAR(pair_count / denominator, 0.2849757998, 0.015);
 
-  std::array<double, 4> block_standard_errors{};
-  for (std::size_t observable = 0; observable < block_standard_errors.size(); ++observable) {
-    const double block_sum = block_mean_sums[observable];
-    const double centered_square_sum = block_mean_square_sums[observable] -
+  std::array<double, 2> hopping_block_standard_errors{};
+  for (std::size_t observable = 0; observable < hopping_block_standard_errors.size();
+       ++observable) {
+    const double block_sum = hopping_block_mean_sums[observable];
+    const double centered_square_sum = hopping_block_mean_square_sums[observable] -
                                        (block_sum * block_sum / static_cast<double>(block_count));
     const double block_variance =
         std::max(0.0, centered_square_sum / static_cast<double>(block_count - 1));
-    block_standard_errors[observable] =
+    hopping_block_standard_errors[observable] =
         std::sqrt(block_variance / static_cast<double>(block_count));
   }
 
   const qmc::ContinuousMatsubaraDensityCorrelations density_result = density_accumulator.finish();
+  const qmc::DensityMatsubaraBlockSeries density_series = density_block_accumulator.finish();
   const qmc::HoppingResponse hopping_result = hopping_accumulator.finish();
   ASSERT_EQ(density_result.sample_count(), sample_count);
+  ASSERT_EQ(density_series.model(), model.free);
+  ASSERT_EQ(density_series.modes(), modes);
+  ASSERT_EQ(density_series.measurements_per_block(), block_size);
+  ASSERT_EQ(density_series.block_count(), block_count);
+  ASSERT_EQ(density_series.sample_count(), sample_count);
   ASSERT_EQ(hopping_result.sample_count(), sample_count);
   const std::array exact_density{0.32798, 0.04773};
   for (std::size_t frequency = 0; frequency < exact_density.size(); ++frequency) {
-    const double sample_mean = block_mean_sums[frequency] / static_cast<double>(block_count);
-    EXPECT_NEAR(density_result.at(frequency, 0), sample_mean, 1e-13);
-    EXPECT_NEAR(density_result.at(frequency, 0), exact_density[frequency],
-                6.0 * block_standard_errors[frequency])
-        << "blocked standard error = " << block_standard_errors[frequency];
+    EXPECT_NEAR(density_result.at(frequency, 0), density_series.mean(frequency, 0), 1e-13);
+    EXPECT_NEAR(density_series.mean(frequency, 0), exact_density[frequency],
+                6.0 * density_series.standard_error(frequency, 0))
+        << "blocked standard error = " << density_series.standard_error(frequency, 0);
   }
-  const double response_mean = block_mean_sums[2] / static_cast<double>(block_count);
+  const double covariance_00 = density_series.covariance_of_mean(0, 0, 0);
+  const double covariance_01 = density_series.covariance_of_mean(0, 0, 1);
+  const double covariance_10 = density_series.covariance_of_mean(0, 1, 0);
+  const double covariance_11 = density_series.covariance_of_mean(0, 1, 1);
+  EXPECT_TRUE(std::isfinite(covariance_00));
+  EXPECT_TRUE(std::isfinite(covariance_01));
+  EXPECT_TRUE(std::isfinite(covariance_10));
+  EXPECT_TRUE(std::isfinite(covariance_11));
+  EXPECT_EQ(covariance_01, covariance_10);
+  EXPECT_NEAR(covariance_00, std::pow(density_series.standard_error(0, 0), 2), 1e-18);
+  EXPECT_NEAR(covariance_11, std::pow(density_series.standard_error(1, 0), 2), 1e-18);
+  EXPECT_GE((covariance_00 * covariance_11) - (covariance_01 * covariance_10), -1e-18);
+
+  const double response_mean = hopping_block_mean_sums[0] / static_cast<double>(block_count);
   EXPECT_NEAR(hopping_result.flux_response(1, 0, 0, 0).real(), response_mean, 1e-13);
   EXPECT_EQ(hopping_result.flux_response(1, 0, 0, 0).imag(), 0.0);
   EXPECT_NEAR(hopping_result.flux_response(1, 0, 0, 0).real(), 0.98151,
-              6.0 * block_standard_errors[2])
-      << "blocked standard error = " << block_standard_errors[2];
+              6.0 * hopping_block_standard_errors[0])
+      << "blocked standard error = " << hopping_block_standard_errors[0];
 
-  const double diamagnetic_mean = block_mean_sums[3] / static_cast<double>(block_count);
+  const double diamagnetic_mean = hopping_block_mean_sums[1] / static_cast<double>(block_count);
   EXPECT_NEAR(hopping_result.diamagnetic(0), diamagnetic_mean, 1e-13);
-  EXPECT_NEAR(hopping_result.diamagnetic(0), 1.16136, 6.0 * block_standard_errors[3])
-      << "blocked standard error = " << block_standard_errors[3];
+  EXPECT_NEAR(hopping_result.diamagnetic(0), 1.16136, 6.0 * hopping_block_standard_errors[1])
+      << "blocked standard error = " << hopping_block_standard_errors[1];
 
   // These caps keep the six-standard-error comparisons discriminating and
   // guard against a silently under-mixed chain.
-  EXPECT_LT(block_standard_errors[0], 0.004);
-  EXPECT_LT(block_standard_errors[1], 0.001);
-  EXPECT_LT(block_standard_errors[2], 0.02);
-  EXPECT_LT(block_standard_errors[3], 0.01);
+  EXPECT_LT(density_series.standard_error(0, 0), 0.004);
+  EXPECT_LT(density_series.standard_error(1, 0), 0.001);
+  EXPECT_LT(hopping_block_standard_errors[0], 0.02);
+  EXPECT_LT(hopping_block_standard_errors[1], 0.01);
+
+  ScopedTemporaryDirectory temporary;
+  const std::filesystem::path bundle = temporary.path() / "density-continuation-v1";
+  qmc::example::write_density_continuation_bundle(bundle, density_series,
+                                                  {
+                                                      .model = model,
+                                                      .seed = seed,
+                                                      .burn_in_sweeps = burn_in,
+                                                      .thinning_sweeps = 1,
+                                                      .sweep = sweep,
+                                                      .random_seam_stitch = random_seam_stitch,
+                                                      .scalar_trace_retained = false,
+                                                      .program = "qmc_statistical_tests",
+                                                      .program_version = std::string(qmc::kVersion),
+                                                  });
+
+  const auto manifest_rows = read_tsv(bundle / "manifest.tsv");
+  ASSERT_FALSE(manifest_rows.empty());
+  EXPECT_EQ(manifest_rows.front(), std::vector<std::string>({"key", "value"}));
+  EXPECT_EQ(manifest_value(manifest_rows, "model_interaction"), "1.2");
+  EXPECT_EQ(manifest_value(manifest_rows, "seed"), std::to_string(seed));
+  EXPECT_EQ(manifest_value(manifest_rows, "burn_in_sweeps"), std::to_string(burn_in));
+  EXPECT_EQ(manifest_value(manifest_rows, "thinning_sweeps"), "1");
+  EXPECT_EQ(manifest_value(manifest_rows, "sweep_global_updates"), "1");
+  EXPECT_EQ(manifest_value(manifest_rows, "random_seam_stitch_updates"), "0");
+  EXPECT_EQ(manifest_value(manifest_rows, "measurements_per_block"), std::to_string(block_size));
+  EXPECT_EQ(manifest_value(manifest_rows, "completed_block_count"), std::to_string(block_count));
+  EXPECT_EQ(manifest_value(manifest_rows, "sample_count"), std::to_string(sample_count));
+  EXPECT_EQ(manifest_value(manifest_rows, "covariance_rank_status"), "full_rank_possible");
+
+  const auto value_rows = read_tsv(bundle / "values.tsv");
+  ASSERT_EQ(value_rows.size(), modes.frequency_count() + 1);
+  EXPECT_EQ(value_rows.front(),
+            std::vector<std::string>({"momentum", "k_0", "frequency", "n", "omega", "mean",
+                                      "standard_error", "exact_constraint"}));
+  for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+    const auto &row = value_rows[frequency + 1];
+    ASSERT_EQ(row.size(), 8U);
+    EXPECT_EQ(std::stoull(row[0]), 0U);
+    EXPECT_EQ(std::stoull(row[1]), 1U);
+    EXPECT_EQ(std::stoull(row[2]), frequency);
+    EXPECT_EQ(std::stoll(row[3]), modes.frequency_index(frequency));
+    EXPECT_DOUBLE_EQ(std::stod(row[4]), modes.frequency(frequency));
+    EXPECT_DOUBLE_EQ(std::stod(row[5]), density_series.mean(frequency, 0));
+    EXPECT_DOUBLE_EQ(std::stod(row[6]), density_series.standard_error(frequency, 0));
+    EXPECT_EQ(row[7], "0");
+  }
+
+  const auto covariance_rows = read_tsv(bundle / "covariance.tsv");
+  ASSERT_EQ(covariance_rows.size(), (modes.frequency_count() * modes.frequency_count()) + 1);
+  EXPECT_EQ(covariance_rows.front(),
+            std::vector<std::string>({"momentum", "left", "right", "covariance_of_mean"}));
+  for (std::size_t row_index = 1; row_index < covariance_rows.size(); ++row_index) {
+    const auto &row = covariance_rows[row_index];
+    ASSERT_EQ(row.size(), 4U);
+    const std::size_t left = std::stoull(row[1]);
+    const std::size_t right = std::stoull(row[2]);
+    EXPECT_EQ(std::stoull(row[0]), 0U);
+    ASSERT_LT(left, modes.frequency_count());
+    ASSERT_LT(right, modes.frequency_count());
+    EXPECT_DOUBLE_EQ(std::stod(row[3]), density_series.covariance_of_mean(0, left, right));
+  }
+
+  const auto block_rows = read_tsv(bundle / "blocks.tsv");
+  ASSERT_EQ(block_rows.size(), (block_count * modes.frequency_count()) + 1);
+  EXPECT_EQ(block_rows.front(),
+            std::vector<std::string>({"block", "momentum", "frequency_or_lag", "value"}));
+  std::vector<std::array<double, 2>> exported_blocks(block_count);
+  std::vector<bool> exported_block_seen(block_count * modes.frequency_count(), false);
+  for (std::size_t row_index = 1; row_index < block_rows.size(); ++row_index) {
+    const auto &row = block_rows[row_index];
+    ASSERT_EQ(row.size(), 4U);
+    const std::size_t block = std::stoull(row[0]);
+    const std::size_t frequency = std::stoull(row[2]);
+    ASSERT_LT(block, block_count);
+    ASSERT_LT(frequency, modes.frequency_count());
+    EXPECT_EQ(std::stoull(row[1]), 0U);
+    const std::size_t seen_index = (block * modes.frequency_count()) + frequency;
+    EXPECT_FALSE(exported_block_seen[seen_index]);
+    exported_block_seen[seen_index] = true;
+    exported_blocks[block][frequency] = std::stod(row[3]);
+    EXPECT_DOUBLE_EQ(exported_blocks[block][frequency],
+                     density_series.block_value(block, frequency, 0));
+  }
+  EXPECT_TRUE(std::ranges::all_of(exported_block_seen, [](const bool seen) { return seen; }));
+
+  for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+    double exported_mean = 0.0;
+    for (std::size_t block = 0; block < block_count; ++block) {
+      exported_mean += exported_blocks[block][frequency] / static_cast<double>(block_count);
+    }
+    EXPECT_NEAR(exported_mean, density_series.mean(frequency, 0), 1e-14);
+
+    for (const std::size_t omitted_block : {std::size_t{0}, block_count - 1}) {
+      double exported_jackknife_mean = 0.0;
+      for (std::size_t block = 0; block < block_count; ++block) {
+        if (block != omitted_block) {
+          exported_jackknife_mean +=
+              exported_blocks[block][frequency] / static_cast<double>(block_count - 1);
+        }
+      }
+      EXPECT_NEAR(exported_jackknife_mean,
+                  density_series.jackknife_mean(omitted_block, frequency, 0), 1e-14);
+    }
+  }
+  for (std::size_t left = 0; left < modes.frequency_count(); ++left) {
+    for (std::size_t right = 0; right < modes.frequency_count(); ++right) {
+      double exported_covariance = 0.0;
+      for (std::size_t block = 0; block < block_count; ++block) {
+        exported_covariance += (exported_blocks[block][left] - density_series.mean(left, 0)) *
+                               (exported_blocks[block][right] - density_series.mean(right, 0));
+      }
+      exported_covariance /= static_cast<double>(block_count * (block_count - 1));
+      EXPECT_NEAR(exported_covariance, density_series.covariance_of_mean(0, left, right), 1e-16);
+    }
+  }
 
   const auto acceptance = sampler.statistics(qmc::MoveKind::GlobalMove).acceptance();
   ASSERT_TRUE(acceptance.has_value());
