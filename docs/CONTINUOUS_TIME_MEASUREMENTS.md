@@ -12,8 +12,10 @@ accumulator and its zero/finite-momentum Lehmann-reference tests (step 5), plus
 the shared event-sweep migration of full pair-overlap evaluation (step 6), plus
 the occupancy-based on-site pair-density projector and its deterministic
 boundary/identity tests (step 7), were completed through step 4 on 2026-07-22
-and through step 7 on 2026-07-23. This document remains the design
-specification and contains no implementation.
+and through step 7 on 2026-07-23. The deterministic global covering-space
+translation-covariance and auto-response-invariance check was completed on
+2026-07-23. This document remains the design specification and contains no
+implementation.
 
 ## Scope and recommendation
 
@@ -1161,8 +1163,9 @@ behavior.
 - The configuration-level Ward identity over several dimensions, momenta, and
   signed frequencies.
 - Conjugation under `(q,n) -> (-q,-n)`.
-- A global covering-space translation by `r` multiplies both primitive fields
-  by `exp(-i*q*r)` and leaves auto responses unchanged.
+- **Completed 2026-07-23:** A global covering-space translation by `r`
+  multiplies density, flux, and pair-density primitive fields by
+  `exp(-i*q*r)` and leaves auto responses unchanged.
 - The known phase under `rotate_configuration_time_origin`; auto correlations
   remain unchanged.
 - Equal-time event groups, multiple events on one particle, events at `0` and

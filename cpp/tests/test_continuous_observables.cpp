@@ -130,6 +130,17 @@ ContinuousConfiguration atomic_pair_density_configuration() {
   return ContinuousConfiguration(model, Permutation({1, 0}), {first, second});
 }
 
+ContinuousConfiguration translated_configuration(const ContinuousConfiguration &configuration,
+                                                 const Site &displacement) {
+  std::vector<ContinuousPath> translated_worldlines;
+  translated_worldlines.reserve(configuration.worldlines().size());
+  for (const ContinuousPath &path : configuration.worldlines()) {
+    translated_worldlines.push_back(path.translated(displacement));
+  }
+  return ContinuousConfiguration(configuration.model(), configuration.topology(),
+                                 std::move(translated_worldlines));
+}
+
 TEST(ContinuousMatsubaraPlanTest, OwnsModesAndEnforcesSymmetricFrequencyBound) {
   constexpr std::int64_t maximum = ContinuousMatsubaraPlan::kMaximumAbsoluteFrequencyIndex;
   const MatsubaraModeSet modes =
@@ -591,6 +602,72 @@ TEST(ContinuousParticleModesTest, TimeOriginRotationAppliesTheSignedMatsubaraPha
   }
 }
 
+TEST(ContinuousParticleModesTest,
+     GlobalCoveringTranslationAppliesMomentumPhaseAndPreservesAutoResponses) {
+  const ContinuousConfiguration configuration = multidimensional_projection_configuration();
+  const Site displacement{6, -7};
+  const ContinuousConfiguration translated = translated_configuration(configuration, displacement);
+  const Model model = configuration.model();
+  const TorusLayout layout(model.linear_size(), model.dimension());
+  const MatsubaraModeSet modes =
+      make_continuous_modes(model.beta(), layout, {{0, 0}, {1, 2}, {4, 3}, {2, 0}}, {-3, -1, 0, 2});
+  const ContinuousMatsubaraPlan plan(modes);
+  const ContinuousParticleModes original_values = continuous_particle_modes(configuration, plan);
+  const ContinuousParticleModes translated_values = continuous_particle_modes(translated, plan);
+
+  DensityMatsubaraAccumulator original_density_accumulator(model, modes);
+  DensityMatsubaraAccumulator translated_density_accumulator(model, modes);
+  HoppingResponseAccumulator original_hopping_accumulator(model, modes);
+  HoppingResponseAccumulator translated_hopping_accumulator(model, modes);
+  original_density_accumulator.observe(original_values);
+  translated_density_accumulator.observe(translated_values);
+  original_hopping_accumulator.observe(original_values);
+  translated_hopping_accumulator.observe(translated_values);
+  const ContinuousMatsubaraDensityCorrelations original_density =
+      original_density_accumulator.finish();
+  const ContinuousMatsubaraDensityCorrelations translated_density =
+      translated_density_accumulator.finish();
+  const HoppingResponse original_hopping = original_hopping_accumulator.finish();
+  const HoppingResponse translated_hopping = translated_hopping_accumulator.finish();
+
+  const auto expect_complex_near = [](const std::complex<double> actual,
+                                      const std::complex<double> expected) {
+    const double tolerance = 5e-13 * (1.0 + std::abs(actual) + std::abs(expected));
+    EXPECT_NEAR(std::abs(actual - expected), 0.0, tolerance);
+  };
+  const SiteId physical_displacement = layout.encode_covering(displacement);
+  for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+    for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+      const std::complex<double> translation_phase =
+          detail::matsubara_site_phase(modes, momentum, physical_displacement);
+      expect_complex_near(translated_values.density(frequency, momentum),
+                          translation_phase * original_values.density(frequency, momentum));
+      expect_complex_near(translated_density.mean_amplitude(frequency, momentum),
+                          translation_phase * original_density.mean_amplitude(frequency, momentum));
+      EXPECT_NEAR(translated_density.at(frequency, momentum),
+                  original_density.at(frequency, momentum), 5e-13);
+
+      for (std::size_t left = 0; left < model.dimension(); ++left) {
+        expect_complex_near(translated_values.flux(frequency, momentum, left),
+                            translation_phase * original_values.flux(frequency, momentum, left));
+        expect_complex_near(translated_hopping.mean_flux(frequency, momentum, left),
+                            translation_phase *
+                                original_hopping.mean_flux(frequency, momentum, left));
+        for (std::size_t right = 0; right < model.dimension(); ++right) {
+          expect_complex_near(translated_hopping.flux_response(frequency, momentum, left, right),
+                              original_hopping.flux_response(frequency, momentum, left, right));
+          expect_complex_near(translated_hopping.paramagnetic(frequency, momentum, left, right),
+                              original_hopping.paramagnetic(frequency, momentum, left, right));
+        }
+      }
+    }
+  }
+  for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
+    EXPECT_EQ(translated_values.axis_event_count(axis), original_values.axis_event_count(axis));
+    EXPECT_EQ(translated_hopping.diamagnetic(axis), original_hopping.diamagnetic(axis));
+  }
+}
+
 TEST(ContinuousParticleModesTest, RejectsContextAndPlanGeometryMismatch) {
   const ContinuousConfiguration configuration = test::coincident_seam_configuration();
   const ContinuousMeasurementContext context(configuration);
@@ -733,6 +810,32 @@ TEST(ContinuousPairDensityModesTest, ObeysSiteFieldConjugationAndTimeOriginRotat
       EXPECT_NEAR(std::abs(shifted.pair_density(frequency, momentum) -
                            rotation * original.pair_density(frequency, momentum)),
                   0.0, 3e-13);
+    }
+  }
+}
+
+TEST(ContinuousPairDensityModesTest, GlobalCoveringTranslationAppliesMomentumPhase) {
+  const ContinuousConfiguration configuration = test::coincident_seam_configuration();
+  const Site displacement{7};
+  const ContinuousConfiguration translated = translated_configuration(configuration, displacement);
+  const TorusLayout layout(configuration.model().linear_size(), configuration.model().dimension());
+  const MatsubaraModeSet modes = make_continuous_modes(configuration.model().beta(), layout,
+                                                       {{0}, {1}, {4}}, {-2, -1, 0, 1, 2});
+  const ContinuousMatsubaraPlan plan(modes);
+  const ContinuousPairDensityModes original = continuous_pair_density_modes(configuration, plan);
+  const ContinuousPairDensityModes shifted = continuous_pair_density_modes(translated, plan);
+
+  ASSERT_GT(std::abs(original.pair_density(2, 1)), 0.1);
+  const SiteId physical_displacement = layout.encode_covering(displacement);
+  for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+    for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+      const std::complex<double> translation_phase =
+          detail::matsubara_site_phase(modes, momentum, physical_displacement);
+      const std::complex<double> expected =
+          translation_phase * original.pair_density(frequency, momentum);
+      const std::complex<double> actual = shifted.pair_density(frequency, momentum);
+      const double tolerance = 5e-13 * (1.0 + std::abs(actual) + std::abs(expected));
+      EXPECT_NEAR(std::abs(actual - expected), 0.0, tolerance);
     }
   }
 }

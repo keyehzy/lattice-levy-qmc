@@ -50,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `ContinuousPairDensityModes` and exact occupancy-replay projection of
   unnormalised on-site pair-density Matsubara amplitudes, with atomic
   equal-time groups and an exact pair-overlap zero mode.
+- Add deterministic global covering-space translation regressions for
+  continuous particle and pair-density modes, including auto-response
+  invariance.
 - Add self-describing segment, stitch, fixed-seam stitch-sweep, and random-seam
   stitch option values.
 - Add generated compile-time version metadata in `<qmc/version.hpp>`, sourced
