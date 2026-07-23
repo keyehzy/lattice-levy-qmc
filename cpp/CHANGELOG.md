@@ -63,6 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no-overwrite directory publication.
 - Add a one-particle Lehmann regression for exact requested-lag density
   correlations at several imaginary-time evaluation points and momenta.
+- Add a deterministic cross-backend regression that analytically integrates
+  every piecewise-affine requested-lag segment and reproduces the
+  time-reflection-symmetrized continuous Matsubara density observation,
+  including exact fixed-particle-number zero-momentum centering.
 - Add `HoppingResponseAccumulator` and `HoppingResponse` for analytically
   centred signed-flux gauge response, axis-resolved diamagnetic terms, derived
   paramagnetic current correlations, and sampled mean-flux diagnostics.

@@ -277,6 +277,102 @@ double reference_symmetrized_density_lag_overlap(const ContinuousConfiguration &
          (0.5 * reference_raw_density_lag_overlap(configuration, lags, momentum, reflected));
 }
 
+std::vector<double>
+density_lag_linear_segment_boundaries(const ContinuousMeasurementContext &context) {
+  const double beta = context.model().beta();
+  std::vector<double> event_times{0.0};
+  event_times.reserve(context.event_group_count() + 1);
+  for (std::size_t group = 0; group < context.event_group_count(); ++group) {
+    const double time = context.event_time(group);
+    event_times.push_back(time == beta ? 0.0 : time);
+  }
+  std::ranges::sort(event_times);
+  event_times.erase(std::ranges::unique(event_times).begin(), event_times.end());
+
+  std::vector<double> boundaries{0.0, beta};
+  boundaries.reserve((event_times.size() * event_times.size()) + 2);
+  // A circular autocorrelation of step functions is affine between pairwise
+  // differences of their discontinuity times.
+  for (const double shifted_event : event_times) {
+    for (const double base_event : event_times) {
+      double boundary = shifted_event - base_event;
+      if (boundary < 0.0) {
+        boundary += beta;
+      }
+      if (boundary > 0.0 && boundary < beta) {
+        boundaries.push_back(boundary);
+      }
+    }
+  }
+  std::ranges::sort(boundaries);
+
+  const double merge_tolerance = 64.0 * std::numeric_limits<double>::epsilon() * beta;
+  std::vector<double> merged;
+  merged.reserve(boundaries.size());
+  for (const double boundary : boundaries) {
+    if (merged.empty() || boundary - merged.back() > merge_tolerance) {
+      merged.push_back(boundary);
+    }
+  }
+  merged.front() = 0.0;
+  merged.back() = beta;
+  return merged;
+}
+
+std::complex<double> integrate_affine_matsubara_segment(const double begin, const double end,
+                                                        const double value_at_begin,
+                                                        const double slope,
+                                                        const double frequency) {
+  const double duration = end - begin;
+  if (frequency == 0.0) {
+    return {value_at_begin * duration + 0.5 * slope * duration * duration, 0.0};
+  }
+
+  const std::complex<double> imaginary{0.0, 1.0};
+  const double phase_span = frequency * duration;
+  std::complex<double> constant_integral;
+  std::complex<double> linear_integral;
+  if (std::abs(phase_span) < 1e-4) {
+    std::complex<double> term{1.0, 0.0};
+    std::complex<double> constant_series{1.0, 0.0};
+    std::complex<double> linear_series{0.5, 0.0};
+    for (std::size_t order = 1; order <= 12; ++order) {
+      term *= imaginary * phase_span / static_cast<double>(order);
+      constant_series += term / static_cast<double>(order + 1);
+      linear_series += term / static_cast<double>(order + 2);
+    }
+    constant_integral = duration * constant_series;
+    linear_integral = duration * duration * linear_series;
+  } else {
+    const std::complex<double> end_phase = std::polar(1.0, phase_span);
+    constant_integral = (end_phase - 1.0) / (imaginary * frequency);
+    linear_integral = (end_phase * (1.0 - imaginary * phase_span) - 1.0) / (frequency * frequency);
+  }
+
+  return std::polar(1.0, frequency * begin) *
+         ((value_at_begin * constant_integral) + (slope * linear_integral));
+}
+
+std::complex<double> exact_piecewise_lag_transform(const ContinuousDensityLagValues &values,
+                                                   const std::span<const double> segment_boundaries,
+                                                   const std::size_t momentum,
+                                                   const double frequency) {
+  std::complex<double> transform{0.0, 0.0};
+  for (std::size_t segment = 0; segment + 1 < segment_boundaries.size(); ++segment) {
+    const double begin = segment_boundaries[segment];
+    const double end = segment_boundaries[segment + 1];
+    const double duration = end - begin;
+    const double first_lag = begin + duration / 3.0;
+    const double second_lag = begin + 2.0 * duration / 3.0;
+    const double first_value = values.overlap(2 * segment, momentum);
+    const double second_value = values.overlap((2 * segment) + 1, momentum);
+    const double slope = (second_value - first_value) / (second_lag - first_lag);
+    const double value_at_begin = first_value - slope * (first_lag - begin);
+    transform += integrate_affine_matsubara_segment(begin, end, value_at_begin, slope, frequency);
+  }
+  return transform;
+}
+
 TEST(ContinuousMatsubaraPlanTest, OwnsModesAndEnforcesSymmetricFrequencyBound) {
   constexpr std::int64_t maximum = ContinuousMatsubaraPlan::kMaximumAbsoluteFrequencyIndex;
   const MatsubaraModeSet modes =
@@ -677,6 +773,86 @@ TEST(ContinuousDensityLagValuesTest,
       EXPECT_NEAR(value, time_rotated.overlap(lag, momentum), tolerance);
       if (lags.lag(lag) == 0.0) {
         EXPECT_GE(value, 0.0);
+      }
+    }
+  }
+}
+
+TEST(ContinuousDensityLagValuesTest,
+     ExactPiecewiseLagTransformReproducesContinuousMatsubaraDensityObservation) {
+  const std::array configurations{
+      static_density_lag_configuration(),
+      test::coincident_seam_configuration(),
+      multidimensional_projection_configuration(),
+      multiple_cycle_density_lag_configuration(),
+  };
+
+  for (const ContinuousConfiguration &configuration : configurations) {
+    const Model &model = configuration.model();
+    const TorusLayout layout(model.linear_size(), model.dimension());
+    std::vector<std::vector<std::size_t>> momenta(1,
+                                                  std::vector<std::size_t>(model.dimension(), 0));
+    std::vector<std::size_t> forward(model.dimension(), 0);
+    forward[0] = 1;
+    momenta.push_back(forward);
+    forward[0] = static_cast<std::size_t>(model.linear_size() - 1);
+    momenta.push_back(forward);
+    if (model.dimension() > 1) {
+      std::vector<std::size_t> mixed(model.dimension(), 1);
+      mixed[0] = 2;
+      momenta.push_back(std::move(mixed));
+    }
+
+    const ContinuousMeasurementContext context(configuration);
+    const std::vector<double> boundaries = density_lag_linear_segment_boundaries(context);
+    std::vector<double> evaluation_lags;
+    evaluation_lags.reserve(2 * (boundaries.size() - 1));
+    for (std::size_t segment = 0; segment + 1 < boundaries.size(); ++segment) {
+      const double begin = boundaries[segment];
+      const double duration = boundaries[segment + 1] - begin;
+      evaluation_lags.push_back(begin + duration / 3.0);
+      evaluation_lags.push_back(begin + 2.0 * duration / 3.0);
+    }
+
+    const ImaginaryTimeLagSet lags =
+        make_continuous_lags(model.beta(), layout, momenta, std::move(evaluation_lags));
+    const ContinuousDensityLagValues lag_values =
+        continuous_density_lag_values(context, ContinuousDensityLagPlan(lags));
+    const MatsubaraModeSet modes =
+        make_continuous_modes(model.beta(), layout, momenta, {-2, -1, 0, 1, 2});
+    const ContinuousParticleModes mode_values =
+        continuous_particle_modes(context, ContinuousMatsubaraPlan(modes));
+    const double normalization = model.beta() * static_cast<double>(model.volume());
+
+    for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+      for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+        const std::size_t reflected_frequency = modes.frequency_count() - frequency - 1;
+        ASSERT_EQ(modes.frequency_index(reflected_frequency), -modes.frequency_index(frequency));
+        const auto centered_norm = [&](const std::size_t frequency_ordinal) {
+          std::complex<double> amplitude = mode_values.density(frequency_ordinal, momentum);
+          if (momentum == 0 && modes.frequency_index(frequency_ordinal) == 0) {
+            amplitude -= model.beta() * static_cast<double>(model.particle_count());
+          }
+          return std::norm(amplitude);
+        };
+        const double expected =
+            0.5 * (centered_norm(frequency) + centered_norm(reflected_frequency)) / normalization;
+        std::complex<double> integrated = exact_piecewise_lag_transform(
+            lag_values, boundaries, momentum, modes.frequency(frequency));
+        if (momentum == 0) {
+          const double particle_count = static_cast<double>(model.particle_count());
+          integrated -= integrate_affine_matsubara_segment(
+              0.0, model.beta(), model.beta() * particle_count * particle_count, 0.0,
+              modes.frequency(frequency));
+        }
+        integrated /= normalization;
+        const double tolerance = 2e-11 * (1.0 + expected);
+        EXPECT_NEAR(integrated.real(), expected, tolerance)
+            << "frequency index = " << modes.frequency_index(frequency)
+            << ", momentum ordinal = " << momentum;
+        EXPECT_NEAR(integrated.imag(), 0.0, tolerance)
+            << "frequency index = " << modes.frequency_index(frequency)
+            << ", momentum ordinal = " << momentum;
       }
     }
   }

@@ -7,7 +7,8 @@ Matsubara density estimator, its block-resolved statistics, and the versioned
 continuation-data export/demo workflow are implemented. The exact primitive
 requested-lag plan, interval-overlap projector, and block-resolved statistics
 are also implemented, together with requested-lag export, demo integration,
-and a small-system Lehmann regression.
+small-system Lehmann regression, and a deterministic exact cross-backend
+Fourier-identity regression.
 
 ## Goal and boundary
 
@@ -575,9 +576,14 @@ loop.
 - Static, single-event, coincident-event, zero/beta seam, single-site, empty,
   and multiple-cycle configurations match a direct interval-intersection
   reference.
-- Exact integration of the piecewise lag correlation against a Matsubara phase
-  reproduces `|delta rho(q,n)|^2/(beta*V)` for deterministic fixtures. Sampling
-  a finite lag list and applying a quadrature is explicitly not this test.
+- **Completed 2026-07-23:** Exact integration of the real,
+  time-reflection-symmetrised piecewise lag correlation against a Matsubara
+  phase reproduces
+  `[|delta rho(q,n)|^2 + |delta rho(q,-n)|^2]/(2*beta*V)` for deterministic
+  fixtures. The two terms have the same ensemble mean, and at `n == 0` this
+  reduces configuration by configuration to
+  `|delta rho(q,0)|^2/(beta*V)`. Sampling a finite lag list and applying a
+  quadrature is explicitly not this test.
 - Small-system Lehmann values agree at several lags and momenta.
 
 ### Markov-chain and continuation-data tests
