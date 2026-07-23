@@ -44,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `DensityMatsubaraAccumulator` and the provenance-owning
   `ContinuousMatsubaraDensityCorrelations` result for analytically centred
   continuous-time density susceptibility and sampled mean amplitudes.
+- Add `HoppingResponseAccumulator` and `HoppingResponse` for analytically
+  centred signed-flux gauge response, axis-resolved diamagnetic terms, derived
+  paramagnetic current correlations, and sampled mean-flux diagnostics.
 - Add self-describing segment, stitch, fixed-seam stitch-sweep, and random-seam
   stitch option values.
 - Add generated compile-time version metadata in `<qmc/version.hpp>`, sourced

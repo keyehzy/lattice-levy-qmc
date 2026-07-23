@@ -16,6 +16,7 @@ namespace qmc {
 class ContinuousMeasurementContext;
 class ContinuousParticleModes;
 class DensityMatsubaraAccumulator;
+class HoppingResponseAccumulator;
 
 // Reusable continuous-time phase plan. The stricter signed-frequency bound is
 // a binary64 phase-reduction contract and is intentionally not imposed by the
@@ -177,6 +178,78 @@ private:
   std::vector<std::complex<double>> amplitude_sums_;
   std::vector<double> centered_norm_sums_;
   std::vector<std::complex<double>> analytic_means_;
+};
+
+// Gauge response to the dimensionless positive-bond Peierls source. The full
+// flux response R=<I I^*>/(beta*V) includes the event contact term and has
+// units of energy per site. The sampled uncentred mean flux is retained as a
+// time-reversal diagnostic; the present source-free model has exact mean zero.
+class HoppingResponse {
+public:
+  [[nodiscard]] const Model &model() const noexcept { return model_; }
+  [[nodiscard]] const MatsubaraModeSet &modes() const noexcept { return modes_; }
+  [[nodiscard]] std::size_t sample_count() const noexcept { return sample_count_; }
+  // All component accessors check frequency, momentum, and physical-axis
+  // indices and throw out_of_range for an unknown component.
+  [[nodiscard]] std::complex<double> mean_flux(std::size_t frequency, std::size_t momentum,
+                                               std::size_t axis) const;
+  [[nodiscard]] std::complex<double> flux_response(std::size_t frequency, std::size_t momentum,
+                                                   std::size_t left, std::size_t right) const;
+  // <K_axis>/(beta*V), equal to the negative axis kinetic energy per site.
+  [[nodiscard]] double diamagnetic(std::size_t axis) const;
+  // The time-ordered paramagnetic current correlation D*delta-R.
+  [[nodiscard]] std::complex<double> paramagnetic(std::size_t frequency, std::size_t momentum,
+                                                  std::size_t left, std::size_t right) const;
+
+private:
+  friend class HoppingResponseAccumulator;
+
+  HoppingResponse(Model model, MatsubaraModeSet modes,
+                  std::vector<std::complex<double>> mean_flux_values,
+                  std::vector<std::complex<double>> flux_response_values,
+                  std::vector<double> diamagnetic_values, std::size_t sample_count);
+
+  [[nodiscard]] std::size_t flux_index(std::size_t frequency, std::size_t momentum,
+                                       std::size_t axis) const;
+  [[nodiscard]] std::size_t response_index(std::size_t frequency, std::size_t momentum,
+                                           std::size_t left, std::size_t right) const;
+
+  Model model_;
+  MatsubaraModeSet modes_;
+  std::vector<std::complex<double>> mean_flux_values_;
+  std::vector<std::complex<double>> flux_response_values_;
+  std::vector<double> diamagnetic_values_;
+  std::size_t sample_count_;
+};
+
+// Averages exact signed hopping-flux amplitudes and event counts for one
+// complete free Model and selected Matsubara mode set. The exact source-free
+// mean flux is zero, so response products are analytically centred. observe()
+// validates every candidate sum and count before mutating the accumulator.
+class HoppingResponseAccumulator {
+public:
+  // Throws invalid_argument when model beta/layout and modes differ.
+  HoppingResponseAccumulator(Model model, MatsubaraModeSet modes);
+
+  [[nodiscard]] const Model &model() const noexcept { return model_; }
+  [[nodiscard]] const MatsubaraModeSet &modes() const noexcept { return modes_; }
+  [[nodiscard]] std::size_t sample_count() const noexcept { return sample_count_; }
+
+  // Throws invalid_argument for different model or mode provenance and
+  // overflow_error if any candidate moment, event count, or sample count is
+  // not representable. A failed observation leaves the accumulator unchanged.
+  void observe(const ContinuousParticleModes &values);
+  // Throws logic_error when no sample has been observed and overflow_error if
+  // a normalized response is not finite.
+  [[nodiscard]] HoppingResponse finish() const;
+
+private:
+  Model model_;
+  MatsubaraModeSet modes_;
+  std::size_t sample_count_ = 0;
+  std::vector<std::complex<double>> flux_sums_;
+  std::vector<std::complex<double>> response_sums_;
+  std::vector<std::size_t> axis_event_count_sums_;
 };
 
 // Projects exact residence integrals and event impulses in one grouped event

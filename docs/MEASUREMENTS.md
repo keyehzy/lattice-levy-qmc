@@ -165,6 +165,42 @@ real nonnegative susceptibility. Both accessors use the selected mode set's
 frequency-major ordering and check each index. The result retains its complete
 model, modes, and nonzero sample count as provenance.
 
+## Exact continuous-time hopping response
+
+The same `ContinuousParticleModes` projection returns the dimensionless signed
+hopping flux
+
+\[
+I_\alpha(\mathbf q,i\omega_n)=
+\sum_{e:\alpha_e=\alpha}
+s_e e^{i\omega_n\tau_e-i\mathbf q\cdot
+(\mathbf x_e+s_e\hat\alpha/2)}
+\]
+
+and the unsigned event count `K_alpha` on each physical axis. The midpoint is
+an oriented positive-bond Peierls-source convention; no electric charge or
+lattice-spacing factor is included.
+
+`HoppingResponseAccumulator` binds the complete free `Model` and mode set,
+rejects incompatible samples before mutation, and uses the exact zero flux
+mean of the source-free, time-reversal-invariant model. Its finished
+`HoppingResponse` returns
+
+\[
+R_{\alpha\beta}=
+\frac{\langle I_\alpha I_\beta^*\rangle}{\beta V},\qquad
+D_\alpha=\frac{\langle K_\alpha\rangle}{\beta V},\qquad
+\Lambda^p_{\alpha\beta}=\delta_{\alpha\beta}D_\alpha-R_{\alpha\beta}.
+\]
+
+`flux_response(...)` is the full gauge response, including the same-event
+contact contribution; it is not the paramagnetic current correlation by
+itself. `diamagnetic(axis)` returns `D`, and `paramagnetic(...)` derives
+`Lambda^p` from the two stored authoritative terms. `mean_flux(...)` reports
+the sampled uncentred complex amplitude as a symmetry diagnostic. The response
+tensor is Hermitian by construction. `R`, `D`, and `Lambda^p` have units of
+energy per site in the repository's `k_B=1`, unit-lattice-spacing convention.
+
 ## Exactness and checks
 
 The canonical calculations are deterministic up to floating-point rounding.

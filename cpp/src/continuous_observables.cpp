@@ -111,6 +111,97 @@ MatsubaraModeSet validated_density_accumulator_modes(const Model &model, Matsuba
   return modes;
 }
 
+MatsubaraModeSet validated_hopping_accumulator_modes(const Model &model, MatsubaraModeSet modes) {
+  validate_model_mode_geometry(model, modes,
+                               "hopping accumulator model and Matsubara geometry differ");
+  return modes;
+}
+
+std::size_t response_tensor_index(const std::size_t mode, const std::size_t row,
+                                  const std::size_t column, const std::size_t dimension) noexcept {
+  return ((((mode * dimension) + row) * dimension) + column);
+}
+
+void validate_mean_flux_values(const std::span<const std::complex<double>> values) {
+  for (const std::complex<double> value : values) {
+    if (!is_finite(value)) {
+      throw std::invalid_argument("hopping-response mean flux is non-finite");
+    }
+  }
+}
+
+void validate_flux_response_values(const std::size_t mode_count, const std::size_t dimension,
+                                   const std::span<const std::complex<double>> values) {
+  for (std::size_t mode = 0; mode < mode_count; ++mode) {
+    for (std::size_t left = 0; left < dimension; ++left) {
+      for (std::size_t right = left; right < dimension; ++right) {
+        const std::size_t upper = response_tensor_index(mode, left, right, dimension);
+        const std::size_t lower = response_tensor_index(mode, right, left, dimension);
+        const std::complex<double> value = values[upper];
+        if (!is_finite(value)) {
+          throw std::invalid_argument("hopping-response tensor entry is non-finite");
+        }
+        if (values[lower] != std::conj(value)) {
+          throw std::invalid_argument("hopping-response tensor is not Hermitian");
+        }
+        if (left == right && (value.imag() != 0.0 || value.real() < 0.0)) {
+          throw std::invalid_argument("hopping-response diagonal is invalid");
+        }
+      }
+    }
+  }
+}
+
+void validate_diamagnetic_values(const std::span<const double> values) {
+  for (const double value : values) {
+    if (!std::isfinite(value) || value < 0.0) {
+      throw std::invalid_argument("hopping-response diamagnetic value is invalid");
+    }
+  }
+}
+
+void update_hopping_flux_mode(const ContinuousParticleModes &values, const std::size_t frequency,
+                              const std::size_t momentum, const std::size_t mode,
+                              const std::size_t dimension,
+                              const std::span<std::complex<double>> amplitudes,
+                              const std::span<std::complex<double>> updated_flux_sums) {
+  for (std::size_t axis = 0; axis < dimension; ++axis) {
+    const std::complex<double> amplitude = values.flux(frequency, momentum, axis);
+    if (!is_finite(amplitude)) {
+      throw std::overflow_error("hopping observation flux amplitude is non-finite");
+    }
+    amplitudes[axis] = amplitude;
+    const std::size_t index = (mode * dimension) + axis;
+    updated_flux_sums[index] += amplitude;
+    if (!is_finite(updated_flux_sums[index])) {
+      throw std::overflow_error("hopping mean-flux sum is non-finite");
+    }
+  }
+}
+
+void update_hopping_response_mode(const std::size_t mode, const std::size_t dimension,
+                                  const std::span<const std::complex<double>> amplitudes,
+                                  const std::span<std::complex<double>> updated_response_sums) {
+  for (std::size_t left = 0; left < dimension; ++left) {
+    for (std::size_t right = left; right < dimension; ++right) {
+      const std::complex<double> product =
+          left == right ? std::complex<double>(std::norm(amplitudes[left]), 0.0)
+                        : amplitudes[left] * std::conj(amplitudes[right]);
+      if (!is_finite(product)) {
+        throw std::overflow_error("hopping flux-response observation is non-finite");
+      }
+      const std::size_t upper = response_tensor_index(mode, left, right, dimension);
+      const std::size_t lower = response_tensor_index(mode, right, left, dimension);
+      const std::complex<double> updated = updated_response_sums[upper] + product;
+      if (!is_finite(updated)) {
+        throw std::overflow_error("hopping flux-response sum is non-finite");
+      }
+      updated_response_sums[upper] = updated;
+      updated_response_sums[lower] = std::conj(updated);
+    }
+  }
+}
+
 void validate_projection_geometry(const ContinuousMeasurementContext &context,
                                   const MatsubaraModeSet &modes) {
   if (context.model().beta() != modes.beta() || context.layout() != modes.layout()) {
@@ -594,6 +685,203 @@ ContinuousMatsubaraDensityCorrelations DensityMatsubaraAccumulator::finish() con
 
   return {model_, MatsubaraModeField<double>(modes_, std::move(correlations)),
           std::move(mean_amplitudes), sample_count_};
+}
+
+HoppingResponse::HoppingResponse(Model model, MatsubaraModeSet modes,
+                                 std::vector<std::complex<double>> mean_flux_values,
+                                 std::vector<std::complex<double>> flux_response_values,
+                                 std::vector<double> diamagnetic_values,
+                                 const std::size_t sample_count)
+    : model_(model), modes_(std::move(modes)), mean_flux_values_(std::move(mean_flux_values)),
+      flux_response_values_(std::move(flux_response_values)),
+      diamagnetic_values_(std::move(diamagnetic_values)), sample_count_(sample_count) {
+  validate_model_mode_geometry(model_, modes_,
+                               "hopping-response model and Matsubara geometry differ");
+  const std::size_t dimension = model_.dimension();
+  const std::size_t flux_extent = detail::checked_product(
+      modes_.mode_count(), dimension, "hopping-response mean-flux extent exceeds size_t");
+  const std::size_t response_extent = detail::checked_product(
+      flux_extent, dimension, "hopping-response tensor extent exceeds size_t");
+  if (mean_flux_values_.size() != flux_extent) {
+    throw std::invalid_argument("hopping response has the wrong mean-flux extent");
+  }
+  if (flux_response_values_.size() != response_extent) {
+    throw std::invalid_argument("hopping response has the wrong tensor extent");
+  }
+  if (diamagnetic_values_.size() != dimension) {
+    throw std::invalid_argument("hopping response has the wrong diamagnetic extent");
+  }
+  if (sample_count_ == 0) {
+    throw std::invalid_argument("hopping response requires a nonzero sample count");
+  }
+  validate_mean_flux_values(mean_flux_values_);
+  validate_flux_response_values(modes_.mode_count(), dimension, flux_response_values_);
+  validate_diamagnetic_values(diamagnetic_values_);
+}
+
+std::size_t HoppingResponse::flux_index(const std::size_t frequency, const std::size_t momentum,
+                                        const std::size_t axis) const {
+  if (frequency >= modes_.frequency_count()) {
+    throw std::out_of_range("hopping-response frequency index is out of range");
+  }
+  if (momentum >= modes_.momentum_count()) {
+    throw std::out_of_range("hopping-response momentum index is out of range");
+  }
+  if (axis >= model_.dimension()) {
+    throw std::out_of_range("hopping-response axis is out of range");
+  }
+  const std::size_t mode = (frequency * modes_.momentum_count()) + momentum;
+  return (mode * model_.dimension()) + axis;
+}
+
+std::size_t HoppingResponse::response_index(const std::size_t frequency, const std::size_t momentum,
+                                            const std::size_t left, const std::size_t right) const {
+  const std::size_t left_component = flux_index(frequency, momentum, left);
+  if (right >= model_.dimension()) {
+    throw std::out_of_range("hopping-response right axis is out of range");
+  }
+  return (left_component * model_.dimension()) + right;
+}
+
+std::complex<double> HoppingResponse::mean_flux(const std::size_t frequency,
+                                                const std::size_t momentum,
+                                                const std::size_t axis) const {
+  return mean_flux_values_[flux_index(frequency, momentum, axis)];
+}
+
+std::complex<double> HoppingResponse::flux_response(const std::size_t frequency,
+                                                    const std::size_t momentum,
+                                                    const std::size_t left,
+                                                    const std::size_t right) const {
+  return flux_response_values_[response_index(frequency, momentum, left, right)];
+}
+
+double HoppingResponse::diamagnetic(const std::size_t axis) const {
+  if (axis >= model_.dimension()) {
+    throw std::out_of_range("hopping-response diamagnetic axis is out of range");
+  }
+  return diamagnetic_values_[axis];
+}
+
+std::complex<double> HoppingResponse::paramagnetic(const std::size_t frequency,
+                                                   const std::size_t momentum,
+                                                   const std::size_t left,
+                                                   const std::size_t right) const {
+  std::complex<double> value = -flux_response(frequency, momentum, left, right);
+  if (left == right) {
+    value += diamagnetic(left);
+  }
+  return value;
+}
+
+HoppingResponseAccumulator::HoppingResponseAccumulator(Model model, MatsubaraModeSet modes)
+    : model_(model), modes_(validated_hopping_accumulator_modes(model_, std::move(modes))),
+      flux_sums_(make_checked_vector<std::complex<double>>(
+          detail::checked_product(modes_.mode_count(), model_.dimension(),
+                                  "hopping mean-flux extent exceeds size_t"),
+          "hopping mean-flux sums exceed vector capacity")),
+      response_sums_(make_checked_vector<std::complex<double>>(
+          detail::checked_product(
+              detail::checked_product(modes_.mode_count(), model_.dimension(),
+                                      "hopping response component extent exceeds size_t"),
+              model_.dimension(), "hopping response tensor extent exceeds size_t"),
+          "hopping response sums exceed vector capacity")),
+      axis_event_count_sums_(make_checked_vector<std::size_t>(
+          model_.dimension(), "hopping axis-count sums exceed vector capacity")) {}
+
+void HoppingResponseAccumulator::observe(const ContinuousParticleModes &values) {
+  if (values.model() != model_) {
+    throw std::invalid_argument("hopping observation has a different model");
+  }
+  if (values.modes() != modes_) {
+    throw std::invalid_argument("hopping observation has different Matsubara modes");
+  }
+
+  const std::size_t updated_sample_count =
+      detail::checked_add_size(sample_count_, 1, "hopping accumulator sample count exceeds size_t");
+  std::vector<std::complex<double>> updated_flux_sums = flux_sums_;
+  std::vector<std::complex<double>> updated_response_sums = response_sums_;
+  std::vector<std::size_t> updated_axis_event_count_sums = axis_event_count_sums_;
+  auto amplitudes = make_checked_vector<std::complex<double>>(
+      model_.dimension(), "hopping observation workspace exceeds vector capacity");
+
+  for (std::size_t frequency = 0; frequency < modes_.frequency_count(); ++frequency) {
+    for (std::size_t momentum = 0; momentum < modes_.momentum_count(); ++momentum) {
+      const std::size_t mode = (frequency * modes_.momentum_count()) + momentum;
+      update_hopping_flux_mode(values, frequency, momentum, mode, model_.dimension(), amplitudes,
+                               updated_flux_sums);
+      update_hopping_response_mode(mode, model_.dimension(), amplitudes, updated_response_sums);
+    }
+  }
+
+  for (std::size_t axis = 0; axis < model_.dimension(); ++axis) {
+    updated_axis_event_count_sums[axis] =
+        detail::checked_add_size(updated_axis_event_count_sums[axis], values.axis_event_count(axis),
+                                 "hopping axis event-count sum exceeds size_t");
+  }
+
+  flux_sums_.swap(updated_flux_sums);
+  response_sums_.swap(updated_response_sums);
+  axis_event_count_sums_.swap(updated_axis_event_count_sums);
+  sample_count_ = updated_sample_count;
+}
+
+HoppingResponse HoppingResponseAccumulator::finish() const {
+  if (sample_count_ == 0) {
+    throw std::logic_error("cannot finish a hopping-response accumulator without samples");
+  }
+
+  const std::size_t dimension = model_.dimension();
+  const std::size_t flux_extent = detail::checked_product(
+      modes_.mode_count(), dimension, "hopping mean-flux result extent exceeds size_t");
+  const std::size_t response_extent = detail::checked_product(
+      flux_extent, dimension, "hopping response result extent exceeds size_t");
+  auto mean_flux_values = make_checked_vector<std::complex<double>>(
+      flux_extent, "hopping mean-flux result exceeds vector capacity");
+  auto flux_response_values = make_checked_vector<std::complex<double>>(
+      response_extent, "hopping response result exceeds vector capacity");
+  auto diamagnetic_values =
+      make_checked_vector<double>(dimension, "hopping diamagnetic result exceeds vector capacity");
+  const auto sample_divisor = static_cast<double>(sample_count_);
+  const auto volume_divisor = static_cast<double>(model_.volume());
+
+  for (std::size_t index = 0; index < flux_extent; ++index) {
+    mean_flux_values[index] = flux_sums_[index] / sample_divisor;
+    if (!is_finite(mean_flux_values[index])) {
+      throw std::overflow_error("hopping mean-flux result is non-finite");
+    }
+  }
+  for (std::size_t mode = 0; mode < modes_.mode_count(); ++mode) {
+    for (std::size_t left = 0; left < dimension; ++left) {
+      for (std::size_t right = left; right < dimension; ++right) {
+        const std::size_t upper = response_tensor_index(mode, left, right, dimension);
+        const std::size_t lower = response_tensor_index(mode, right, left, dimension);
+        const std::complex<double> response =
+            ((response_sums_[upper] / sample_divisor) / volume_divisor) / model_.beta();
+        if (!is_finite(response) ||
+            (left == right && (response.imag() != 0.0 || response.real() < 0.0))) {
+          throw std::overflow_error("hopping flux-response result is non-finite");
+        }
+        flux_response_values[upper] = response;
+        flux_response_values[lower] = std::conj(response);
+      }
+    }
+  }
+  for (std::size_t axis = 0; axis < dimension; ++axis) {
+    diamagnetic_values[axis] =
+        ((static_cast<double>(axis_event_count_sums_[axis]) / sample_divisor) / volume_divisor) /
+        model_.beta();
+    if (!std::isfinite(diamagnetic_values[axis]) || diamagnetic_values[axis] < 0.0) {
+      throw std::overflow_error("hopping diamagnetic result is non-finite");
+    }
+  }
+
+  return {model_,
+          modes_,
+          std::move(mean_flux_values),
+          std::move(flux_response_values),
+          std::move(diamagnetic_values),
+          sample_count_};
 }
 
 ContinuousParticleModes continuous_particle_modes(const ContinuousMeasurementContext &context,

@@ -49,6 +49,12 @@ static_assert(
     std::is_same_v<decltype(std::declval<const ContinuousMatsubaraDensityCorrelations &>().modes()),
                    const MatsubaraModeSet &>);
 static_assert(!std::default_initializable<DensityMatsubaraAccumulator>);
+static_assert(!std::default_initializable<HoppingResponse>);
+static_assert(
+    std::is_same_v<decltype(std::declval<const HoppingResponse &>().model()), const Model &>);
+static_assert(std::is_same_v<decltype(std::declval<const HoppingResponse &>().modes()),
+                             const MatsubaraModeSet &>);
+static_assert(!std::default_initializable<HoppingResponseAccumulator>);
 
 MatsubaraModeSet make_continuous_modes(const double beta, const TorusLayout &layout,
                                        std::vector<std::vector<std::size_t>> momenta,
@@ -79,6 +85,24 @@ ContinuousConfiguration multidimensional_projection_configuration() {
                                {.time = 0.7, .axis = 1, .direction = 1},
                                {.time = 0.9, .axis = 0, .direction = 1}});
   return ContinuousConfiguration(model, Permutation({0, 1}), {first, second});
+}
+
+ContinuousConfiguration winding_projection_configuration() {
+  const Model model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 2,
+      .hopping = 1.0,
+  });
+  const ContinuousPath winding(1.0, {0, 0}, {3, -3},
+                               {{.time = 0.0, .axis = 0, .direction = 1},
+                                {.time = 0.1, .axis = 1, .direction = -1},
+                                {.time = 0.2, .axis = 0, .direction = 1},
+                                {.time = 0.4, .axis = 1, .direction = -1},
+                                {.time = 0.8, .axis = 0, .direction = 1},
+                                {.time = 1.0, .axis = 1, .direction = -1}});
+  return ContinuousConfiguration(model, Permutation({0}), {winding});
 }
 
 TEST(ContinuousMatsubaraPlanTest, OwnsModesAndEnforcesSymmetricFrequencyBound) {
@@ -431,21 +455,8 @@ TEST(ContinuousParticleModesTest, ProjectsStaticPathsAndCanonicalZeroMomentumExa
 }
 
 TEST(ContinuousParticleModesTest, ZeroModeFluxIsExactCoveringDisplacement) {
-  const Model model(ModelParameters{
-      .particle_count = 1,
-      .beta = 1.0,
-      .linear_size = 3,
-      .dimension = 2,
-      .hopping = 1.0,
-  });
-  const ContinuousPath winding(1.0, {0, 0}, {3, -3},
-                               {{.time = 0.0, .axis = 0, .direction = 1},
-                                {.time = 0.1, .axis = 1, .direction = -1},
-                                {.time = 0.2, .axis = 0, .direction = 1},
-                                {.time = 0.4, .axis = 1, .direction = -1},
-                                {.time = 0.8, .axis = 0, .direction = 1},
-                                {.time = 1.0, .axis = 1, .direction = -1}});
-  const ContinuousConfiguration configuration(model, Permutation({0}), {winding});
+  const ContinuousConfiguration configuration = winding_projection_configuration();
+  const Model model = configuration.model();
   const ContinuousMatsubaraPlan plan(
       make_continuous_modes(model.beta(), TorusLayout(3, 2), {{0, 0}}, {0}));
   const ContinuousParticleModes values = continuous_particle_modes(configuration, plan);
@@ -739,6 +750,229 @@ TEST(DensityMatsubaraAccumulatorTest, HandlesTheEmptyFixedParticleEnsemble) {
       EXPECT_EQ(result.at(frequency, momentum), 0.0);
     }
   }
+}
+
+TEST(HoppingResponseAccumulatorTest,
+     UsesExactZeroMeanAndPublishesHermitianResponseWithCompleteProvenance) {
+  const ContinuousConfiguration configuration = multidimensional_projection_configuration();
+  const Model model = configuration.model();
+  const MatsubaraModeSet modes = make_continuous_modes(
+      model.beta(), TorusLayout(model.linear_size(), model.dimension()), {{0, 0}, {1, 2}}, {0, 1});
+  const ContinuousParticleModes values =
+      continuous_particle_modes(configuration, ContinuousMatsubaraPlan(modes));
+  HoppingResponseAccumulator accumulator(model, modes);
+
+  EXPECT_EQ(accumulator.model(), model);
+  EXPECT_EQ(accumulator.modes(), modes);
+  EXPECT_EQ(accumulator.sample_count(), 0U);
+  EXPECT_THROW(static_cast<void>(accumulator.finish()), std::logic_error);
+
+  accumulator.observe(values);
+  accumulator.observe(values);
+  const HoppingResponse result = accumulator.finish();
+  ASSERT_EQ(accumulator.sample_count(), 2U);
+  ASSERT_EQ(result.model(), model);
+  ASSERT_EQ(result.modes(), modes);
+  ASSERT_EQ(result.sample_count(), 2U);
+
+  const double normalization = model.beta() * static_cast<double>(model.volume());
+  for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+    for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+      for (std::size_t left = 0; left < model.dimension(); ++left) {
+        const std::complex<double> left_flux = values.flux(frequency, momentum, left);
+        EXPECT_NEAR(std::abs(result.mean_flux(frequency, momentum, left) - left_flux), 0.0, 1e-15);
+        for (std::size_t right = 0; right < model.dimension(); ++right) {
+          const std::complex<double> expected_response =
+              left_flux * std::conj(values.flux(frequency, momentum, right)) / normalization;
+          EXPECT_NEAR(
+              std::abs(result.flux_response(frequency, momentum, left, right) - expected_response),
+              0.0, 2e-15);
+          EXPECT_EQ(result.flux_response(frequency, momentum, right, left),
+                    std::conj(result.flux_response(frequency, momentum, left, right)));
+          const std::complex<double> expected_paramagnetic =
+              (left == right ? std::complex<double>(result.diamagnetic(left), 0.0)
+                             : std::complex<double>(0.0, 0.0)) -
+              expected_response;
+          EXPECT_NEAR(std::abs(result.paramagnetic(frequency, momentum, left, right) -
+                               expected_paramagnetic),
+                      0.0, 2e-15);
+        }
+      }
+    }
+  }
+  for (std::size_t axis = 0; axis < model.dimension(); ++axis) {
+    EXPECT_NEAR(result.diamagnetic(axis),
+                static_cast<double>(values.axis_event_count(axis)) / normalization, 1e-15);
+  }
+
+  EXPECT_THROW(static_cast<void>(result.mean_flux(modes.frequency_count(), 0, 0)),
+               std::out_of_range);
+  EXPECT_THROW(static_cast<void>(result.mean_flux(0, modes.momentum_count(), 0)),
+               std::out_of_range);
+  EXPECT_THROW(static_cast<void>(result.mean_flux(0, 0, model.dimension())), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(result.flux_response(0, 0, model.dimension(), 0)),
+               std::out_of_range);
+  EXPECT_THROW(static_cast<void>(result.flux_response(0, 0, 0, model.dimension())),
+               std::out_of_range);
+  EXPECT_THROW(static_cast<void>(result.diamagnetic(model.dimension())), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(result.paramagnetic(modes.frequency_count(), 0, 0, 0)),
+               std::out_of_range);
+}
+
+TEST(HoppingResponseAccumulatorTest, ZeroModeResponseMatchesWindingAndEventCountIdentities) {
+  const ContinuousConfiguration configuration = winding_projection_configuration();
+  const Model model = configuration.model();
+  const MatsubaraModeSet modes =
+      make_continuous_modes(model.beta(), TorusLayout(3, 2), {{0, 0}}, {0});
+  const ContinuousParticleModes values =
+      continuous_particle_modes(configuration, ContinuousMatsubaraPlan(modes));
+  HoppingResponseAccumulator accumulator(model, modes);
+  accumulator.observe(values);
+  const HoppingResponse result = accumulator.finish();
+  const Site winding = configuration.total_winding();
+  const double normalization = model.beta() * static_cast<double>(model.volume());
+
+  for (std::size_t left = 0; left < model.dimension(); ++left) {
+    const double left_flux =
+        static_cast<double>(model.linear_size()) * static_cast<double>(winding[left]);
+    EXPECT_EQ(result.mean_flux(0, 0, left), std::complex<double>(left_flux, 0.0));
+    EXPECT_NEAR(result.diamagnetic(left),
+                static_cast<double>(values.axis_event_count(left)) / normalization, 1e-15);
+    for (std::size_t right = 0; right < model.dimension(); ++right) {
+      const double right_flux =
+          static_cast<double>(model.linear_size()) * static_cast<double>(winding[right]);
+      EXPECT_NEAR(result.flux_response(0, 0, left, right).real(),
+                  left_flux * right_flux / normalization, 1e-15);
+      EXPECT_EQ(result.flux_response(0, 0, left, right).imag(), 0.0);
+    }
+  }
+}
+
+TEST(HoppingResponseAccumulatorTest, RejectsEveryProvenanceMismatchBeforeMutation) {
+  const Model model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const MatsubaraModeSet modes =
+      make_continuous_modes(model.beta(), TorusLayout(3, 1), {{0}, {1}}, {0});
+  EXPECT_THROW(static_cast<void>(HoppingResponseAccumulator(
+                   model, make_continuous_modes(2.0, TorusLayout(3, 1), {{0}}, {0}))),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(HoppingResponseAccumulator(
+                   model, make_continuous_modes(1.0, TorusLayout(4, 1), {{0}}, {0}))),
+               std::invalid_argument);
+
+  const ContinuousConfiguration configuration(model, Permutation({0}),
+                                              {ContinuousPath(model.beta(), {0}, {0}, {})});
+  const ContinuousParticleModes values =
+      continuous_particle_modes(configuration, ContinuousMatsubaraPlan(modes));
+  const Model different_particle_model(ModelParameters{
+      .particle_count = 2,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const ContinuousConfiguration different_particle_configuration(
+      different_particle_model, Permutation({0, 1}),
+      {ContinuousPath(different_particle_model.beta(), {0}, {0}, {}),
+       ContinuousPath(different_particle_model.beta(), {1}, {1}, {})});
+  const ContinuousParticleModes different_particle_values =
+      continuous_particle_modes(different_particle_configuration, ContinuousMatsubaraPlan(modes));
+  const Model different_model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 2.0,
+  });
+  const ContinuousConfiguration different_configuration(
+      different_model, Permutation({0}), {ContinuousPath(different_model.beta(), {0}, {0}, {})});
+  const ContinuousParticleModes different_model_values =
+      continuous_particle_modes(different_configuration, ContinuousMatsubaraPlan(modes));
+  const MatsubaraModeSet different_modes =
+      make_continuous_modes(model.beta(), TorusLayout(3, 1), {{0}, {1}}, {1});
+  const ContinuousParticleModes different_mode_values =
+      continuous_particle_modes(configuration, ContinuousMatsubaraPlan(different_modes));
+  HoppingResponseAccumulator accumulator(model, modes);
+
+  EXPECT_THROW(accumulator.observe(different_particle_values), std::invalid_argument);
+  EXPECT_EQ(accumulator.sample_count(), 0U);
+  EXPECT_THROW(accumulator.observe(different_model_values), std::invalid_argument);
+  EXPECT_EQ(accumulator.sample_count(), 0U);
+  EXPECT_THROW(accumulator.observe(different_mode_values), std::invalid_argument);
+  EXPECT_EQ(accumulator.sample_count(), 0U);
+
+  accumulator.observe(values);
+  EXPECT_EQ(accumulator.sample_count(), 1U);
+  const HoppingResponse result = accumulator.finish();
+  EXPECT_EQ(result.mean_flux(0, 0, 0), std::complex<double>(0.0, 0.0));
+  EXPECT_EQ(result.flux_response(0, 0, 0, 0), std::complex<double>(0.0, 0.0));
+  EXPECT_EQ(result.diamagnetic(0), 0.0);
+  EXPECT_EQ(result.paramagnetic(0, 0, 0, 0), std::complex<double>(0.0, 0.0));
+}
+
+TEST(HoppingResponseAccumulatorTest, HandlesTheEmptyFixedParticleEnsemble) {
+  const Model model(ModelParameters{
+      .particle_count = 0,
+      .beta = 1.25,
+      .linear_size = 3,
+      .dimension = 2,
+      .hopping = 0.8,
+  });
+  const MatsubaraModeSet modes =
+      make_continuous_modes(model.beta(), TorusLayout(3, 2), {{0, 0}, {1, 2}}, {-1, 0, 1});
+  const ContinuousConfiguration configuration(model, Permutation(), {});
+  const ContinuousParticleModes values =
+      continuous_particle_modes(configuration, ContinuousMatsubaraPlan(modes));
+  HoppingResponseAccumulator accumulator(model, modes);
+
+  accumulator.observe(values);
+  const HoppingResponse result = accumulator.finish();
+  ASSERT_EQ(result.sample_count(), 1U);
+  for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+    for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+      for (std::size_t left = 0; left < model.dimension(); ++left) {
+        EXPECT_EQ(result.mean_flux(frequency, momentum, left), std::complex<double>(0.0, 0.0));
+        EXPECT_EQ(result.diamagnetic(left), 0.0);
+        for (std::size_t right = 0; right < model.dimension(); ++right) {
+          EXPECT_EQ(result.flux_response(frequency, momentum, left, right),
+                    std::complex<double>(0.0, 0.0));
+          EXPECT_EQ(result.paramagnetic(frequency, momentum, left, right),
+                    std::complex<double>(0.0, 0.0));
+        }
+      }
+    }
+  }
+}
+
+TEST(HoppingResponseAccumulatorTest, RejectsNonFiniteNormalizationAtFinish) {
+  const double beta = std::numeric_limits<double>::denorm_min();
+  const Model model(ModelParameters{
+      .particle_count = 1,
+      .beta = beta,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const MatsubaraModeSet modes = make_continuous_modes(model.beta(), TorusLayout(3, 1), {{0}}, {0});
+  const ContinuousConfiguration configuration(
+      model, Permutation({0}),
+      {ContinuousPath(beta, {0}, {3},
+                      {{.time = 0.0, .axis = 0, .direction = 1},
+                       {.time = 0.0, .axis = 0, .direction = 1},
+                       {.time = 0.0, .axis = 0, .direction = 1}})});
+  const ContinuousParticleModes values =
+      continuous_particle_modes(configuration, ContinuousMatsubaraPlan(modes));
+  HoppingResponseAccumulator accumulator(model, modes);
+
+  accumulator.observe(values);
+  EXPECT_EQ(accumulator.sample_count(), 1U);
+  EXPECT_THROW(static_cast<void>(accumulator.finish()), std::overflow_error);
+  EXPECT_EQ(accumulator.sample_count(), 1U);
 }
 
 } // namespace

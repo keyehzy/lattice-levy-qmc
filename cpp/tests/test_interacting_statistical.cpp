@@ -2,6 +2,7 @@
 #include "qmc/interacting_sampler.hpp"
 #include "qmc/path.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -37,7 +38,7 @@ TEST(ContinuousBridgeDistributionTest, EventCountMatchesConditionedPoissonLaw) {
   EXPECT_NEAR(event_sum / static_cast<double>(sample_count), exact_mean, 0.035);
 }
 
-TEST(ContinuousDensityAccumulatorTest, MatchesOneParticleLehmannReference) {
+TEST(ContinuousMatsubaraAccumulatorTest, MatchesOneParticleLehmannReferences) {
   constexpr std::size_t sample_count = 40'000;
   const qmc::Model model(qmc::ModelParameters{
       .particle_count = 1,
@@ -49,43 +50,93 @@ TEST(ContinuousDensityAccumulatorTest, MatchesOneParticleLehmannReference) {
   const qmc::CanonicalEnsemble ensemble(model);
   const qmc::MatsubaraModeSet modes(
       model.beta(), qmc::TorusLayout(model.linear_size(), model.dimension()),
-      qmc::MatsubaraModeRequest{.momentum_indices = {{1}}, .frequency_indices = {0, 1}});
+      qmc::MatsubaraModeRequest{.momentum_indices = {{0}, {1}}, .frequency_indices = {0, 1}});
   const qmc::ContinuousMatsubaraPlan plan(modes);
-  qmc::DensityMatsubaraAccumulator accumulator(model, modes);
+  qmc::DensityMatsubaraAccumulator density_accumulator(model, modes);
+  qmc::HoppingResponseAccumulator hopping_accumulator(model, modes);
   qmc::Random random(20260722);
-  std::array<double, 2> observation_sums{};
-  std::array<double, 2> observation_square_sums{};
+  std::array<double, 2> density_sums{};
+  std::array<double, 2> density_square_sums{};
+  std::array<double, 4> response_sums{};
+  std::array<double, 4> response_square_sums{};
+  double diamagnetic_sum = 0.0;
+  double diamagnetic_square_sum = 0.0;
 
   for (std::size_t sample = 0; sample < sample_count; ++sample) {
     const qmc::ContinuousConfiguration configuration =
         qmc::sample_ideal_continuous_configuration(ensemble, random);
     const qmc::ContinuousParticleModes values = qmc::continuous_particle_modes(configuration, plan);
-    accumulator.observe(values);
+    density_accumulator.observe(values);
+    hopping_accumulator.observe(values);
     for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
-      const double observation =
-          std::norm(values.density(frequency, 0)) / (model.beta() * model.volume());
-      observation_sums[frequency] += observation;
-      observation_square_sums[frequency] += observation * observation;
+      const double density_observation =
+          std::norm(values.density(frequency, 1)) / (model.beta() * model.volume());
+      density_sums[frequency] += density_observation;
+      density_square_sums[frequency] += density_observation * density_observation;
+      for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+        const std::size_t mode = (frequency * modes.momentum_count()) + momentum;
+        const double response_observation =
+            std::norm(values.flux(frequency, momentum, 0)) / (model.beta() * model.volume());
+        response_sums[mode] += response_observation;
+        response_square_sums[mode] += response_observation * response_observation;
+      }
+    }
+    const double diamagnetic_observation =
+        static_cast<double>(values.axis_event_count(0)) / (model.beta() * model.volume());
+    diamagnetic_sum += diamagnetic_observation;
+    diamagnetic_square_sum += diamagnetic_observation * diamagnetic_observation;
+  }
+
+  const qmc::ContinuousMatsubaraDensityCorrelations density_result = density_accumulator.finish();
+  const qmc::HoppingResponse hopping_result = hopping_accumulator.finish();
+  ASSERT_EQ(density_result.sample_count(), sample_count);
+  ASSERT_EQ(hopping_result.sample_count(), sample_count);
+  const std::array exact_density{0.1915077492, 0.0217766472};
+  const double count = static_cast<double>(sample_count);
+  for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+    const double sample_mean = density_sums[frequency] / count;
+    const double sample_variance = (density_square_sums[frequency] -
+                                    (density_sums[frequency] * density_sums[frequency] / count)) /
+                                   (count - 1.0);
+    const double standard_error = std::sqrt(sample_variance / count);
+    EXPECT_NEAR(density_result.at(frequency, 1), sample_mean, 1e-13);
+    // Independent one-particle Lehmann values at q=2*pi/3, with a six-standard-
+    // error bound from exact independent ideal samples.
+    EXPECT_NEAR(density_result.at(frequency, 1), exact_density[frequency], 6.0 * standard_error);
+    EXPECT_LT(standard_error, frequency == 0 ? 0.0010 : 0.00035);
+  }
+
+  // Independent one-particle source-derivative values. The mode order is
+  // (n=0,q=0), (n=0,q=2*pi/3), (n=1,q=0), (n=1,q=2*pi/3).
+  const std::array exact_response{0.3902364092, 0.0, 0.5130943014, 0.4477643599};
+  for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+    for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+      const std::size_t mode = (frequency * modes.momentum_count()) + momentum;
+      const double sample_mean = response_sums[mode] / count;
+      const double sample_variance =
+          (response_square_sums[mode] - (response_sums[mode] * response_sums[mode] / count)) /
+          (count - 1.0);
+      const double standard_error = std::sqrt(std::max(0.0, sample_variance) / count);
+      EXPECT_NEAR(hopping_result.flux_response(frequency, momentum, 0, 0).real(), sample_mean,
+                  1e-13);
+      EXPECT_EQ(hopping_result.flux_response(frequency, momentum, 0, 0).imag(), 0.0);
+      if (exact_response[mode] == 0.0) {
+        EXPECT_NEAR(hopping_result.flux_response(frequency, momentum, 0, 0).real(), 0.0, 1e-24);
+      } else {
+        EXPECT_NEAR(hopping_result.flux_response(frequency, momentum, 0, 0).real(),
+                    exact_response[mode], 6.0 * standard_error);
+        EXPECT_LT(standard_error, 0.01);
+      }
     }
   }
 
-  const qmc::ContinuousMatsubaraDensityCorrelations result = accumulator.finish();
-  ASSERT_EQ(result.sample_count(), sample_count);
-  const std::array exact{0.1915077492, 0.0217766472};
-  const double count = static_cast<double>(sample_count);
-  for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
-    const double sample_mean = observation_sums[frequency] / count;
-    const double sample_variance =
-        (observation_square_sums[frequency] -
-         (observation_sums[frequency] * observation_sums[frequency] / count)) /
-        (count - 1.0);
-    const double standard_error = std::sqrt(sample_variance / count);
-    EXPECT_NEAR(result.at(frequency, 0), sample_mean, 1e-13);
-    // Independent one-particle Lehmann values at q=2*pi/3, with a six-standard-
-    // error bound from exact independent ideal samples.
-    EXPECT_NEAR(result.at(frequency, 0), exact[frequency], 6.0 * standard_error);
-    EXPECT_LT(standard_error, frequency == 0 ? 0.0010 : 0.00035);
-  }
+  const double diamagnetic_mean = diamagnetic_sum / count;
+  const double diamagnetic_variance =
+      (diamagnetic_square_sum - (diamagnetic_sum * diamagnetic_sum / count)) / (count - 1.0);
+  const double diamagnetic_standard_error = std::sqrt(diamagnetic_variance / count);
+  EXPECT_NEAR(hopping_result.diamagnetic(0), diamagnetic_mean, 1e-13);
+  EXPECT_NEAR(hopping_result.diamagnetic(0), 0.5130943014, 6.0 * diamagnetic_standard_error);
+  EXPECT_LT(diamagnetic_standard_error, 0.005);
 }
 
 TEST(InteractingDistributionTest, MatchesSmallSystemExactDiagonalizationReference) {

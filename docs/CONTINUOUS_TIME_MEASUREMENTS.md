@@ -1,15 +1,16 @@
 # Event-based continuous-time measurements
 
-Date: 2026-07-22
+Date: 2026-07-23
 
 Status: implementation in progress. The shared Matsubara mode/result-shape
 layer, retained-result migration, and continuous phase plan (step 1), plus the
 owning continuous measurement context and deterministic event-sweep boundary
 tests (step 2), plus the combined density/flux primitive and its deterministic
 identity tests (step 3), plus the connected density accumulator and its
-deterministic and Lehmann-reference tests (step 4), were completed on
-2026-07-22. This document remains the design specification and contains no
-implementation.
+deterministic and Lehmann-reference tests (step 4), plus the hopping-response
+accumulator and its zero/finite-momentum Lehmann-reference tests (step 5), were
+completed through step 4 on 2026-07-22 and through step 5 on 2026-07-23. This
+document remains the design specification and contains no implementation.
 
 ## Scope and recommendation
 
@@ -1226,8 +1227,8 @@ derivative and returned decomposition explicit.
    the Ward identity the central convention test.
 4. **Completed 2026-07-22:** Add the density accumulator and small-system
    Lehmann comparisons.
-5. Add the hopping response accumulator returning `R`, `D`, and `Lambda^p`,
-   followed by zero/finite-momentum ED comparisons.
+5. **Completed 2026-07-23:** Add the hopping response accumulator returning
+   `R`, `D`, and `Lambda^p`, followed by zero/finite-momentum ED comparisons.
 6. Migrate full pair-overlap evaluation to the shared private event sweep only
    after exact equivalence tests prove unchanged action and tie semantics.
 7. Add an occupancy-based diagonal projector as the third use case; then decide
