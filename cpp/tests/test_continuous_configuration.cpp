@@ -113,6 +113,24 @@ TEST(ContinuousConfigurationTest, SamplesConsistentCanonicalState) {
   }
 }
 
+TEST(ContinuousConfigurationTest, NormalizesLongCycleCutDriftForNonDyadicBeta) {
+  const Model model(qmc::ModelParameters{
+      .particle_count = 64,
+      .beta = 2.0 / 3.0,
+      .linear_size = 8,
+      .dimension = 2,
+      .hopping = 1.0,
+  });
+  Random random(23003);
+
+  const auto state = sample_ideal_continuous_configuration(model, random);
+
+  EXPECT_NO_THROW(state.validate());
+  for (const ContinuousPath &path : state.worldlines()) {
+    EXPECT_DOUBLE_EQ(path.duration(), model.beta());
+  }
+}
+
 TEST(ContinuousConfigurationTest, SupportsEmptyCanonicalState) {
   const Model model(qmc::ModelParameters{
       .particle_count = 0,

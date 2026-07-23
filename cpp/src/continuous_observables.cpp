@@ -8,6 +8,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <numbers>
 #include <span>
@@ -42,6 +43,25 @@ std::size_t multiply_modulo(std::size_t multiplicand, std::size_t multiplier,
     }
   }
   return result;
+}
+
+std::complex<double> spatial_site_phase(const TorusLayout &layout,
+                                        const std::span<const std::size_t> momentum_components,
+                                        const SiteId site) {
+  if (momentum_components.size() != layout.dimension()) {
+    throw std::logic_error("continuous spatial phase has the wrong momentum dimension");
+  }
+  const std::vector<std::size_t> site_components = layout.decode(site);
+  const auto linear_size = static_cast<std::size_t>(layout.linear_size());
+  std::complex<double> phase{1.0, 0.0};
+  for (std::size_t axis = 0; axis < layout.dimension(); ++axis) {
+    const std::size_t residue =
+        multiply_modulo(momentum_components[axis], site_components[axis], linear_size);
+    const double angle =
+        -2.0 * std::numbers::pi * static_cast<double>(residue) / static_cast<double>(linear_size);
+    phase *= std::polar(1.0, angle);
+  }
+  return phase;
 }
 
 void validate_interval(const double begin, const double end, const double beta) {
@@ -81,6 +101,25 @@ private:
   double imaginary_correction_ = 0.0;
 };
 
+class CompensatedRealSum {
+public:
+  void add(const double value) noexcept {
+    const double next = sum_ + value;
+    if (std::abs(sum_) >= std::abs(value)) {
+      correction_ += (sum_ - next) + value;
+    } else {
+      correction_ += (value - next) + sum_;
+    }
+    sum_ = next;
+  }
+
+  [[nodiscard]] double value() const noexcept { return sum_ + correction_; }
+
+private:
+  double sum_ = 0.0;
+  double correction_ = 0.0;
+};
+
 template <class T>
 std::vector<T> make_checked_vector(const std::size_t extent, const char *description) {
   if (extent > std::vector<T>{}.max_size()) {
@@ -99,6 +138,12 @@ bool is_zero_momentum(const MatsubaraModeSet &modes, const std::size_t momentum)
                              [](const std::size_t component) { return component == 0; });
 }
 
+bool is_zero_momentum(const ImaginaryTimeLagSet &lags, const std::size_t momentum) {
+  const auto components = lags.momentum_indices(momentum);
+  return std::ranges::all_of(components,
+                             [](const std::size_t component) { return component == 0; });
+}
+
 void validate_model_mode_geometry(const Model &model, const MatsubaraModeSet &modes,
                                   const char *description) {
   if (model.beta() != modes.beta() ||
@@ -113,10 +158,361 @@ MatsubaraModeSet validated_density_accumulator_modes(const Model &model, Matsuba
   return modes;
 }
 
+void validate_model_lag_geometry(const Model &model, const ImaginaryTimeLagSet &lags,
+                                 const char *description) {
+  if (model.beta() != lags.beta() ||
+      TorusLayout(model.linear_size(), model.dimension()) != lags.layout()) {
+    throw std::invalid_argument(description);
+  }
+}
+
+ImaginaryTimeLagSet validated_density_lag_accumulator_lags(const Model &model,
+                                                           ImaginaryTimeLagSet lags) {
+  validate_model_lag_geometry(model, lags, "density lag accumulator model and lag geometry differ");
+  return lags;
+}
+
+std::size_t validated_measurements_per_block(const std::size_t measurements_per_block) {
+  if (measurements_per_block == 0) {
+    throw std::invalid_argument("density block size must be positive");
+  }
+  return measurements_per_block;
+}
+
+std::size_t density_covariance_extent(const MatsubaraModeSet &modes) {
+  const std::size_t frequency_square =
+      detail::checked_product(modes.frequency_count(), modes.frequency_count(),
+                              "density covariance frequency extent exceeds size_t");
+  return detail::checked_product(modes.momentum_count(), frequency_square,
+                                 "density covariance extent exceeds size_t");
+}
+
+std::vector<std::complex<double>> density_analytic_means(const Model &model,
+                                                         const MatsubaraModeSet &modes) {
+  auto means = make_checked_vector<std::complex<double>>(
+      modes.mode_count(), "density analytic means exceed vector capacity");
+  for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+    if (modes.frequency_index(frequency) != 0) {
+      continue;
+    }
+    for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+      if (!is_zero_momentum(modes, momentum)) {
+        continue;
+      }
+      const double zero_mode_mean = model.beta() * static_cast<double>(model.particle_count());
+      if (!std::isfinite(zero_mode_mean)) {
+        throw std::overflow_error("density analytic zero-mode mean is non-finite");
+      }
+      means[(frequency * modes.momentum_count()) + momentum] = {zero_mode_mean, 0.0};
+    }
+  }
+  return means;
+}
+
+struct DensityModeObservation {
+  std::vector<std::complex<double>> amplitudes;
+  std::vector<double> connected_values;
+};
+
+DensityModeObservation
+density_mode_observation(const ContinuousParticleModes &values, const Model &model,
+                         const MatsubaraModeSet &modes,
+                         const std::span<const std::complex<double>> analytic_means) {
+  if (values.model() != model) {
+    throw std::invalid_argument("density observation has a different model");
+  }
+  if (values.modes() != modes) {
+    throw std::invalid_argument("density observation has different Matsubara modes");
+  }
+  if (analytic_means.size() != modes.mode_count()) {
+    throw std::logic_error("density analytic means have the wrong extent");
+  }
+
+  DensityModeObservation observation{
+      .amplitudes = make_checked_vector<std::complex<double>>(
+          modes.mode_count(), "density observation amplitudes exceed vector capacity"),
+      .connected_values = make_checked_vector<double>(
+          modes.mode_count(), "density observations exceed vector capacity"),
+  };
+  const auto volume_divisor = static_cast<double>(model.volume());
+  for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+    for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+      const std::size_t mode = (frequency * modes.momentum_count()) + momentum;
+      const std::complex<double> amplitude = values.density(frequency, momentum);
+      if (!is_finite(amplitude)) {
+        throw std::overflow_error("density observation amplitude is non-finite");
+      }
+      observation.amplitudes[mode] = amplitude;
+
+      const std::complex<double> centered = amplitude - analytic_means[mode];
+      if (!is_finite(centered)) {
+        throw std::overflow_error("centered density amplitude is non-finite");
+      }
+      const double centered_norm = std::norm(centered);
+      if (!std::isfinite(centered_norm)) {
+        throw std::overflow_error("density susceptibility observation is non-finite");
+      }
+      const double connected_value = (centered_norm / model.beta()) / volume_divisor;
+      if (!std::isfinite(connected_value) || connected_value < 0.0) {
+        throw std::overflow_error("normalized density observation is non-finite");
+      }
+      observation.connected_values[mode] = connected_value;
+    }
+  }
+  return observation;
+}
+
+std::size_t validate_density_block_series(const MatsubaraModeSet &modes,
+                                          const std::size_t measurements_per_block,
+                                          const std::span<const double> block_values,
+                                          const std::size_t sample_count) {
+  if (block_values.size() % modes.mode_count() != 0) {
+    throw std::invalid_argument("density block series has the wrong block-value extent");
+  }
+  const std::size_t block_count = block_values.size() / modes.mode_count();
+  if (block_count < 2) {
+    throw std::invalid_argument("density block series requires at least two blocks");
+  }
+  const std::size_t expected_sample_count = detail::checked_product(
+      block_count, measurements_per_block, "density block-series sample count exceeds size_t");
+  if (sample_count != expected_sample_count) {
+    throw std::invalid_argument("density block series has an inconsistent sample count");
+  }
+  for (const double value : block_values) {
+    if (!std::isfinite(value) || value < 0.0) {
+      throw std::invalid_argument("density block value is invalid");
+    }
+  }
+  return block_count;
+}
+
+std::vector<double> density_block_means(const MatsubaraModeSet &modes,
+                                        const std::span<const double> block_values,
+                                        const std::size_t block_count) {
+  auto means =
+      make_checked_vector<double>(modes.mode_count(), "density block means exceed vector capacity");
+  const auto block_divisor = static_cast<double>(block_count);
+  for (std::size_t mode = 0; mode < modes.mode_count(); ++mode) {
+    CompensatedRealSum mean_sum;
+    for (std::size_t block = 0; block < block_count; ++block) {
+      mean_sum.add(block_values[(block * modes.mode_count()) + mode] / block_divisor);
+    }
+    means[mode] = mean_sum.value();
+    if (!std::isfinite(means[mode]) || means[mode] < 0.0) {
+      throw std::overflow_error("density block-series mean is non-finite");
+    }
+  }
+  return means;
+}
+
+double density_covariance_of_mean(const std::span<const double> block_values,
+                                  const std::span<const double> means, const std::size_t mode_count,
+                                  const std::size_t block_count, const std::size_t left_mode,
+                                  const std::size_t right_mode, const bool diagonal) {
+  CompensatedRealSum covariance_sum;
+  for (std::size_t block = 0; block < block_count; ++block) {
+    const std::size_t block_offset = block * mode_count;
+    const double left_difference = block_values[block_offset + left_mode] - means[left_mode];
+    const double right_difference = block_values[block_offset + right_mode] - means[right_mode];
+    const double product = left_difference * right_difference;
+    if (!std::isfinite(product)) {
+      throw std::overflow_error("density covariance product is non-finite");
+    }
+    covariance_sum.add(product);
+  }
+  const auto block_divisor = static_cast<double>(block_count);
+  const auto dof_divisor = static_cast<double>(block_count - 1);
+  const double covariance = (covariance_sum.value() / block_divisor) / dof_divisor;
+  if (!std::isfinite(covariance) || (diagonal && covariance < 0.0)) {
+    throw std::overflow_error("density covariance of mean is invalid");
+  }
+  return covariance;
+}
+
+struct DensityCovarianceCoordinates {
+  std::size_t row_frequency;
+  std::size_t column_frequency;
+};
+
+std::size_t density_covariance_index(const std::size_t frequency_count, const std::size_t momentum,
+                                     const DensityCovarianceCoordinates coordinates) noexcept {
+  return ((((momentum * frequency_count) + coordinates.row_frequency) * frequency_count) +
+          coordinates.column_frequency);
+}
+
+std::vector<double> density_block_covariances(const MatsubaraModeSet &modes,
+                                              const std::span<const double> block_values,
+                                              const std::span<const double> means,
+                                              const std::size_t block_count) {
+  auto covariances = make_checked_vector<double>(density_covariance_extent(modes),
+                                                 "density covariances exceed vector capacity");
+  const std::size_t frequency_count = modes.frequency_count();
+  const std::size_t momentum_count = modes.momentum_count();
+  for (std::size_t momentum = 0; momentum < momentum_count; ++momentum) {
+    for (std::size_t left_frequency = 0; left_frequency < frequency_count; ++left_frequency) {
+      const std::size_t left_mode = (left_frequency * momentum_count) + momentum;
+      for (std::size_t right_frequency = left_frequency; right_frequency < frequency_count;
+           ++right_frequency) {
+        const std::size_t right_mode = (right_frequency * momentum_count) + momentum;
+        const double covariance =
+            density_covariance_of_mean(block_values, means, modes.mode_count(), block_count,
+                                       left_mode, right_mode, left_frequency == right_frequency);
+        const std::size_t upper = density_covariance_index(
+            frequency_count, momentum,
+            {.row_frequency = left_frequency, .column_frequency = right_frequency});
+        const std::size_t lower = density_covariance_index(
+            frequency_count, momentum,
+            {.row_frequency = right_frequency, .column_frequency = left_frequency});
+        covariances[upper] = covariance;
+        covariances[lower] = covariance;
+      }
+    }
+  }
+  return covariances;
+}
+
+std::size_t density_lag_covariance_extent(const ImaginaryTimeLagSet &lags) {
+  const std::size_t lag_square = detail::checked_product(
+      lags.lag_count(), lags.lag_count(), "density lag covariance extent exceeds size_t");
+  return detail::checked_product(lags.momentum_count(), lag_square,
+                                 "density lag covariance extent exceeds size_t");
+}
+
+std::vector<double> density_lag_observation(const ContinuousDensityLagValues &values,
+                                            const Model &model, const ImaginaryTimeLagSet &lags) {
+  if (values.model() != model) {
+    throw std::invalid_argument("density lag observation has a different model");
+  }
+  if (values.lags() != lags) {
+    throw std::invalid_argument("density lag observation has different lag geometry");
+  }
+
+  auto observation = make_checked_vector<double>(lags.value_count(),
+                                                 "density lag observations exceed vector capacity");
+  const auto volume_divisor = static_cast<double>(model.volume());
+  for (std::size_t lag = 0; lag < lags.lag_count(); ++lag) {
+    for (std::size_t momentum = 0; momentum < lags.momentum_count(); ++momentum) {
+      const std::size_t value = (lag * lags.momentum_count()) + momentum;
+      if (is_zero_momentum(lags, momentum)) {
+        observation[value] = 0.0;
+        continue;
+      }
+      const double overlap = values.overlap(lag, momentum);
+      if (!std::isfinite(overlap)) {
+        throw std::overflow_error("density lag overlap is non-finite");
+      }
+      const double normalized = (overlap / model.beta()) / volume_divisor;
+      if (!std::isfinite(normalized)) {
+        throw std::overflow_error("normalized density lag observation is non-finite");
+      }
+      observation[value] = normalized;
+    }
+  }
+  return observation;
+}
+
+std::size_t validate_density_lag_block_series(const ImaginaryTimeLagSet &lags,
+                                              const std::size_t measurements_per_block,
+                                              const std::span<const double> block_values,
+                                              const std::size_t sample_count) {
+  if (block_values.size() % lags.value_count() != 0) {
+    throw std::invalid_argument("density lag block series has the wrong block-value extent");
+  }
+  const std::size_t block_count = block_values.size() / lags.value_count();
+  if (block_count < 2) {
+    throw std::invalid_argument("density lag block series requires at least two blocks");
+  }
+  const std::size_t expected_sample_count = detail::checked_product(
+      block_count, measurements_per_block, "density lag block-series sample count exceeds size_t");
+  if (sample_count != expected_sample_count) {
+    throw std::invalid_argument("density lag block series has an inconsistent sample count");
+  }
+  for (std::size_t block = 0; block < block_count; ++block) {
+    for (std::size_t lag = 0; lag < lags.lag_count(); ++lag) {
+      for (std::size_t momentum = 0; momentum < lags.momentum_count(); ++momentum) {
+        const double value =
+            block_values[(block * lags.value_count()) + (lag * lags.momentum_count()) + momentum];
+        if (!std::isfinite(value)) {
+          throw std::invalid_argument("density lag block value is non-finite");
+        }
+        if (is_zero_momentum(lags, momentum) && value != 0.0) {
+          throw std::invalid_argument("density lag zero-momentum block value is not exact zero");
+        }
+      }
+    }
+  }
+  return block_count;
+}
+
+std::vector<double> density_lag_block_means(const ImaginaryTimeLagSet &lags,
+                                            const std::span<const double> block_values,
+                                            const std::size_t block_count) {
+  auto means = make_checked_vector<double>(lags.value_count(),
+                                           "density lag block means exceed vector capacity");
+  const auto block_divisor = static_cast<double>(block_count);
+  for (std::size_t value = 0; value < lags.value_count(); ++value) {
+    CompensatedRealSum mean_sum;
+    for (std::size_t block = 0; block < block_count; ++block) {
+      mean_sum.add(block_values[(block * lags.value_count()) + value] / block_divisor);
+    }
+    means[value] = mean_sum.value();
+    if (!std::isfinite(means[value])) {
+      throw std::overflow_error("density lag block-series mean is non-finite");
+    }
+  }
+  return means;
+}
+
+struct DensityLagCovarianceCoordinates {
+  std::size_t row_lag;
+  std::size_t column_lag;
+};
+
+std::size_t
+density_lag_covariance_index(const std::size_t lag_count, const std::size_t momentum,
+                             const DensityLagCovarianceCoordinates coordinates) noexcept {
+  return ((((momentum * lag_count) + coordinates.row_lag) * lag_count) + coordinates.column_lag);
+}
+
+std::vector<double> density_lag_block_covariances(const ImaginaryTimeLagSet &lags,
+                                                  const std::span<const double> block_values,
+                                                  const std::span<const double> means,
+                                                  const std::size_t block_count) {
+  auto covariances = make_checked_vector<double>(density_lag_covariance_extent(lags),
+                                                 "density lag covariances exceed vector capacity");
+  const std::size_t lag_count = lags.lag_count();
+  const std::size_t momentum_count = lags.momentum_count();
+  for (std::size_t momentum = 0; momentum < momentum_count; ++momentum) {
+    for (std::size_t left_lag = 0; left_lag < lag_count; ++left_lag) {
+      const std::size_t left_value = (left_lag * momentum_count) + momentum;
+      for (std::size_t right_lag = left_lag; right_lag < lag_count; ++right_lag) {
+        const std::size_t right_value = (right_lag * momentum_count) + momentum;
+        const double covariance =
+            density_covariance_of_mean(block_values, means, lags.value_count(), block_count,
+                                       left_value, right_value, left_lag == right_lag);
+        const std::size_t upper = density_lag_covariance_index(
+            lag_count, momentum, {.row_lag = left_lag, .column_lag = right_lag});
+        const std::size_t lower = density_lag_covariance_index(
+            lag_count, momentum, {.row_lag = right_lag, .column_lag = left_lag});
+        covariances[upper] = covariance;
+        covariances[lower] = covariance;
+      }
+    }
+  }
+  return covariances;
+}
+
 MatsubaraModeSet validated_hopping_accumulator_modes(const Model &model, MatsubaraModeSet modes) {
   validate_model_mode_geometry(model, modes,
                                "hopping accumulator model and Matsubara geometry differ");
   return modes;
+}
+
+std::size_t validated_hopping_measurements_per_block(const std::size_t measurements_per_block) {
+  if (measurements_per_block == 0) {
+    throw std::invalid_argument("hopping block size must be positive");
+  }
+  return measurements_per_block;
 }
 
 std::size_t response_tensor_index(const std::size_t mode, const std::size_t row,
@@ -204,11 +600,149 @@ void update_hopping_response_mode(const std::size_t mode, const std::size_t dime
   }
 }
 
+double hopping_response_component(const std::complex<double> value,
+                                  const HoppingResponseComponent component) {
+  switch (component) {
+  case HoppingResponseComponent::Real:
+    return value.real();
+  case HoppingResponseComponent::Imaginary:
+    return value.imag();
+  }
+  throw std::invalid_argument("unknown hopping-response complex component");
+}
+
+std::size_t validate_hopping_block_series(
+    const MatsubaraModeSet &modes, const std::size_t dimension,
+    const std::size_t measurements_per_block,
+    const std::span<const std::complex<double>> mean_flux_block_values,
+    const std::span<const std::complex<double>> flux_response_block_values,
+    const std::span<const double> diamagnetic_block_values, const std::size_t sample_count) {
+  const std::size_t flux_extent = detail::checked_product(
+      modes.mode_count(), dimension, "hopping block-series flux extent exceeds size_t");
+  const std::size_t response_extent = detail::checked_product(
+      flux_extent, dimension, "hopping block-series response extent exceeds size_t");
+  if (mean_flux_block_values.size() % flux_extent != 0 ||
+      flux_response_block_values.size() % response_extent != 0 ||
+      diamagnetic_block_values.size() % dimension != 0) {
+    throw std::invalid_argument("hopping block series has an incomplete block extent");
+  }
+  const std::size_t block_count = mean_flux_block_values.size() / flux_extent;
+  if (block_count < 2 || flux_response_block_values.size() / response_extent != block_count ||
+      diamagnetic_block_values.size() / dimension != block_count) {
+    throw std::invalid_argument("hopping block series has inconsistent block counts");
+  }
+  const std::size_t expected_sample_count = detail::checked_product(
+      block_count, measurements_per_block, "hopping block-series sample count exceeds size_t");
+  if (sample_count != expected_sample_count) {
+    throw std::invalid_argument("hopping block series has an inconsistent sample count");
+  }
+  for (std::size_t block = 0; block < block_count; ++block) {
+    validate_mean_flux_values(mean_flux_block_values.subspan(block * flux_extent, flux_extent));
+    validate_flux_response_values(
+        modes.mode_count(), dimension,
+        flux_response_block_values.subspan(block * response_extent, response_extent));
+    validate_diamagnetic_values(diamagnetic_block_values.subspan(block * dimension, dimension));
+  }
+  return block_count;
+}
+
+std::vector<std::complex<double>>
+hopping_complex_block_means(const std::span<const std::complex<double>> block_values,
+                            const std::size_t value_extent, const std::size_t block_count,
+                            const char *description) {
+  auto means = make_checked_vector<std::complex<double>>(value_extent, description);
+  const auto block_divisor = static_cast<double>(block_count);
+  for (std::size_t value = 0; value < value_extent; ++value) {
+    CompensatedComplexSum sum;
+    for (std::size_t block = 0; block < block_count; ++block) {
+      sum.add(block_values[(block * value_extent) + value] / block_divisor);
+    }
+    means[value] = sum.value();
+    if (!is_finite(means[value])) {
+      throw std::overflow_error("hopping block-series complex mean is non-finite");
+    }
+  }
+  return means;
+}
+
+std::vector<double> hopping_real_block_means(const std::span<const double> block_values,
+                                             const std::size_t value_extent,
+                                             const std::size_t block_count,
+                                             const char *description) {
+  auto means = make_checked_vector<double>(value_extent, description);
+  const auto block_divisor = static_cast<double>(block_count);
+  for (std::size_t value = 0; value < value_extent; ++value) {
+    CompensatedRealSum sum;
+    for (std::size_t block = 0; block < block_count; ++block) {
+      sum.add(block_values[(block * value_extent) + value] / block_divisor);
+    }
+    means[value] = sum.value();
+    if (!std::isfinite(means[value])) {
+      throw std::overflow_error("hopping block-series real mean is non-finite");
+    }
+  }
+  return means;
+}
+
+double hopping_complex_standard_error(const std::span<const std::complex<double>> block_values,
+                                      const std::size_t value_extent, const std::size_t block_count,
+                                      const std::size_t value, const std::complex<double> mean,
+                                      const HoppingResponseComponent component) {
+  CompensatedRealSum squared_difference_sum;
+  const double component_mean = hopping_response_component(mean, component);
+  for (std::size_t block = 0; block < block_count; ++block) {
+    const double difference =
+        hopping_response_component(block_values[(block * value_extent) + value], component) -
+        component_mean;
+    const double squared_difference = difference * difference;
+    if (!std::isfinite(squared_difference)) {
+      throw std::overflow_error("hopping block-series variance product is non-finite");
+    }
+    squared_difference_sum.add(squared_difference);
+  }
+  const double variance_of_mean =
+      (squared_difference_sum.value() / static_cast<double>(block_count)) /
+      static_cast<double>(block_count - 1);
+  if (!std::isfinite(variance_of_mean) || variance_of_mean < 0.0) {
+    throw std::overflow_error("hopping block-series variance of mean is invalid");
+  }
+  return std::sqrt(variance_of_mean);
+}
+
+double hopping_real_standard_error(const std::span<const double> block_values,
+                                   const std::size_t value_extent, const std::size_t block_count,
+                                   const std::size_t value, const double mean) {
+  CompensatedRealSum squared_difference_sum;
+  for (std::size_t block = 0; block < block_count; ++block) {
+    const double difference = block_values[(block * value_extent) + value] - mean;
+    const double squared_difference = difference * difference;
+    if (!std::isfinite(squared_difference)) {
+      throw std::overflow_error("hopping diamagnetic variance product is non-finite");
+    }
+    squared_difference_sum.add(squared_difference);
+  }
+  const double variance_of_mean =
+      (squared_difference_sum.value() / static_cast<double>(block_count)) /
+      static_cast<double>(block_count - 1);
+  if (!std::isfinite(variance_of_mean) || variance_of_mean < 0.0) {
+    throw std::overflow_error("hopping diamagnetic variance of mean is invalid");
+  }
+  return std::sqrt(variance_of_mean);
+}
+
 void validate_projection_geometry(const ContinuousMeasurementContext &context,
                                   const MatsubaraModeSet &modes) {
   if (context.model().beta() != modes.beta() || context.layout() != modes.layout()) {
     throw std::invalid_argument(
         "continuous measurement context and Matsubara plan geometry differ");
+  }
+}
+
+void validate_projection_geometry(const ContinuousMeasurementContext &context,
+                                  const ImaginaryTimeLagSet &lags) {
+  if (context.model().beta() != lags.beta() || context.layout() != lags.layout()) {
+    throw std::invalid_argument(
+        "continuous measurement context and imaginary-time lag plan geometry differ");
   }
 }
 
@@ -453,6 +987,295 @@ private:
   std::vector<std::uint8_t> zero_momenta_;
 };
 
+struct DensityResidenceSeries {
+  std::size_t momentum_count;
+  std::vector<double> boundaries;
+  // Interval-major, followed by momentum request order.
+  std::vector<std::complex<double>> values;
+
+  [[nodiscard]] std::size_t interval_count() const noexcept { return boundaries.size() - 1; }
+
+  [[nodiscard]] std::complex<double> value(const std::size_t interval,
+                                           const std::size_t momentum) const noexcept {
+    return values[(interval * momentum_count) + momentum];
+  }
+};
+
+struct ShiftedResidenceInterval {
+  double begin;
+  double end;
+  std::size_t source_interval;
+};
+
+class ContinuousDensityLagProjector {
+public:
+  ContinuousDensityLagProjector(const ContinuousMeasurementContext &context,
+                                const ImaginaryTimeLagSet &lags,
+                                const std::span<const std::complex<double>> site_step_phases)
+      : context_(context), lags_(lags), site_step_phases_(site_step_phases),
+        particle_count_(context.model().particle_count()), momentum_count_(lags.momentum_count()),
+        dimension_(context.model().dimension()),
+        particle_phase_extent_(
+            detail::checked_product(particle_count_, momentum_count_,
+                                    "continuous density-lag phase extent exceeds size_t")),
+        current_density_(make_checked_vector<CompensatedComplexSum>(
+            momentum_count_, "continuous density-lag state extent exceeds vector capacity")),
+        particle_phases_(make_checked_vector<std::complex<double>>(
+            particle_phase_extent_,
+            "continuous density-lag particle phases exceed vector capacity")),
+        zero_momenta_(make_checked_vector<std::uint8_t>(
+            momentum_count_, "continuous density-lag zero-momentum extent exceeds capacity")) {
+    const std::size_t component_extent = detail::checked_product(
+        momentum_count_, dimension_, "continuous density-lag component extent exceeds size_t");
+    if (site_step_phases_.size() != component_extent) {
+      throw std::logic_error("continuous density-lag plan has inconsistent phase storage");
+    }
+    initialize_state();
+  }
+
+  [[nodiscard]] std::vector<double> project() {
+    const DensityResidenceSeries residence = build_residence_series();
+    auto overlaps = make_checked_vector<double>(
+        lags_.value_count(), "continuous density-lag result extent exceeds vector capacity");
+    for (std::size_t lag = 0; lag < lags_.lag_count(); ++lag) {
+      const double tau = lags_.lag(lag);
+      const std::vector<double> forward = overlaps_at_lag(residence, tau);
+      double reflected_tau = tau == 0.0 ? 0.0 : lags_.beta() - tau;
+      if (reflected_tau == lags_.beta()) {
+        reflected_tau = 0.0;
+      }
+      const std::vector<double> reflected =
+          reflected_tau == tau ? forward : overlaps_at_lag(residence, reflected_tau);
+      for (std::size_t momentum = 0; momentum < momentum_count_; ++momentum) {
+        double value = (0.5 * forward[momentum]) + (0.5 * reflected[momentum]);
+        if (zero_momenta_[momentum] != 0U) {
+          value = exact_zero_momentum_overlap();
+        }
+        if (!std::isfinite(value)) {
+          throw std::overflow_error("continuous density-lag overlap is non-finite");
+        }
+        overlaps[(lag * momentum_count_) + momentum] = value;
+      }
+    }
+    return overlaps;
+  }
+
+private:
+  void initialize_state() {
+    for (std::size_t momentum = 0; momentum < momentum_count_; ++momentum) {
+      zero_momenta_[momentum] =
+          std::ranges::all_of(lags_.momentum_indices(momentum),
+                              [](const std::size_t component) { return component == 0; })
+              ? 1U
+              : 0U;
+    }
+    for (std::size_t particle = 0; particle < particle_count_; ++particle) {
+      for (std::size_t momentum = 0; momentum < momentum_count_; ++momentum) {
+        const std::complex<double> phase = spatial_site_phase(
+            lags_.layout(), lags_.momentum_indices(momentum), context_.seam_positions()[particle]);
+        particle_phases_[particle_phase_index(particle, momentum)] = phase;
+        current_density_[momentum].add(phase);
+      }
+    }
+  }
+
+  [[nodiscard]] DensityResidenceSeries build_residence_series() {
+    const std::size_t maximum_interval_count = detail::checked_add_size(
+        context_.event_group_count(), 1, "continuous density-lag interval count exceeds size_t");
+    const std::size_t maximum_value_count =
+        detail::checked_product(maximum_interval_count, momentum_count_,
+                                "continuous density-lag residence extent exceeds size_t");
+    const std::size_t maximum_boundary_count = detail::checked_add_size(
+        maximum_interval_count, 1, "continuous density-lag boundary count exceeds size_t");
+
+    DensityResidenceSeries residence{
+        .momentum_count = momentum_count_,
+        .boundaries = {},
+        .values = {},
+    };
+    if (maximum_boundary_count > residence.boundaries.max_size() ||
+        maximum_value_count > residence.values.max_size()) {
+      throw std::length_error("continuous density-lag residence data exceed vector capacity");
+    }
+    residence.boundaries.reserve(maximum_boundary_count);
+    residence.values.reserve(maximum_value_count);
+    residence.boundaries.push_back(0.0);
+
+    double previous_time = 0.0;
+    for (std::size_t group = 0; group < context_.event_group_count(); ++group) {
+      const double time = context_.event_time(group);
+      append_residence_interval(residence, previous_time, time);
+      apply_event_group(group);
+      previous_time = time;
+    }
+    append_residence_interval(residence, previous_time, lags_.beta());
+    if (residence.boundaries.size() < 2 || residence.boundaries.back() != lags_.beta()) {
+      throw std::logic_error("continuous density-lag residence partition is incomplete");
+    }
+    return residence;
+  }
+
+  void append_residence_interval(DensityResidenceSeries &residence, const double begin,
+                                 const double end) const {
+    if (end == begin) {
+      return;
+    }
+    if (end < begin || residence.boundaries.empty() || residence.boundaries.back() != begin) {
+      throw std::logic_error("continuous density-lag residence partition is inconsistent");
+    }
+    for (std::size_t momentum = 0; momentum < momentum_count_; ++momentum) {
+      const std::complex<double> value = current_density_[momentum].value();
+      if (!is_finite(value)) {
+        throw std::overflow_error("continuous density-lag residence value is non-finite");
+      }
+      residence.values.push_back(value);
+    }
+    residence.boundaries.push_back(end);
+  }
+
+  void apply_event_group(const std::size_t group) {
+    for (const ContinuousHop &hop : context_.hops_at(group)) {
+      const auto particle = static_cast<std::size_t>(hop.particle);
+      if (particle >= particle_count_) {
+        throw std::logic_error("continuous density-lag hop has an invalid particle label");
+      }
+      const auto axis = static_cast<std::size_t>(hop.axis);
+      for (std::size_t momentum = 0; momentum < momentum_count_; ++momentum) {
+        const std::size_t particle_phase = particle_phase_index(particle, momentum);
+        const std::complex<double> departure_phase = particle_phases_[particle_phase];
+        const std::complex<double> step_phase = site_step_phases_[(momentum * dimension_) + axis];
+        const std::complex<double> arrival_phase =
+            departure_phase * (hop.direction > 0 ? step_phase : std::conj(step_phase));
+        current_density_[momentum].add(arrival_phase - departure_phase);
+        particle_phases_[particle_phase] = arrival_phase;
+      }
+    }
+  }
+
+  [[nodiscard]] std::vector<ShiftedResidenceInterval>
+  shifted_intervals(const DensityResidenceSeries &residence, const double tau) const {
+    if (!std::isfinite(tau) || tau < 0.0 || tau >= lags_.beta()) {
+      throw std::logic_error("continuous density-lag shift is outside [0, beta)");
+    }
+    const std::size_t interval_count = residence.interval_count();
+    const auto upper = std::ranges::upper_bound(residence.boundaries, tau);
+    const auto source =
+        static_cast<std::size_t>(std::distance(residence.boundaries.begin(), upper) - 1);
+    if (source >= interval_count) {
+      throw std::logic_error("continuous density-lag shift has no residence interval");
+    }
+
+    const std::size_t maximum_shifted_count = detail::checked_add_size(
+        interval_count, 1, "continuous shifted-interval count exceeds size_t");
+    std::vector<ShiftedResidenceInterval> shifted;
+    if (maximum_shifted_count > shifted.max_size()) {
+      throw std::length_error("continuous shifted intervals exceed vector capacity");
+    }
+    shifted.reserve(maximum_shifted_count);
+    const auto append = [&shifted](const double begin, const double end,
+                                   const std::size_t source_interval) {
+      if (end < begin || !std::isfinite(begin) || !std::isfinite(end)) {
+        throw std::logic_error("continuous shifted residence interval is invalid");
+      }
+      if (end == begin) {
+        return;
+      }
+      const double expected_begin = shifted.empty() ? 0.0 : shifted.back().end;
+      if (begin != expected_begin) {
+        throw std::logic_error("continuous shifted residence intervals do not meet");
+      }
+      shifted.push_back({.begin = begin, .end = end, .source_interval = source_interval});
+    };
+
+    append(0.0, residence.boundaries[source + 1] - tau, source);
+    for (std::size_t interval = source + 1; interval < interval_count; ++interval) {
+      append(residence.boundaries[interval] - tau, residence.boundaries[interval + 1] - tau,
+             interval);
+    }
+    for (std::size_t interval = 0; interval < source; ++interval) {
+      append((residence.boundaries[interval] - tau) + lags_.beta(),
+             (residence.boundaries[interval + 1] - tau) + lags_.beta(), interval);
+    }
+    append((residence.boundaries[source] - tau) + lags_.beta(), lags_.beta(), source);
+    if (shifted.empty() || shifted.front().begin != 0.0 || shifted.back().end != lags_.beta()) {
+      throw std::logic_error("continuous shifted residence partition is incomplete");
+    }
+    return shifted;
+  }
+
+  [[nodiscard]] std::vector<double> overlaps_at_lag(const DensityResidenceSeries &residence,
+                                                    const double tau) const {
+    const std::vector<ShiftedResidenceInterval> shifted = shifted_intervals(residence, tau);
+    auto sums = make_checked_vector<CompensatedRealSum>(
+        momentum_count_, "continuous density-lag overlap sums exceed vector capacity");
+    std::size_t base = 0;
+    std::size_t displaced = 0;
+    while (base < residence.interval_count() && displaced < shifted.size()) {
+      const double begin = std::max(residence.boundaries[base], shifted[displaced].begin);
+      const double end = std::min(residence.boundaries[base + 1], shifted[displaced].end);
+      if (end > begin) {
+        const double duration = end - begin;
+        for (std::size_t momentum = 0; momentum < momentum_count_; ++momentum) {
+          const std::complex<double> product =
+              residence.value(shifted[displaced].source_interval, momentum) *
+              std::conj(residence.value(base, momentum));
+          const double contribution = duration * product.real();
+          if (!std::isfinite(contribution)) {
+            throw std::overflow_error("continuous density-lag contribution is non-finite");
+          }
+          sums[momentum].add(contribution);
+        }
+      }
+      const double base_end = residence.boundaries[base + 1];
+      const double displaced_end = shifted[displaced].end;
+      if (base_end <= displaced_end) {
+        ++base;
+      }
+      if (displaced_end <= base_end) {
+        ++displaced;
+      }
+    }
+    if (base != residence.interval_count() || displaced != shifted.size()) {
+      throw std::logic_error("continuous density-lag intersection did not cover the period");
+    }
+
+    auto values = make_checked_vector<double>(
+        momentum_count_, "continuous density-lag overlap values exceed vector capacity");
+    for (std::size_t momentum = 0; momentum < momentum_count_; ++momentum) {
+      values[momentum] = sums[momentum].value();
+      if (!std::isfinite(values[momentum])) {
+        throw std::overflow_error("continuous density-lag overlap sum is non-finite");
+      }
+    }
+    return values;
+  }
+
+  [[nodiscard]] double exact_zero_momentum_overlap() const {
+    const auto particle_count = static_cast<double>(particle_count_);
+    const double value = (lags_.beta() * particle_count) * particle_count;
+    if (!std::isfinite(value)) {
+      throw std::overflow_error("continuous zero-momentum density-lag overlap is non-finite");
+    }
+    return value;
+  }
+
+  [[nodiscard]] std::size_t particle_phase_index(const std::size_t particle,
+                                                 const std::size_t momentum) const noexcept {
+    return (particle * momentum_count_) + momentum;
+  }
+
+  const ContinuousMeasurementContext &context_;
+  const ImaginaryTimeLagSet &lags_;
+  std::span<const std::complex<double>> site_step_phases_;
+  std::size_t particle_count_;
+  std::size_t momentum_count_;
+  std::size_t dimension_;
+  std::size_t particle_phase_extent_;
+  std::vector<CompensatedComplexSum> current_density_;
+  std::vector<std::complex<double>> particle_phases_;
+  std::vector<std::uint8_t> zero_momenta_;
+};
+
 using PairDensityOccupancyMap = std::unordered_map<SiteId, std::uint64_t, SiteIdHash>;
 
 void add_pair_count(std::uint64_t &pair_count, const std::uint64_t additional) {
@@ -652,6 +1475,22 @@ ContinuousMatsubaraPlan::ContinuousMatsubaraPlan(MatsubaraModeSet modes)
   }
 }
 
+ContinuousDensityLagPlan::ContinuousDensityLagPlan(ImaginaryTimeLagSet lags)
+    : lags_(std::move(lags)) {
+  const std::size_t component_count =
+      detail::checked_product(lags_.momentum_count(), lags_.layout().dimension(),
+                              "continuous density-lag phase extent exceeds size_t");
+  if (component_count > site_step_phases_.max_size()) {
+    throw std::length_error("continuous density-lag phase data exceed vector capacity");
+  }
+  site_step_phases_.reserve(component_count);
+  for (std::size_t momentum = 0; momentum < lags_.momentum_count(); ++momentum) {
+    for (std::size_t axis = 0; axis < lags_.layout().dimension(); ++axis) {
+      site_step_phases_.push_back(std::polar(1.0, -lags_.wavevector_component(momentum, axis)));
+    }
+  }
+}
+
 ContinuousMeasurementContext::ContinuousMeasurementContext(
     const ContinuousConfiguration &configuration)
     : model_(configuration.model()), layout_(model_.linear_size(), model_.dimension()) {
@@ -739,6 +1578,30 @@ ContinuousPairDensityModes::ContinuousPairDensityModes(
   }
 }
 
+ContinuousDensityLagValues::ContinuousDensityLagValues(Model model, ImaginaryTimeLagSet lags,
+                                                       std::vector<double> overlap_values)
+    : model_(model), lags_(std::move(lags)), overlap_values_(std::move(overlap_values)) {
+  if (model_.beta() != lags_.beta() ||
+      TorusLayout(model_.linear_size(), model_.dimension()) != lags_.layout()) {
+    throw std::invalid_argument("continuous density-lag geometry does not match its model");
+  }
+  if (overlap_values_.size() != lags_.value_count()) {
+    throw std::invalid_argument("continuous density-lag result has the wrong value extent");
+  }
+  for (const double value : overlap_values_) {
+    if (!std::isfinite(value)) {
+      throw std::invalid_argument("continuous density-lag overlap is non-finite");
+    }
+  }
+}
+
+double ContinuousDensityLagValues::overlap(const std::size_t lag,
+                                           const std::size_t momentum) const {
+  static_cast<void>(lags_.lag(lag));
+  static_cast<void>(lags_.momentum_indices(momentum));
+  return overlap_values_[(lag * lags_.momentum_count()) + momentum];
+}
+
 ContinuousMatsubaraDensityCorrelations::ContinuousMatsubaraDensityCorrelations(
     Model model, MatsubaraModeField<double> correlations,
     std::vector<std::complex<double>> mean_amplitudes, const std::size_t sample_count)
@@ -775,69 +1638,30 @@ DensityMatsubaraAccumulator::DensityMatsubaraAccumulator(Model model, MatsubaraM
     : model_(model), modes_(validated_density_accumulator_modes(model_, std::move(modes))),
       amplitude_sums_(make_checked_vector<std::complex<double>>(
           modes_.mode_count(), "density amplitude sums exceed vector capacity")),
-      centered_norm_sums_(make_checked_vector<double>(
+      centered_observation_sums_(make_checked_vector<double>(
           modes_.mode_count(), "density susceptibility sums exceed vector capacity")),
-      analytic_means_(make_checked_vector<std::complex<double>>(
-          modes_.mode_count(), "density analytic means exceed vector capacity")) {
-  for (std::size_t frequency = 0; frequency < modes_.frequency_count(); ++frequency) {
-    if (modes_.frequency_index(frequency) != 0) {
-      continue;
-    }
-    for (std::size_t momentum = 0; momentum < modes_.momentum_count(); ++momentum) {
-      if (is_zero_momentum(modes_, momentum)) {
-        const double zero_mode_mean = model_.beta() * static_cast<double>(model_.particle_count());
-        if (!std::isfinite(zero_mode_mean)) {
-          throw std::overflow_error("density analytic zero-mode mean is non-finite");
-        }
-        const std::size_t mode = (frequency * modes_.momentum_count()) + momentum;
-        analytic_means_[mode] = {zero_mode_mean, 0.0};
-      }
-    }
-  }
-}
+      analytic_means_(density_analytic_means(model_, modes_)) {}
 
 void DensityMatsubaraAccumulator::observe(const ContinuousParticleModes &values) {
-  if (values.model() != model_) {
-    throw std::invalid_argument("density observation has a different model");
-  }
-  if (values.modes() != modes_) {
-    throw std::invalid_argument("density observation has different Matsubara modes");
-  }
-
   const std::size_t updated_sample_count =
       detail::checked_add_size(sample_count_, 1, "density accumulator sample count exceeds size_t");
+  const DensityModeObservation observation =
+      density_mode_observation(values, model_, modes_, analytic_means_);
   std::vector<std::complex<double>> updated_amplitude_sums = amplitude_sums_;
-  std::vector<double> updated_centered_norm_sums = centered_norm_sums_;
-  for (std::size_t frequency = 0; frequency < modes_.frequency_count(); ++frequency) {
-    for (std::size_t momentum = 0; momentum < modes_.momentum_count(); ++momentum) {
-      const std::size_t mode = (frequency * modes_.momentum_count()) + momentum;
-      const std::complex<double> amplitude = values.density(frequency, momentum);
-      if (!is_finite(amplitude)) {
-        throw std::overflow_error("density observation amplitude is non-finite");
-      }
-
-      updated_amplitude_sums[mode] += amplitude;
-      if (!is_finite(updated_amplitude_sums[mode])) {
-        throw std::overflow_error("density mean-amplitude sum is non-finite");
-      }
-
-      const std::complex<double> centered = amplitude - analytic_means_[mode];
-      if (!is_finite(centered)) {
-        throw std::overflow_error("centered density amplitude is non-finite");
-      }
-      const double centered_norm = std::norm(centered);
-      if (!std::isfinite(centered_norm)) {
-        throw std::overflow_error("density susceptibility observation is non-finite");
-      }
-      updated_centered_norm_sums[mode] += centered_norm;
-      if (!std::isfinite(updated_centered_norm_sums[mode])) {
-        throw std::overflow_error("density susceptibility sum is non-finite");
-      }
+  std::vector<double> updated_centered_observation_sums = centered_observation_sums_;
+  for (std::size_t mode = 0; mode < modes_.mode_count(); ++mode) {
+    updated_amplitude_sums[mode] += observation.amplitudes[mode];
+    if (!is_finite(updated_amplitude_sums[mode])) {
+      throw std::overflow_error("density mean-amplitude sum is non-finite");
+    }
+    updated_centered_observation_sums[mode] += observation.connected_values[mode];
+    if (!std::isfinite(updated_centered_observation_sums[mode])) {
+      throw std::overflow_error("density susceptibility sum is non-finite");
     }
   }
 
   amplitude_sums_.swap(updated_amplitude_sums);
-  centered_norm_sums_.swap(updated_centered_norm_sums);
+  centered_observation_sums_.swap(updated_centered_observation_sums);
   sample_count_ = updated_sample_count;
 }
 
@@ -851,11 +1675,9 @@ ContinuousMatsubaraDensityCorrelations DensityMatsubaraAccumulator::finish() con
   auto correlations = make_checked_vector<double>(
       modes_.mode_count(), "density susceptibility result exceeds vector capacity");
   const auto sample_divisor = static_cast<double>(sample_count_);
-  const auto volume_divisor = static_cast<double>(model_.volume());
   for (std::size_t mode = 0; mode < modes_.mode_count(); ++mode) {
     mean_amplitudes[mode] = amplitude_sums_[mode] / sample_divisor;
-    correlations[mode] =
-        ((centered_norm_sums_[mode] / sample_divisor) / model_.beta()) / volume_divisor;
+    correlations[mode] = centered_observation_sums_[mode] / sample_divisor;
     if (!is_finite(mean_amplitudes[mode])) {
       throw std::overflow_error("density mean result is non-finite");
     }
@@ -866,6 +1688,306 @@ ContinuousMatsubaraDensityCorrelations DensityMatsubaraAccumulator::finish() con
 
   return {model_, MatsubaraModeField<double>(modes_, std::move(correlations)),
           std::move(mean_amplitudes), sample_count_};
+}
+
+DensityMatsubaraBlockSeries::DensityMatsubaraBlockSeries(Model model, MatsubaraModeSet modes,
+                                                         const std::size_t measurements_per_block,
+                                                         std::vector<double> block_values,
+                                                         const std::size_t sample_count)
+    : model_(model), modes_(validated_density_accumulator_modes(model_, std::move(modes))),
+      measurements_per_block_(validated_measurements_per_block(measurements_per_block)),
+      sample_count_(sample_count), block_values_(std::move(block_values)) {
+  block_count_ =
+      validate_density_block_series(modes_, measurements_per_block_, block_values_, sample_count_);
+  means_ = density_block_means(modes_, block_values_, block_count_);
+  covariances_ = density_block_covariances(modes_, block_values_, means_, block_count_);
+}
+
+std::size_t DensityMatsubaraBlockSeries::mode_index(const std::size_t frequency,
+                                                    const std::size_t momentum) const {
+  if (frequency >= modes_.frequency_count()) {
+    throw std::out_of_range("density block-series frequency index is out of range");
+  }
+  if (momentum >= modes_.momentum_count()) {
+    throw std::out_of_range("density block-series momentum index is out of range");
+  }
+  return (frequency * modes_.momentum_count()) + momentum;
+}
+
+std::size_t DensityMatsubaraBlockSeries::covariance_index(const std::size_t momentum,
+                                                          const std::size_t left_frequency,
+                                                          const std::size_t right_frequency) const {
+  if (momentum >= modes_.momentum_count()) {
+    throw std::out_of_range("density covariance momentum index is out of range");
+  }
+  if (left_frequency >= modes_.frequency_count()) {
+    throw std::out_of_range("density covariance left-frequency index is out of range");
+  }
+  if (right_frequency >= modes_.frequency_count()) {
+    throw std::out_of_range("density covariance right-frequency index is out of range");
+  }
+  return density_covariance_index(
+      modes_.frequency_count(), momentum,
+      {.row_frequency = left_frequency, .column_frequency = right_frequency});
+}
+
+double DensityMatsubaraBlockSeries::block_value(const std::size_t block,
+                                                const std::size_t frequency,
+                                                const std::size_t momentum) const {
+  if (block >= block_count_) {
+    throw std::out_of_range("density block index is out of range");
+  }
+  return block_values_[(block * modes_.mode_count()) + mode_index(frequency, momentum)];
+}
+
+double DensityMatsubaraBlockSeries::mean(const std::size_t frequency,
+                                         const std::size_t momentum) const {
+  return means_[mode_index(frequency, momentum)];
+}
+
+double DensityMatsubaraBlockSeries::covariance_of_mean(const std::size_t momentum,
+                                                       const std::size_t left_frequency,
+                                                       const std::size_t right_frequency) const {
+  return covariances_[covariance_index(momentum, left_frequency, right_frequency)];
+}
+
+double DensityMatsubaraBlockSeries::standard_error(const std::size_t frequency,
+                                                   const std::size_t momentum) const {
+  const std::size_t covariance = covariance_index(momentum, frequency, frequency);
+  return std::sqrt(covariances_[covariance]);
+}
+
+double DensityMatsubaraBlockSeries::jackknife_mean(const std::size_t omitted_block,
+                                                   const std::size_t frequency,
+                                                   const std::size_t momentum) const {
+  if (omitted_block >= block_count_) {
+    throw std::out_of_range("density jackknife block index is out of range");
+  }
+  const std::size_t mode = mode_index(frequency, momentum);
+  const auto jackknife_divisor = static_cast<double>(block_count_ - 1);
+  CompensatedRealSum jackknife_sum;
+  for (std::size_t block = 0; block < block_count_; ++block) {
+    if (block != omitted_block) {
+      jackknife_sum.add(block_values_[(block * modes_.mode_count()) + mode] / jackknife_divisor);
+    }
+  }
+  const double mean_without_block = jackknife_sum.value();
+  if (!std::isfinite(mean_without_block) || mean_without_block < 0.0) {
+    throw std::overflow_error("density jackknife mean is invalid");
+  }
+  return mean_without_block;
+}
+
+DensityMatsubaraBlockAccumulator::DensityMatsubaraBlockAccumulator(
+    Model model, MatsubaraModeSet modes, const std::size_t measurements_per_block)
+    : model_(model), modes_(validated_density_accumulator_modes(model_, std::move(modes))),
+      measurements_per_block_(validated_measurements_per_block(measurements_per_block)),
+      pending_sums_(make_checked_vector<double>(
+          modes_.mode_count(), "density pending block sums exceed vector capacity")),
+      analytic_means_(density_analytic_means(model_, modes_)) {}
+
+void DensityMatsubaraBlockAccumulator::observe(const ContinuousParticleModes &values) {
+  const std::size_t updated_sample_count = detail::checked_add_size(
+      sample_count_, 1, "density block accumulator sample count exceeds size_t");
+  const std::size_t updated_pending_sample_count = detail::checked_add_size(
+      pending_sample_count_, 1, "density pending sample count exceeds size_t");
+  if (updated_pending_sample_count > measurements_per_block_) {
+    throw std::logic_error("density pending sample count exceeds its block size");
+  }
+  const DensityModeObservation observation =
+      density_mode_observation(values, model_, modes_, analytic_means_);
+
+  std::vector<double> updated_pending_sums = pending_sums_;
+  for (std::size_t mode = 0; mode < modes_.mode_count(); ++mode) {
+    updated_pending_sums[mode] += observation.connected_values[mode];
+    if (!std::isfinite(updated_pending_sums[mode])) {
+      throw std::overflow_error("density pending block sum is non-finite");
+    }
+  }
+
+  if (updated_pending_sample_count < measurements_per_block_) {
+    pending_sums_.swap(updated_pending_sums);
+    pending_sample_count_ = updated_pending_sample_count;
+    sample_count_ = updated_sample_count;
+    return;
+  }
+
+  auto completed_block = make_checked_vector<double>(
+      modes_.mode_count(), "density completed block exceeds vector capacity");
+  const auto block_divisor = static_cast<double>(measurements_per_block_);
+  for (std::size_t mode = 0; mode < modes_.mode_count(); ++mode) {
+    completed_block[mode] = updated_pending_sums[mode] / block_divisor;
+    if (!std::isfinite(completed_block[mode]) || completed_block[mode] < 0.0) {
+      throw std::overflow_error("density completed block value is invalid");
+    }
+  }
+  const std::size_t updated_block_value_count = detail::checked_add_size(
+      block_values_.size(), modes_.mode_count(), "density block-value extent exceeds size_t");
+  if (updated_block_value_count > block_values_.max_size()) {
+    throw std::length_error("density block values exceed vector capacity");
+  }
+
+  block_values_.insert(block_values_.end(), completed_block.begin(), completed_block.end());
+  std::ranges::fill(pending_sums_, 0.0);
+  pending_sample_count_ = 0;
+  sample_count_ = updated_sample_count;
+}
+
+DensityMatsubaraBlockSeries DensityMatsubaraBlockAccumulator::finish() const {
+  if (pending_sample_count_ != 0) {
+    throw std::logic_error("cannot finish a density block accumulator with a partial block");
+  }
+  if (completed_block_count() < 2) {
+    throw std::logic_error("density block accumulator requires at least two complete blocks");
+  }
+  return {model_, modes_, measurements_per_block_, block_values_, sample_count_};
+}
+
+DensityLagBlockSeries::DensityLagBlockSeries(Model model, ImaginaryTimeLagSet lags,
+                                             const std::size_t measurements_per_block,
+                                             std::vector<double> block_values,
+                                             const std::size_t sample_count)
+    : model_(model), lags_(validated_density_lag_accumulator_lags(model_, std::move(lags))),
+      measurements_per_block_(validated_measurements_per_block(measurements_per_block)),
+      sample_count_(sample_count), block_values_(std::move(block_values)) {
+  block_count_ = validate_density_lag_block_series(lags_, measurements_per_block_, block_values_,
+                                                   sample_count_);
+  means_ = density_lag_block_means(lags_, block_values_, block_count_);
+  covariances_ = density_lag_block_covariances(lags_, block_values_, means_, block_count_);
+}
+
+std::size_t DensityLagBlockSeries::value_index(const std::size_t lag,
+                                               const std::size_t momentum) const {
+  if (lag >= lags_.lag_count()) {
+    throw std::out_of_range("density lag block-series lag index is out of range");
+  }
+  if (momentum >= lags_.momentum_count()) {
+    throw std::out_of_range("density lag block-series momentum index is out of range");
+  }
+  return (lag * lags_.momentum_count()) + momentum;
+}
+
+std::size_t DensityLagBlockSeries::covariance_index(const std::size_t momentum,
+                                                    const std::size_t left_lag,
+                                                    const std::size_t right_lag) const {
+  if (momentum >= lags_.momentum_count()) {
+    throw std::out_of_range("density lag covariance momentum index is out of range");
+  }
+  if (left_lag >= lags_.lag_count()) {
+    throw std::out_of_range("density lag covariance left-lag index is out of range");
+  }
+  if (right_lag >= lags_.lag_count()) {
+    throw std::out_of_range("density lag covariance right-lag index is out of range");
+  }
+  return density_lag_covariance_index(lags_.lag_count(), momentum,
+                                      {.row_lag = left_lag, .column_lag = right_lag});
+}
+
+double DensityLagBlockSeries::block_value(const std::size_t block, const std::size_t lag,
+                                          const std::size_t momentum) const {
+  if (block >= block_count_) {
+    throw std::out_of_range("density lag block index is out of range");
+  }
+  return block_values_[(block * lags_.value_count()) + value_index(lag, momentum)];
+}
+
+double DensityLagBlockSeries::mean(const std::size_t lag, const std::size_t momentum) const {
+  return means_[value_index(lag, momentum)];
+}
+
+double DensityLagBlockSeries::covariance_of_mean(const std::size_t momentum,
+                                                 const std::size_t left_lag,
+                                                 const std::size_t right_lag) const {
+  return covariances_[covariance_index(momentum, left_lag, right_lag)];
+}
+
+double DensityLagBlockSeries::standard_error(const std::size_t lag,
+                                             const std::size_t momentum) const {
+  const std::size_t covariance = covariance_index(momentum, lag, lag);
+  return std::sqrt(covariances_[covariance]);
+}
+
+double DensityLagBlockSeries::jackknife_mean(const std::size_t omitted_block, const std::size_t lag,
+                                             const std::size_t momentum) const {
+  if (omitted_block >= block_count_) {
+    throw std::out_of_range("density lag jackknife block index is out of range");
+  }
+  const std::size_t value = value_index(lag, momentum);
+  const auto jackknife_divisor = static_cast<double>(block_count_ - 1);
+  CompensatedRealSum jackknife_sum;
+  for (std::size_t block = 0; block < block_count_; ++block) {
+    if (block != omitted_block) {
+      jackknife_sum.add(block_values_[(block * lags_.value_count()) + value] / jackknife_divisor);
+    }
+  }
+  const double mean_without_block = jackknife_sum.value();
+  if (!std::isfinite(mean_without_block)) {
+    throw std::overflow_error("density lag jackknife mean is non-finite");
+  }
+  return mean_without_block;
+}
+
+DensityLagBlockAccumulator::DensityLagBlockAccumulator(Model model, ImaginaryTimeLagSet lags,
+                                                       const std::size_t measurements_per_block)
+    : model_(model), lags_(validated_density_lag_accumulator_lags(model_, std::move(lags))),
+      measurements_per_block_(validated_measurements_per_block(measurements_per_block)),
+      pending_sums_(make_checked_vector<double>(
+          lags_.value_count(), "density lag pending block sums exceed vector capacity")) {}
+
+void DensityLagBlockAccumulator::observe(const ContinuousDensityLagValues &values) {
+  const std::size_t updated_sample_count = detail::checked_add_size(
+      sample_count_, 1, "density lag block accumulator sample count exceeds size_t");
+  const std::size_t updated_pending_sample_count = detail::checked_add_size(
+      pending_sample_count_, 1, "density lag pending sample count exceeds size_t");
+  if (updated_pending_sample_count > measurements_per_block_) {
+    throw std::logic_error("density lag pending sample count exceeds its block size");
+  }
+  const std::vector<double> observation = density_lag_observation(values, model_, lags_);
+
+  std::vector<double> updated_pending_sums = pending_sums_;
+  for (std::size_t value = 0; value < lags_.value_count(); ++value) {
+    updated_pending_sums[value] += observation[value];
+    if (!std::isfinite(updated_pending_sums[value])) {
+      throw std::overflow_error("density lag pending block sum is non-finite");
+    }
+  }
+
+  if (updated_pending_sample_count < measurements_per_block_) {
+    pending_sums_.swap(updated_pending_sums);
+    pending_sample_count_ = updated_pending_sample_count;
+    sample_count_ = updated_sample_count;
+    return;
+  }
+
+  auto completed_block = make_checked_vector<double>(
+      lags_.value_count(), "density lag completed block exceeds vector capacity");
+  const auto block_divisor = static_cast<double>(measurements_per_block_);
+  for (std::size_t value = 0; value < lags_.value_count(); ++value) {
+    completed_block[value] = updated_pending_sums[value] / block_divisor;
+    if (!std::isfinite(completed_block[value])) {
+      throw std::overflow_error("density lag completed block value is non-finite");
+    }
+  }
+  const std::size_t updated_block_value_count = detail::checked_add_size(
+      block_values_.size(), lags_.value_count(), "density lag block-value extent exceeds size_t");
+  if (updated_block_value_count > block_values_.max_size()) {
+    throw std::length_error("density lag block values exceed vector capacity");
+  }
+
+  block_values_.insert(block_values_.end(), completed_block.begin(), completed_block.end());
+  std::ranges::fill(pending_sums_, 0.0);
+  pending_sample_count_ = 0;
+  sample_count_ = updated_sample_count;
+}
+
+DensityLagBlockSeries DensityLagBlockAccumulator::finish() const {
+  if (pending_sample_count_ != 0) {
+    throw std::logic_error("cannot finish a density lag block accumulator with a partial block");
+  }
+  if (completed_block_count() < 2) {
+    throw std::logic_error("density lag block accumulator requires at least two complete blocks");
+  }
+  return {model_, lags_, measurements_per_block_, block_values_, sample_count_};
 }
 
 HoppingResponse::HoppingResponse(Model model, MatsubaraModeSet modes,
@@ -1065,6 +2187,402 @@ HoppingResponse HoppingResponseAccumulator::finish() const {
           sample_count_};
 }
 
+HoppingResponseBlockSeries::HoppingResponseBlockSeries(
+    Model model, MatsubaraModeSet modes, const std::size_t measurements_per_block,
+    std::vector<std::complex<double>> mean_flux_block_values,
+    std::vector<std::complex<double>> flux_response_block_values,
+    std::vector<double> diamagnetic_block_values, const std::size_t sample_count)
+    : model_(model), modes_(validated_hopping_accumulator_modes(model_, std::move(modes))),
+      measurements_per_block_(validated_hopping_measurements_per_block(measurements_per_block)),
+      sample_count_(sample_count), mean_flux_block_values_(std::move(mean_flux_block_values)),
+      flux_response_block_values_(std::move(flux_response_block_values)),
+      diamagnetic_block_values_(std::move(diamagnetic_block_values)) {
+  const std::size_t dimension = model_.dimension();
+  const std::size_t flux_extent = detail::checked_product(
+      modes_.mode_count(), dimension, "hopping block-series flux extent exceeds size_t");
+  const std::size_t response_extent = detail::checked_product(
+      flux_extent, dimension, "hopping block-series response extent exceeds size_t");
+  block_count_ = validate_hopping_block_series(modes_, dimension, measurements_per_block_,
+                                               mean_flux_block_values_, flux_response_block_values_,
+                                               diamagnetic_block_values_, sample_count_);
+  mean_flux_values_ =
+      hopping_complex_block_means(mean_flux_block_values_, flux_extent, block_count_,
+                                  "hopping block-series mean flux exceeds vector capacity");
+  flux_response_values_ =
+      hopping_complex_block_means(flux_response_block_values_, response_extent, block_count_,
+                                  "hopping block-series mean response exceeds vector capacity");
+  diamagnetic_values_ =
+      hopping_real_block_means(diamagnetic_block_values_, dimension, block_count_,
+                               "hopping block-series diamagnetic mean exceeds vector capacity");
+  validate_mean_flux_values(mean_flux_values_);
+  validate_flux_response_values(modes_.mode_count(), dimension, flux_response_values_);
+  validate_diamagnetic_values(diamagnetic_values_);
+}
+
+std::size_t HoppingResponseBlockSeries::flux_index(const std::size_t frequency,
+                                                   const std::size_t momentum,
+                                                   const std::size_t axis) const {
+  if (frequency >= modes_.frequency_count()) {
+    throw std::out_of_range("hopping block-series frequency index is out of range");
+  }
+  if (momentum >= modes_.momentum_count()) {
+    throw std::out_of_range("hopping block-series momentum index is out of range");
+  }
+  if (axis >= model_.dimension()) {
+    throw std::out_of_range("hopping block-series axis is out of range");
+  }
+  return ((((frequency * modes_.momentum_count()) + momentum) * model_.dimension()) + axis);
+}
+
+std::size_t HoppingResponseBlockSeries::response_index(const std::size_t frequency,
+                                                       const std::size_t momentum,
+                                                       const std::size_t left,
+                                                       const std::size_t right) const {
+  const std::size_t left_component = flux_index(frequency, momentum, left);
+  if (right >= model_.dimension()) {
+    throw std::out_of_range("hopping block-series right axis is out of range");
+  }
+  return (left_component * model_.dimension()) + right;
+}
+
+void HoppingResponseBlockSeries::validate_block(const std::size_t block) const {
+  if (block >= block_count_) {
+    throw std::out_of_range("hopping block index is out of range");
+  }
+}
+
+std::complex<double> HoppingResponseBlockSeries::block_mean_flux(const std::size_t block,
+                                                                 const std::size_t frequency,
+                                                                 const std::size_t momentum,
+                                                                 const std::size_t axis) const {
+  validate_block(block);
+  const std::size_t value = flux_index(frequency, momentum, axis);
+  return mean_flux_block_values_[(block * mean_flux_values_.size()) + value];
+}
+
+std::complex<double> HoppingResponseBlockSeries::mean_flux(const std::size_t frequency,
+                                                           const std::size_t momentum,
+                                                           const std::size_t axis) const {
+  return mean_flux_values_[flux_index(frequency, momentum, axis)];
+}
+
+double HoppingResponseBlockSeries::mean_flux_standard_error(
+    const std::size_t frequency, const std::size_t momentum, const std::size_t axis,
+    const HoppingResponseComponent component) const {
+  const std::size_t value = flux_index(frequency, momentum, axis);
+  return hopping_complex_standard_error(mean_flux_block_values_, mean_flux_values_.size(),
+                                        block_count_, value, mean_flux_values_[value], component);
+}
+
+std::complex<double> HoppingResponseBlockSeries::jackknife_mean_flux(
+    const std::size_t omitted_block, const std::size_t frequency, const std::size_t momentum,
+    const std::size_t axis) const {
+  validate_block(omitted_block);
+  const std::size_t value = flux_index(frequency, momentum, axis);
+  const auto divisor = static_cast<double>(block_count_ - 1);
+  CompensatedComplexSum sum;
+  for (std::size_t block = 0; block < block_count_; ++block) {
+    if (block != omitted_block) {
+      sum.add(mean_flux_block_values_[(block * mean_flux_values_.size()) + value] / divisor);
+    }
+  }
+  const std::complex<double> mean = sum.value();
+  if (!is_finite(mean)) {
+    throw std::overflow_error("hopping mean-flux jackknife mean is non-finite");
+  }
+  return mean;
+}
+
+std::complex<double> HoppingResponseBlockSeries::block_flux_response(
+    const std::size_t block, const std::size_t frequency, const std::size_t momentum,
+    const std::size_t left, const std::size_t right) const {
+  validate_block(block);
+  const std::size_t value = response_index(frequency, momentum, left, right);
+  return flux_response_block_values_[(block * flux_response_values_.size()) + value];
+}
+
+std::complex<double> HoppingResponseBlockSeries::flux_response(const std::size_t frequency,
+                                                               const std::size_t momentum,
+                                                               const std::size_t left,
+                                                               const std::size_t right) const {
+  return flux_response_values_[response_index(frequency, momentum, left, right)];
+}
+
+double HoppingResponseBlockSeries::flux_response_standard_error(
+    const std::size_t frequency, const std::size_t momentum, const std::size_t left,
+    const std::size_t right, const HoppingResponseComponent component) const {
+  const std::size_t value = response_index(frequency, momentum, left, right);
+  return hopping_complex_standard_error(flux_response_block_values_, flux_response_values_.size(),
+                                        block_count_, value, flux_response_values_[value],
+                                        component);
+}
+
+std::complex<double> HoppingResponseBlockSeries::jackknife_flux_response(
+    const std::size_t omitted_block, const std::size_t frequency, const std::size_t momentum,
+    const std::size_t left, const std::size_t right) const {
+  validate_block(omitted_block);
+  const std::size_t value = response_index(frequency, momentum, left, right);
+  const auto divisor = static_cast<double>(block_count_ - 1);
+  CompensatedComplexSum sum;
+  for (std::size_t block = 0; block < block_count_; ++block) {
+    if (block != omitted_block) {
+      sum.add(flux_response_block_values_[(block * flux_response_values_.size()) + value] /
+              divisor);
+    }
+  }
+  const std::complex<double> mean = sum.value();
+  if (!is_finite(mean)) {
+    throw std::overflow_error("hopping flux-response jackknife mean is non-finite");
+  }
+  return mean;
+}
+
+double HoppingResponseBlockSeries::block_diamagnetic(const std::size_t block,
+                                                     const std::size_t axis) const {
+  validate_block(block);
+  if (axis >= model_.dimension()) {
+    throw std::out_of_range("hopping block-series diamagnetic axis is out of range");
+  }
+  return diamagnetic_block_values_[(block * model_.dimension()) + axis];
+}
+
+double HoppingResponseBlockSeries::diamagnetic(const std::size_t axis) const {
+  if (axis >= model_.dimension()) {
+    throw std::out_of_range("hopping block-series diamagnetic axis is out of range");
+  }
+  return diamagnetic_values_[axis];
+}
+
+double HoppingResponseBlockSeries::diamagnetic_standard_error(const std::size_t axis) const {
+  if (axis >= model_.dimension()) {
+    throw std::out_of_range("hopping block-series diamagnetic axis is out of range");
+  }
+  return hopping_real_standard_error(diamagnetic_block_values_, model_.dimension(), block_count_,
+                                     axis, diamagnetic_values_[axis]);
+}
+
+double HoppingResponseBlockSeries::jackknife_diamagnetic(const std::size_t omitted_block,
+                                                         const std::size_t axis) const {
+  validate_block(omitted_block);
+  if (axis >= model_.dimension()) {
+    throw std::out_of_range("hopping block-series diamagnetic axis is out of range");
+  }
+  const auto divisor = static_cast<double>(block_count_ - 1);
+  CompensatedRealSum sum;
+  for (std::size_t block = 0; block < block_count_; ++block) {
+    if (block != omitted_block) {
+      sum.add(diamagnetic_block_values_[(block * model_.dimension()) + axis] / divisor);
+    }
+  }
+  const double mean = sum.value();
+  if (!std::isfinite(mean) || mean < 0.0) {
+    throw std::overflow_error("hopping diamagnetic jackknife mean is invalid");
+  }
+  return mean;
+}
+
+std::complex<double> HoppingResponseBlockSeries::block_paramagnetic(const std::size_t block,
+                                                                    const std::size_t frequency,
+                                                                    const std::size_t momentum,
+                                                                    const std::size_t left,
+                                                                    const std::size_t right) const {
+  std::complex<double> value = -block_flux_response(block, frequency, momentum, left, right);
+  if (left == right) {
+    value += block_diamagnetic(block, left);
+  }
+  return value;
+}
+
+std::complex<double> HoppingResponseBlockSeries::paramagnetic(const std::size_t frequency,
+                                                              const std::size_t momentum,
+                                                              const std::size_t left,
+                                                              const std::size_t right) const {
+  std::complex<double> value = -flux_response(frequency, momentum, left, right);
+  if (left == right) {
+    value += diamagnetic(left);
+  }
+  return value;
+}
+
+double HoppingResponseBlockSeries::paramagnetic_standard_error(
+    const std::size_t frequency, const std::size_t momentum, const std::size_t left,
+    const std::size_t right, const HoppingResponseComponent component) const {
+  const std::complex<double> mean = paramagnetic(frequency, momentum, left, right);
+  const double component_mean = hopping_response_component(mean, component);
+  CompensatedRealSum squared_difference_sum;
+  for (std::size_t block = 0; block < block_count_; ++block) {
+    const double difference =
+        hopping_response_component(block_paramagnetic(block, frequency, momentum, left, right),
+                                   component) -
+        component_mean;
+    const double squared_difference = difference * difference;
+    if (!std::isfinite(squared_difference)) {
+      throw std::overflow_error("hopping paramagnetic variance product is non-finite");
+    }
+    squared_difference_sum.add(squared_difference);
+  }
+  const double variance_of_mean =
+      (squared_difference_sum.value() / static_cast<double>(block_count_)) /
+      static_cast<double>(block_count_ - 1);
+  if (!std::isfinite(variance_of_mean) || variance_of_mean < 0.0) {
+    throw std::overflow_error("hopping paramagnetic variance of mean is invalid");
+  }
+  return std::sqrt(variance_of_mean);
+}
+
+std::complex<double> HoppingResponseBlockSeries::jackknife_paramagnetic(
+    const std::size_t omitted_block, const std::size_t frequency, const std::size_t momentum,
+    const std::size_t left, const std::size_t right) const {
+  std::complex<double> value =
+      -jackknife_flux_response(omitted_block, frequency, momentum, left, right);
+  if (left == right) {
+    value += jackknife_diamagnetic(omitted_block, left);
+  }
+  return value;
+}
+
+HoppingResponseBlockAccumulator::HoppingResponseBlockAccumulator(
+    Model model, MatsubaraModeSet modes, const std::size_t measurements_per_block)
+    : model_(model), modes_(validated_hopping_accumulator_modes(model_, std::move(modes))),
+      measurements_per_block_(validated_hopping_measurements_per_block(measurements_per_block)),
+      pending_flux_sums_(make_checked_vector<std::complex<double>>(
+          detail::checked_product(modes_.mode_count(), model_.dimension(),
+                                  "hopping pending flux extent exceeds size_t"),
+          "hopping pending flux sums exceed vector capacity")),
+      pending_response_sums_(make_checked_vector<std::complex<double>>(
+          detail::checked_product(
+              detail::checked_product(modes_.mode_count(), model_.dimension(),
+                                      "hopping pending response component extent exceeds size_t"),
+              model_.dimension(), "hopping pending response extent exceeds size_t"),
+          "hopping pending response sums exceed vector capacity")),
+      pending_axis_event_count_sums_(make_checked_vector<std::size_t>(
+          model_.dimension(), "hopping pending axis counts exceed vector capacity")) {}
+
+void HoppingResponseBlockAccumulator::observe(const ContinuousParticleModes &values) {
+  if (values.model() != model_) {
+    throw std::invalid_argument("hopping block observation has a different model");
+  }
+  if (values.modes() != modes_) {
+    throw std::invalid_argument("hopping block observation has different Matsubara modes");
+  }
+  const std::size_t updated_sample_count = detail::checked_add_size(
+      sample_count_, 1, "hopping block accumulator sample count exceeds size_t");
+  const std::size_t updated_pending_sample_count = detail::checked_add_size(
+      pending_sample_count_, 1, "hopping pending sample count exceeds size_t");
+  if (updated_pending_sample_count > measurements_per_block_) {
+    throw std::logic_error("hopping pending sample count exceeds its block size");
+  }
+
+  std::vector<std::complex<double>> updated_flux_sums = pending_flux_sums_;
+  std::vector<std::complex<double>> updated_response_sums = pending_response_sums_;
+  std::vector<std::size_t> updated_axis_event_count_sums = pending_axis_event_count_sums_;
+  auto amplitudes = make_checked_vector<std::complex<double>>(
+      model_.dimension(), "hopping block observation workspace exceeds vector capacity");
+  for (std::size_t frequency = 0; frequency < modes_.frequency_count(); ++frequency) {
+    for (std::size_t momentum = 0; momentum < modes_.momentum_count(); ++momentum) {
+      const std::size_t mode = (frequency * modes_.momentum_count()) + momentum;
+      update_hopping_flux_mode(values, frequency, momentum, mode, model_.dimension(), amplitudes,
+                               updated_flux_sums);
+      update_hopping_response_mode(mode, model_.dimension(), amplitudes, updated_response_sums);
+    }
+  }
+  for (std::size_t axis = 0; axis < model_.dimension(); ++axis) {
+    updated_axis_event_count_sums[axis] =
+        detail::checked_add_size(updated_axis_event_count_sums[axis], values.axis_event_count(axis),
+                                 "hopping pending axis event-count sum exceeds size_t");
+  }
+
+  if (updated_pending_sample_count < measurements_per_block_) {
+    pending_flux_sums_.swap(updated_flux_sums);
+    pending_response_sums_.swap(updated_response_sums);
+    pending_axis_event_count_sums_.swap(updated_axis_event_count_sums);
+    pending_sample_count_ = updated_pending_sample_count;
+    sample_count_ = updated_sample_count;
+    return;
+  }
+
+  auto completed_flux = make_checked_vector<std::complex<double>>(
+      pending_flux_sums_.size(), "hopping completed flux block exceeds vector capacity");
+  auto completed_response = make_checked_vector<std::complex<double>>(
+      pending_response_sums_.size(), "hopping completed response block exceeds vector capacity");
+  auto completed_diamagnetic = make_checked_vector<double>(
+      model_.dimension(), "hopping completed diamagnetic block exceeds vector capacity");
+  const auto block_divisor = static_cast<double>(measurements_per_block_);
+  const auto volume_divisor = static_cast<double>(model_.volume());
+  for (std::size_t value = 0; value < completed_flux.size(); ++value) {
+    completed_flux[value] = updated_flux_sums[value] / block_divisor;
+    if (!is_finite(completed_flux[value])) {
+      throw std::overflow_error("hopping completed mean-flux block is non-finite");
+    }
+  }
+  for (std::size_t value = 0; value < completed_response.size(); ++value) {
+    completed_response[value] =
+        ((updated_response_sums[value] / block_divisor) / volume_divisor) / model_.beta();
+    if (!is_finite(completed_response[value])) {
+      throw std::overflow_error("hopping completed response block is non-finite");
+    }
+  }
+  validate_flux_response_values(modes_.mode_count(), model_.dimension(), completed_response);
+  for (std::size_t axis = 0; axis < model_.dimension(); ++axis) {
+    completed_diamagnetic[axis] =
+        ((static_cast<double>(updated_axis_event_count_sums[axis]) / block_divisor) /
+         volume_divisor) /
+        model_.beta();
+    if (!std::isfinite(completed_diamagnetic[axis]) || completed_diamagnetic[axis] < 0.0) {
+      throw std::overflow_error("hopping completed diamagnetic block is invalid");
+    }
+  }
+
+  const std::size_t updated_flux_block_count =
+      detail::checked_add_size(mean_flux_block_values_.size(), completed_flux.size(),
+                               "hopping mean-flux block extent exceeds size_t");
+  const std::size_t updated_response_block_count =
+      detail::checked_add_size(flux_response_block_values_.size(), completed_response.size(),
+                               "hopping response block extent exceeds size_t");
+  const std::size_t updated_diamagnetic_block_count =
+      detail::checked_add_size(diamagnetic_block_values_.size(), completed_diamagnetic.size(),
+                               "hopping diamagnetic block extent exceeds size_t");
+  if (updated_flux_block_count > mean_flux_block_values_.max_size() ||
+      updated_response_block_count > flux_response_block_values_.max_size() ||
+      updated_diamagnetic_block_count > diamagnetic_block_values_.max_size()) {
+    throw std::length_error("hopping block values exceed vector capacity");
+  }
+  std::vector<std::complex<double>> updated_flux_blocks = mean_flux_block_values_;
+  std::vector<std::complex<double>> updated_response_blocks = flux_response_block_values_;
+  std::vector<double> updated_diamagnetic_blocks = diamagnetic_block_values_;
+  updated_flux_blocks.insert(updated_flux_blocks.end(), completed_flux.begin(),
+                             completed_flux.end());
+  updated_response_blocks.insert(updated_response_blocks.end(), completed_response.begin(),
+                                 completed_response.end());
+  updated_diamagnetic_blocks.insert(updated_diamagnetic_blocks.end(), completed_diamagnetic.begin(),
+                                    completed_diamagnetic.end());
+
+  mean_flux_block_values_.swap(updated_flux_blocks);
+  flux_response_block_values_.swap(updated_response_blocks);
+  diamagnetic_block_values_.swap(updated_diamagnetic_blocks);
+  std::ranges::fill(pending_flux_sums_, std::complex<double>{});
+  std::ranges::fill(pending_response_sums_, std::complex<double>{});
+  std::ranges::fill(pending_axis_event_count_sums_, std::size_t{0});
+  pending_sample_count_ = 0;
+  sample_count_ = updated_sample_count;
+}
+
+HoppingResponseBlockSeries HoppingResponseBlockAccumulator::finish() const {
+  if (pending_sample_count_ != 0) {
+    throw std::logic_error("cannot finish a hopping block accumulator with a partial block");
+  }
+  if (completed_block_count() < 2) {
+    throw std::logic_error("hopping block accumulator requires at least two complete blocks");
+  }
+  return {model_,
+          modes_,
+          measurements_per_block_,
+          mean_flux_block_values_,
+          flux_response_block_values_,
+          diamagnetic_block_values_,
+          sample_count_};
+}
+
 ContinuousParticleModes continuous_particle_modes(const ContinuousMeasurementContext &context,
                                                   const ContinuousMatsubaraPlan &plan) {
   const MatsubaraModeSet &modes = plan.modes();
@@ -1095,6 +2613,21 @@ ContinuousPairDensityModes
 continuous_pair_density_modes(const ContinuousConfiguration &configuration,
                               const ContinuousMatsubaraPlan &plan) {
   return continuous_pair_density_modes(ContinuousMeasurementContext(configuration), plan);
+}
+
+ContinuousDensityLagValues
+continuous_density_lag_values(const ContinuousMeasurementContext &context,
+                              const ContinuousDensityLagPlan &plan) {
+  const ImaginaryTimeLagSet &lags = plan.lags();
+  validate_projection_geometry(context, lags);
+  ContinuousDensityLagProjector projector(context, lags, plan.site_step_phases_);
+  return {context.model(), lags, projector.project()};
+}
+
+ContinuousDensityLagValues
+continuous_density_lag_values(const ContinuousConfiguration &configuration,
+                              const ContinuousDensityLagPlan &plan) {
+  return continuous_density_lag_values(ContinuousMeasurementContext(configuration), plan);
 }
 
 namespace detail {
@@ -1148,18 +2681,7 @@ std::complex<double> matsubara_interval_transform(const std::int64_t index, cons
 
 std::complex<double> matsubara_site_phase(const MatsubaraModeSet &modes, const std::size_t momentum,
                                           const SiteId site) {
-  const auto momentum_components = modes.momentum_indices(momentum);
-  const std::vector<std::size_t> site_components = modes.layout().decode(site);
-  const auto linear_size = static_cast<std::size_t>(modes.layout().linear_size());
-  std::complex<double> phase{1.0, 0.0};
-  for (std::size_t axis = 0; axis < modes.layout().dimension(); ++axis) {
-    const std::size_t residue =
-        multiply_modulo(momentum_components[axis], site_components[axis], linear_size);
-    const double angle =
-        -2.0 * std::numbers::pi * static_cast<double>(residue) / static_cast<double>(linear_size);
-    phase *= std::polar(1.0, angle);
-  }
-  return phase;
+  return spatial_site_phase(modes.layout(), modes.momentum_indices(momentum), site);
 }
 
 } // namespace detail

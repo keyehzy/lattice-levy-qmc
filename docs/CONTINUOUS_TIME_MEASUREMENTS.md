@@ -9,11 +9,11 @@ Markov-chain errors were completed on 2026-07-23. This document remains the
 design specification and contains no implementation.
 
 Continuation-ready block statistics/export and exact requested-lag density
-output have moved to
-[`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md) and are tracked
-by [issues 12](https://github.com/keyehzy/lattice-levy-qmc/issues/12) and
-[13](https://github.com/keyehzy/lattice-levy-qmc/issues/13). The two remaining
-physics regressions are tracked by
+output, originally tracked by
+[issues 12](https://github.com/keyehzy/lattice-levy-qmc/issues/12) and
+[13](https://github.com/keyehzy/lattice-levy-qmc/issues/13), are implemented
+under [`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md). The two
+remaining physics regressions are tracked by
 [issue 14](https://github.com/keyehzy/lattice-levy-qmc/issues/14), and
 benchmark-gated projector optimisations by
 [issue 15](https://github.com/keyehzy/lattice-levy-qmc/issues/15). A future
@@ -1156,8 +1156,8 @@ small event/state primitives without sharing that ownership model.
 Because this adds public result and measurement APIs, implementation should
 also update `cpp/CHANGELOG.md`, the continuous-observable section of the user
 documentation, and retained-observable documentation. The interacting demo
-intentionally remains a scalar trace; its opt-in continuation-data output is
-specified separately in
+retains its scalar trace by default and now provides the opt-in
+continuation-data output specified separately in
 [`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md) and
 [issue 12](https://github.com/keyehzy/lattice-levy-qmc/issues/12). Keep the
 derivation here rather than duplicating it in source comments; public
@@ -1247,13 +1247,12 @@ interacting unit target. Monte Carlo convergence, high-frequency limits, and
 finite-`U` sampled comparisons belong in the labelled statistical target with
 documented seeds, sample counts, and uncertainty-derived tolerances.
 
-Autocorrelation analysis, block/jackknife errors, statistical covariance
-between output modes, continuation-data export, and direct requested-lag
-output are specified separately in
-[`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md). The
-Matsubara workflow is tracked by
-[issue 12](https://github.com/keyehzy/lattice-levy-qmc/issues/12) and the lag
-backend by [issue 13](https://github.com/keyehzy/lattice-levy-qmc/issues/13).
+Implemented block/jackknife data, cross-frequency statistical covariance, and
+continuation-data export, along with the remaining autocorrelation analysis
+and direct requested-lag output, are specified separately in
+[`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md). The lag
+backend is tracked by
+[issue 13](https://github.com/keyehzy/lattice-levy-qmc/issues/13).
 
 ### Design-time numerical checks
 
@@ -1344,14 +1343,12 @@ derivative and returned decomposition explicit.
    three concrete loops until another projector demonstrates a useful smaller
    generic contract.
 
-Continuation data, requested-lag output, remaining statistical regressions,
-benchmark-gated optimisations, and an ensemble pair-density response are
-deliberately outside this completed implementation order. They are specified
-or tracked by
-[`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md) and
-[issues 12](https://github.com/keyehzy/lattice-levy-qmc/issues/12),
-[13](https://github.com/keyehzy/lattice-levy-qmc/issues/13),
-[14](https://github.com/keyehzy/lattice-levy-qmc/issues/14),
+Matsubara and requested-lag block statistics and continuation-bundle export
+are implemented under
+[`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md). Remaining
+statistical regressions, benchmark-gated optimisations, and an ensemble
+pair-density response remain outside this completed implementation order. They
+are tracked by [issues 14](https://github.com/keyehzy/lattice-levy-qmc/issues/14),
 [15](https://github.com/keyehzy/lattice-levy-qmc/issues/15), and
 [16](https://github.com/keyehzy/lattice-levy-qmc/issues/16).
 
@@ -1365,9 +1362,10 @@ Every concrete follow-up named by this design is now tracked:
   [issue 5](https://github.com/keyehzy/lattice-levy-qmc/issues/5);
 - the free/retained/continuous target boundary:
   [issue 11](https://github.com/keyehzy/lattice-levy-qmc/issues/11);
-- continuation-ready block statistics and export:
+- continuation-ready block statistics and export, completed by this
+  implementation:
   [issue 12](https://github.com/keyehzy/lattice-levy-qmc/issues/12);
-- exact requested-lag density correlations:
+- exact requested-lag density correlations, completed by this implementation:
   [issue 13](https://github.com/keyehzy/lattice-levy-qmc/issues/13);
 - remaining physics regressions:
   [issue 14](https://github.com/keyehzy/lattice-levy-qmc/issues/14); and

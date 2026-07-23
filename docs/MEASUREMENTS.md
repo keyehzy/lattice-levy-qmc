@@ -165,6 +165,17 @@ real nonnegative susceptibility. Both accessors use the selected mode set's
 frequency-major ordering and check each index. The result retains its complete
 model, modes, and nonzero sample count as provenance.
 
+`DensityMatsubaraBlockAccumulator` consumes the same primitive samples and
+forms consecutive, equal-sized means of the normalized connected
+susceptibility. It rejects incomplete final blocks and requires at least two
+complete blocks. Its owning `DensityMatsubaraBlockSeries` exposes the block
+table, mean, standard error, leave-one-block-out mean, and one real symmetric
+frequency covariance-of-the-mean matrix per momentum. The simple and block
+accumulators share the per-configuration centering and normalization path, so
+their means agree to floating-point roundoff on identical observations. See
+[`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md) for the
+blocking and covariance conventions.
+
 ## Exact continuous-time on-site pair density
 
 `continuous_pair_density_modes(context, plan)` reuses the same event geometry
@@ -231,12 +242,18 @@ the sampled uncentred complex amplitude as a symmetry diagnostic. The response
 tensor is Hermitian by construction. `R`, `D`, and `Lambda^p` have units of
 energy per site in the repository's `k_B=1`, unit-lattice-spacing convention.
 
-Block-resolved density statistics, cross-frequency sampling covariance,
-continuation-data export, and the separate exact requested-lag backend are
-specified in
-[`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md). They are
-analysis/workflow extensions to the implemented Matsubara estimator, not
-alternate normalizations of it.
+`HoppingResponseBlockAccumulator` forms consecutive equal-size blocks of all
+three authoritative terms. Its owning series reports component-wise standard
+errors and leave-one-block-out means. Paramagnetic errors are formed from
+`D*delta-R` block by block, preserving the sampled covariance between the
+contact and flux-response terms.
+
+The interacting demo exports this data as the separate
+`hopping-response-v1` schema: a manifest plus response, diamagnetic, and
+mean-flux value/block tables. The schema records complete run provenance and
+publishes atomically without assigning a conductivity interpretation. It is
+distinct from the density continuation bundle documented in
+[`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md).
 
 ## Exactness and checks
 

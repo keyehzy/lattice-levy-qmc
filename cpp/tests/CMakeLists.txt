@@ -25,6 +25,7 @@ add_executable(
   test_configuration.cpp
   test_free_boson.cpp
   test_free_numerics.cpp
+  test_imaginary_time_lags.cpp
   test_matsubara_modes.cpp
   test_model.cpp
   test_observables.cpp
@@ -54,13 +55,25 @@ qmc_set_project_warnings(qmc_interacting_unit_tests)
 qmc_enable_sanitizers(qmc_interacting_unit_tests)
 gtest_discover_tests(qmc_interacting_unit_tests PROPERTIES LABELS unit)
 
+if(TARGET qmc_continuation_bundle)
+  target_sources(
+    qmc_interacting_unit_tests
+    PRIVATE
+      test_continuation_bundle.cpp
+      "${PROJECT_SOURCE_DIR}/examples/continuation_bundle.cpp"
+  )
+  target_include_directories(qmc_interacting_unit_tests PRIVATE "${PROJECT_SOURCE_DIR}/examples")
+endif()
+
 if(QMC_BUILD_STATISTICAL_TESTS)
   add_executable(
     qmc_statistical_tests
     test_interacting_statistical.cpp
     test_sampling_statistical.cpp
+    "${PROJECT_SOURCE_DIR}/examples/continuation_bundle.cpp"
   )
   target_link_libraries(qmc_statistical_tests PRIVATE qmc::interacting GTest::gtest_main)
+  target_include_directories(qmc_statistical_tests PRIVATE "${PROJECT_SOURCE_DIR}/examples")
   qmc_set_project_warnings(qmc_statistical_tests)
   qmc_enable_sanitizers(qmc_statistical_tests)
   gtest_discover_tests(qmc_statistical_tests PROPERTIES LABELS statistical)

@@ -58,6 +58,8 @@ statistical error bars.
 | `python/interacting_lattice_levy.py` | Event-driven paths, interaction action, update moves, observables, and the finite-\(U\) sampler |
 | `python/demo.py` | One-dimensional ideal-world-line plot |
 | `python/demo_interacting.py` | Finite-\(U\) trace and acceptance-rate demo |
+| `python/qmc_maxent.py` | Single-momentum bosonic MaxEnt adapter |
+| `python/qmc_dynamic_structure.py` | Batch \(S(q,\omega)\), jackknife, and plotting workflow |
 | `python/validate_interacting_ed.py` | Small-system comparison with exact diagonalization |
 | `python/test_lattice_levy.py` | Free-kernel, recursion, winding, bridge, and configuration tests |
 | `python/test_interacting_lattice_levy.py` | Continuous-path, action, update, and state-invariant tests |
@@ -65,8 +67,10 @@ statistical error bars.
 | `docs/MEASUREMENTS.md` | Retained and exact continuous-time estimator conventions |
 | `docs/CONTINUOUS_TIME_MEASUREMENTS.md` | Implemented event-based Matsubara measurement design |
 | `docs/ANALYTIC_CONTINUATION_DATA.md` | Block statistics, covariance, export, and requested-lag design |
+| `docs/MAXENT.md` | Vendored TRIQS/maxent density-bundle adapter and bosonic kernel |
 | `docs/RANDOM_SEAM_STITCH.md` | Closed permutation reconnection, detailed balance, and local action updates |
 | `interacting_ed_validation.txt` | Checked-in reference output from the exact-diagonalization comparison |
+| `vendor/triqs_maxent/` | Pinned TRIQS/maxent 4.0.0 source snapshot (GPL-3.0-or-later) |
 
 ## Install and verify
 
@@ -199,6 +203,34 @@ The demonstration driver runs the same workflow and plots running means:
 ```bash
 python python/demo_interacting.py --N 6 --L 8 --beta 1.5 --t 1.0 --U 2.0
 ```
+
+The C++ interacting demo can emit blocked density correlations for analytic
+continuation and a separate blocked hopping-response bundle. The latter keeps
+the full gauge response, diamagnetic contact term, derived paramagnetic
+response, and mean-flux diagnostics without imposing a conductivity
+interpretation. The vendored TRIQS/maxent adapter reads the density bundle,
+uses its full per-momentum covariance, and writes a reconstructed positive
+density spectrum:
+
+```bash
+python3 python/qmc_maxent.py density-continuation-v1 \
+  --momentum-ordinal 0 --omega-max 12 \
+  --output-dir density-maxent-v1
+```
+
+To continue every measured nonzero momentum, convert to the per-particle
+dynamic structure factor, propagate block jackknife errors, and write combined
+tables and plots:
+
+```bash
+python3 python/qmc_dynamic_structure.py density-continuation-v1 \
+  --omega-max 12 --omega-points 200 \
+  --output-dir dynamic-structure-v1
+```
+
+See [the MaxEnt integration guide](docs/MAXENT.md) for bundle generation,
+kernel conventions, batch output tables, jackknife semantics, and analysis
+controls.
 
 ## Important conventions
 

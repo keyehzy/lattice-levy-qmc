@@ -205,11 +205,28 @@ incompatible samples before mutation, and returns
 `ContinuousMatsubaraDensityCorrelations`. The result reports the sampled
 complex mean amplitude and the connected susceptibility
 `<|delta rho(q,n)|^2>/(beta*V)` with the exact homogeneous fixed-particle-number
-mean subtracted at amplitude level. `HoppingResponseAccumulator` consumes the
-same primitive sample and returns the full signed-flux gauge response
+mean subtracted at amplitude level. `DensityMatsubaraBlockAccumulator` consumes
+the same normalized observation into consecutive equal-size blocks; its owning
+result exposes block values, means, per-momentum frequency covariance of the
+mean, standard errors, and leave-one-block-out means.
+`continuous_density_lag_values(context, plan)` separately projects exact
+selected-lag density overlaps without a time grid. `DensityLagBlockAccumulator`
+normalizes those overlaps into connected per-site correlations, installs the
+fixed-particle-number zero-momentum value as exact zero, and publishes signed
+block values, means, per-momentum cross-lag covariance, standard errors, and
+leave-one-block-out means in an owning `DensityLagBlockSeries`.
+`HoppingResponseAccumulator` consumes the same primitive sample and returns the
+full signed-flux gauge response
 `R=<I I^*>/(beta*V)`, axis-resolved diamagnetic term
 `D=<K_axis>/(beta*V)`, and derived paramagnetic current correlation
 `Lambda^p=D*delta-R`, together with sampled complex mean flux diagnostics.
+`HoppingResponseBlockAccumulator` forms complete equal-size blocks of those
+terms. Its owning series exposes authoritative block values, component-wise
+standard errors, and leave-one-block-out means; paramagnetic statistics are
+derived block by block so the covariance between `D` and `R` is retained.
+The interacting demo's opt-in `--hopping-*` workflow writes a versioned
+`hopping-response-v1` directory containing full run provenance and separate
+response, diamagnetic, and mean-flux value/block tables.
 `continuous_pair_density_modes(context, plan)` is the separate
 occupancy-based diagonal projector. Its unnormalised
 `ContinuousPairDensityModes` result contains the exact residence transform of
@@ -220,8 +237,8 @@ See [`docs/MEASUREMENTS.md`](../docs/MEASUREMENTS.md) for estimator definitions,
 normalizations, exactness, and retained-grid conventions. The event-based
 continuous measurement design is documented in
 [`docs/CONTINUOUS_TIME_MEASUREMENTS.md`](../docs/CONTINUOUS_TIME_MEASUREMENTS.md).
-Block-resolved statistics, continuation-data export, and exact requested-lag
-density output are designed in
+The implemented Matsubara and requested-lag block statistics and continuation
+data export workflows are specified in
 [`docs/ANALYTIC_CONTINUATION_DATA.md`](../docs/ANALYTIC_CONTINUATION_DATA.md).
 
 ## Measurement and plotting demo
@@ -268,3 +285,35 @@ strand mixture remains pair-only and global ideal-gas proposals default to
 zero. Use `--help` for scheduling, locality, collective strand mixtures,
 thinning, seed, and output options. The derivation is in
 [`docs/RANDOM_SEAM_STITCH.md`](../docs/RANDOM_SEAM_STITCH.md).
+
+Continuation-ready density data are opt-in. This example measures the
+nonzero one-dimensional momentum `k=1`, Matsubara indices `0` through `8`, and
+writes four self-describing TSV tables without retaining the scalar trace:
+
+```sh
+./build/dev/examples/qmc_interacting_demo \
+  --particles 6 --beta 1.5 --linear-size 8 --dimension 1 \
+  --hopping 1.0 --interaction 2.0 --burn-in 500 --samples 3000 \
+  --density-momenta '1' --density-frequency-max 8 \
+  --density-measurements-per-block 30 \
+  --density-continuation-dir density-continuation-v1 --no-trace
+```
+
+For multiple dimensions, separate components with commas and momentum rows
+with semicolons, for example `--density-momenta '1,0;0,1'`. The measurement
+count must provide at least two complete blocks. Existing bundle directories
+are never overwritten.
+
+To export exact selected imaginary-time correlations instead, replace
+`--density-frequency-max` with comma-separated canonical lags. This selects
+the mutually exclusive `imaginary_time_lag` basis without introducing a
+retained time grid:
+
+```sh
+./build/dev/examples/qmc_interacting_demo \
+  --particles 6 --beta 1.5 --linear-size 8 --dimension 1 \
+  --hopping 1.0 --interaction 2.0 --burn-in 500 --samples 3000 \
+  --density-momenta '1' --density-lags 0,0.25,0.5,0.75 \
+  --density-measurements-per-block 30 \
+  --density-continuation-dir density-lag-continuation-v1 --no-trace
+```

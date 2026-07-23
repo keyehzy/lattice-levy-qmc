@@ -1,0 +1,389 @@
+if(NOT DEFINED PROGRAM OR NOT DEFINED OUTPUT_DIRECTORY)
+  message(FATAL_ERROR "PROGRAM and OUTPUT_DIRECTORY are required")
+endif()
+
+file(REMOVE_RECURSE "${OUTPUT_DIRECTORY}")
+file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
+set(bundle "${OUTPUT_DIRECTORY}/density-continuation-v1")
+set(trace "${OUTPUT_DIRECTORY}/scalar-trace.dat")
+set(arguments
+    --particles=1
+    --beta=0.5
+    --linear-size=2
+    --dimension=1
+    --hopping=0
+    --interaction=0
+    --seed=17
+    --samples=4
+    --burn-in=0
+    --thin=1
+    --segment-updates=0
+    --cycle-updates=0
+    --global-updates=0
+    --stitch-updates=0
+    --density-momenta=1
+    --density-frequency-max=1
+    --density-measurements-per-block=2
+    "--density-continuation-dir=${bundle}"
+    "--output=${trace}"
+    --no-trace
+)
+
+execute_process(
+  COMMAND "${PROGRAM}" ${arguments}
+  RESULT_VARIABLE result
+  OUTPUT_VARIABLE output
+  ERROR_VARIABLE error
+)
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "continuation demo failed with ${result}\nstdout:\n${output}\nstderr:\n${error}")
+endif()
+if(NOT output MATCHES "density blocks = 2")
+  message(FATAL_ERROR "demo did not report its completed block count\nstdout:\n${output}")
+endif()
+if(NOT output MATCHES "largest density standard error = 0")
+  message(FATAL_ERROR "demo did not report its largest standard error\nstdout:\n${output}")
+endif()
+if(EXISTS "${trace}")
+  message(FATAL_ERROR "--no-trace unexpectedly created ${trace}")
+endif()
+
+foreach(filename IN ITEMS manifest.tsv values.tsv covariance.tsv blocks.tsv)
+  set(path "${bundle}/${filename}")
+  if(NOT EXISTS "${path}")
+    message(FATAL_ERROR "expected continuation output does not exist: ${path}")
+  endif()
+  file(SIZE "${path}" size)
+  if(size EQUAL 0)
+    message(FATAL_ERROR "expected continuation output is empty: ${path}")
+  endif()
+endforeach()
+
+file(READ "${bundle}/manifest.tsv" manifest)
+foreach(required IN ITEMS
+        "schema_id\tdensity-continuation"
+        "schema_version\t1"
+        "basis\tbosonic_matsubara"
+        "model_interaction\t0"
+        "measurements_per_block\t2"
+        "completed_block_count\t2"
+        "sample_count\t4"
+        "covariance_rank_status\trank_deficient_by_completed_block_count"
+        "scalar_trace_retained\tfalse"
+        "program\tqmc_interacting_demo")
+  string(FIND "${manifest}" "${required}" found)
+  if(found EQUAL -1)
+    message(FATAL_ERROR "manifest is missing: ${required}")
+  endif()
+endforeach()
+
+file(STRINGS "${bundle}/values.tsv" value_rows)
+file(STRINGS "${bundle}/covariance.tsv" covariance_rows)
+file(STRINGS "${bundle}/blocks.tsv" block_rows)
+list(LENGTH value_rows value_row_count)
+list(LENGTH covariance_rows covariance_row_count)
+list(LENGTH block_rows block_row_count)
+if(NOT value_row_count EQUAL 3)
+  message(FATAL_ERROR "values.tsv has ${value_row_count} lines instead of 3")
+endif()
+if(NOT covariance_row_count EQUAL 5)
+  message(FATAL_ERROR "covariance.tsv has ${covariance_row_count} lines instead of 5")
+endif()
+if(NOT block_row_count EQUAL 5)
+  message(FATAL_ERROR "blocks.tsv has ${block_row_count} lines instead of 5")
+endif()
+
+set(lag_bundle "${OUTPUT_DIRECTORY}/density-lag-continuation-v1")
+execute_process(
+  COMMAND
+    "${PROGRAM}" --particles=1 --beta=0.5 --linear-size=2 --dimension=1 --hopping=0
+    --interaction=0 --seed=17 --samples=4 --burn-in=0 --thin=1 --segment-updates=0
+    --cycle-updates=0 --global-updates=0 --stitch-updates=0 --density-momenta=1
+    --density-lags=0,0.25 --density-measurements-per-block=2
+    "--density-continuation-dir=${lag_bundle}" --no-trace
+  RESULT_VARIABLE lag_result
+  OUTPUT_VARIABLE lag_output
+  ERROR_VARIABLE lag_error
+)
+if(NOT lag_result EQUAL 0)
+  message(
+    FATAL_ERROR
+    "requested-lag continuation demo failed with ${lag_result}\n"
+    "stdout:\n${lag_output}\nstderr:\n${lag_error}"
+  )
+endif()
+if(NOT lag_output MATCHES "density blocks = 2")
+  message(FATAL_ERROR "requested-lag demo did not report its block count\nstdout:\n${lag_output}")
+endif()
+
+file(READ "${lag_bundle}/manifest.tsv" lag_manifest)
+foreach(required IN ITEMS
+        "schema_id\tdensity-continuation"
+        "schema_version\t1"
+        "basis\timaginary_time_lag"
+        "fourier_temporal_phase\tnot_applicable"
+        "normalization_id\tmean_connected_density_time_overlap_over_beta_volume"
+        "value_units\tdimensionless_per_site"
+        "lag_units\tinverse_energy"
+        "lag_count\t2"
+        "values_row_count\t2"
+        "covariance_row_count\t4"
+        "blocks_row_count\t4"
+        "covariance_scope\tindependent_dense_lag_matrix_per_momentum"
+        "covariance_rank_status\trank_deficient_by_completed_block_count")
+  string(FIND "${lag_manifest}" "${required}" found)
+  if(found EQUAL -1)
+    message(FATAL_ERROR "requested-lag manifest is missing: ${required}")
+  endif()
+endforeach()
+
+file(STRINGS "${lag_bundle}/values.tsv" lag_value_rows)
+file(STRINGS "${lag_bundle}/covariance.tsv" lag_covariance_rows)
+file(STRINGS "${lag_bundle}/blocks.tsv" lag_block_rows)
+list(LENGTH lag_value_rows lag_value_row_count)
+list(LENGTH lag_covariance_rows lag_covariance_row_count)
+list(LENGTH lag_block_rows lag_block_row_count)
+if(NOT lag_value_row_count EQUAL 3)
+  message(FATAL_ERROR "requested-lag values.tsv has ${lag_value_row_count} lines instead of 3")
+endif()
+if(NOT lag_covariance_row_count EQUAL 5)
+  message(
+    FATAL_ERROR
+    "requested-lag covariance.tsv has ${lag_covariance_row_count} lines instead of 5"
+  )
+endif()
+if(NOT lag_block_row_count EQUAL 5)
+  message(FATAL_ERROR "requested-lag blocks.tsv has ${lag_block_row_count} lines instead of 5")
+endif()
+
+set(hopping_bundle "${OUTPUT_DIRECTORY}/hopping-response-v1")
+execute_process(
+  COMMAND
+    "${PROGRAM}" --particles=1 --beta=0.5 --linear-size=2 --dimension=1 --hopping=0
+    --interaction=0 --seed=17 --samples=4 --burn-in=0 --thin=1 --segment-updates=0
+    --cycle-updates=0 --global-updates=0 --stitch-updates=0 "--hopping-momenta=0;1"
+    --hopping-frequency-max=0 --hopping-measurements-per-block=2
+    "--hopping-response-dir=${hopping_bundle}" --no-trace
+  RESULT_VARIABLE hopping_result
+  OUTPUT_VARIABLE hopping_output
+  ERROR_VARIABLE hopping_error
+)
+if(NOT hopping_result EQUAL 0)
+  message(
+    FATAL_ERROR
+    "hopping-response demo failed with ${hopping_result}\n"
+    "stdout:\n${hopping_output}\nstderr:\n${hopping_error}"
+  )
+endif()
+if(NOT hopping_output MATCHES "hopping-response blocks = 2")
+  message(FATAL_ERROR "hopping demo did not report its block count\nstdout:\n${hopping_output}")
+endif()
+if(NOT hopping_output MATCHES "largest hopping-response standard error = 0")
+  message(FATAL_ERROR "hopping demo did not report its standard error\nstdout:\n${hopping_output}")
+endif()
+foreach(filename IN ITEMS
+        manifest.tsv
+        response_values.tsv
+        response_blocks.tsv
+        mean_flux_values.tsv
+        mean_flux_blocks.tsv
+        diamagnetic_values.tsv
+        diamagnetic_blocks.tsv)
+  set(path "${hopping_bundle}/${filename}")
+  if(NOT EXISTS "${path}")
+    message(FATAL_ERROR "expected hopping-response output does not exist: ${path}")
+  endif()
+  file(SIZE "${path}" size)
+  if(size EQUAL 0)
+    message(FATAL_ERROR "expected hopping-response output is empty: ${path}")
+  endif()
+endforeach()
+
+file(READ "${hopping_bundle}/manifest.tsv" hopping_manifest)
+foreach(required IN ITEMS
+        "schema_id\thopping-response"
+        "schema_version\t1"
+        "basis\tbosonic_matsubara"
+        "observable_id\tfull_gauge_flux_response"
+        "model_interaction\t0"
+        "measurements_per_block\t2"
+        "completed_block_count\t2"
+        "sample_count\t4"
+        "momentum_count\t2"
+        "frequency_count\t1"
+        "response_values_row_count\t2"
+        "response_blocks_row_count\t4"
+        "mean_flux_values_row_count\t2"
+        "mean_flux_blocks_row_count\t4"
+        "diamagnetic_values_row_count\t1"
+        "diamagnetic_blocks_row_count\t2"
+        "conductivity_interpretation\tnone")
+  string(FIND "${hopping_manifest}" "${required}" found)
+  if(found EQUAL -1)
+    message(FATAL_ERROR "hopping-response manifest is missing: ${required}")
+  endif()
+endforeach()
+
+file(STRINGS "${hopping_bundle}/response_values.tsv" hopping_response_value_rows)
+file(STRINGS "${hopping_bundle}/response_blocks.tsv" hopping_response_block_rows)
+list(LENGTH hopping_response_value_rows hopping_response_value_row_count)
+list(LENGTH hopping_response_block_rows hopping_response_block_row_count)
+if(NOT hopping_response_value_row_count EQUAL 3)
+  message(
+    FATAL_ERROR
+    "response_values.tsv has ${hopping_response_value_row_count} lines instead of 3"
+  )
+endif()
+if(NOT hopping_response_block_row_count EQUAL 5)
+  message(
+    FATAL_ERROR
+    "response_blocks.tsv has ${hopping_response_block_row_count} lines instead of 5"
+  )
+endif()
+
+file(SHA256 "${bundle}/manifest.tsv" manifest_before)
+execute_process(
+  COMMAND "${PROGRAM}" ${arguments}
+  RESULT_VARIABLE existing_result
+  OUTPUT_VARIABLE existing_output
+  ERROR_VARIABLE existing_error
+)
+if(NOT existing_result EQUAL 1)
+  message(
+    FATAL_ERROR
+    "existing destination returned ${existing_result} instead of 1\n"
+    "stdout:\n${existing_output}\nstderr:\n${existing_error}"
+  )
+endif()
+file(SHA256 "${bundle}/manifest.tsv" manifest_after)
+if(NOT manifest_before STREQUAL manifest_after)
+  message(FATAL_ERROR "existing continuation bundle was modified")
+endif()
+
+set(partial_bundle "${OUTPUT_DIRECTORY}/partial-bundle")
+execute_process(
+  COMMAND
+    "${PROGRAM}" --particles=1 --beta=0.5 --linear-size=2 --dimension=1 --hopping=0
+    --interaction=0 --samples=3 --burn-in=0 --segment-updates=0 --cycle-updates=0
+    --global-updates=0 --stitch-updates=0 --density-momenta=1 --density-frequency-max=1
+    --density-measurements-per-block=2 "--density-continuation-dir=${partial_bundle}" --no-trace
+  RESULT_VARIABLE partial_result
+  OUTPUT_VARIABLE partial_output
+  ERROR_VARIABLE partial_error
+)
+if(NOT partial_result EQUAL 1)
+  message(
+    FATAL_ERROR
+    "partial-block request returned ${partial_result} instead of 1\n"
+    "stdout:\n${partial_output}\nstderr:\n${partial_error}"
+  )
+endif()
+if(EXISTS "${partial_bundle}")
+  message(FATAL_ERROR "invalid partial-block request created ${partial_bundle}")
+endif()
+
+set(zero_bundle "${OUTPUT_DIRECTORY}/zero-momentum-bundle")
+execute_process(
+  COMMAND
+    "${PROGRAM}" --particles=1 --beta=0.5 --linear-size=2 --dimension=1 --hopping=0
+    --interaction=0 --samples=4 --burn-in=0 --segment-updates=0 --cycle-updates=0
+    --global-updates=0 --stitch-updates=0 --density-momenta=0 --density-frequency-max=1
+    --density-measurements-per-block=2 "--density-continuation-dir=${zero_bundle}" --no-trace
+  RESULT_VARIABLE zero_result
+  OUTPUT_VARIABLE zero_output
+  ERROR_VARIABLE zero_error
+)
+if(NOT zero_result EQUAL 1)
+  message(
+    FATAL_ERROR
+    "q=0-only request returned ${zero_result} instead of 1\n"
+    "stdout:\n${zero_output}\nstderr:\n${zero_error}"
+  )
+endif()
+if(EXISTS "${zero_bundle}")
+  message(FATAL_ERROR "q=0-only request created ${zero_bundle}")
+endif()
+
+set(ambiguous_bundle "${OUTPUT_DIRECTORY}/ambiguous-basis-bundle")
+execute_process(
+  COMMAND
+    "${PROGRAM}" --particles=1 --beta=0.5 --linear-size=2 --dimension=1 --hopping=0
+    --interaction=0 --samples=4 --burn-in=0 --segment-updates=0 --cycle-updates=0
+    --global-updates=0 --stitch-updates=0 --density-momenta=1 --density-frequency-max=1
+    --density-lags=0,0.25 --density-measurements-per-block=2
+    "--density-continuation-dir=${ambiguous_bundle}" --no-trace
+  RESULT_VARIABLE ambiguous_result
+  OUTPUT_VARIABLE ambiguous_output
+  ERROR_VARIABLE ambiguous_error
+)
+if(NOT ambiguous_result EQUAL 1)
+  message(
+    FATAL_ERROR
+    "ambiguous continuation basis returned ${ambiguous_result} instead of 1\n"
+    "stdout:\n${ambiguous_output}\nstderr:\n${ambiguous_error}"
+  )
+endif()
+if(EXISTS "${ambiguous_bundle}")
+  message(FATAL_ERROR "ambiguous continuation basis created ${ambiguous_bundle}")
+endif()
+
+set(invalid_lag_bundle "${OUTPUT_DIRECTORY}/invalid-lag-bundle")
+execute_process(
+  COMMAND
+    "${PROGRAM}" --particles=1 --beta=0.5 --linear-size=2 --dimension=1 --hopping=0
+    --interaction=0 --samples=4 --burn-in=0 --segment-updates=0 --cycle-updates=0
+    --global-updates=0 --stitch-updates=0 --density-momenta=1 --density-lags=0,0.5
+    --density-measurements-per-block=2 "--density-continuation-dir=${invalid_lag_bundle}"
+    --no-trace
+  RESULT_VARIABLE invalid_lag_result
+  OUTPUT_VARIABLE invalid_lag_output
+  ERROR_VARIABLE invalid_lag_error
+)
+if(NOT invalid_lag_result EQUAL 1)
+  message(
+    FATAL_ERROR
+    "noncanonical lag returned ${invalid_lag_result} instead of 1\n"
+    "stdout:\n${invalid_lag_output}\nstderr:\n${invalid_lag_error}"
+  )
+endif()
+if(EXISTS "${invalid_lag_bundle}")
+  message(FATAL_ERROR "noncanonical lag request created ${invalid_lag_bundle}")
+endif()
+
+set(retained_bundle "${OUTPUT_DIRECTORY}/retained-trace-bundle")
+set(retained_trace "${OUTPUT_DIRECTORY}/retained-trace.dat")
+set(retained_arguments ${arguments})
+list(REMOVE_ITEM retained_arguments --no-trace)
+list(REMOVE_ITEM retained_arguments "--density-continuation-dir=${bundle}")
+list(REMOVE_ITEM retained_arguments "--output=${trace}")
+list(
+  APPEND
+  retained_arguments
+  "--density-continuation-dir=${retained_bundle}"
+  "--output=${retained_trace}"
+)
+execute_process(
+  COMMAND "${PROGRAM}" ${retained_arguments}
+  RESULT_VARIABLE retained_result
+  OUTPUT_VARIABLE retained_output
+  ERROR_VARIABLE retained_error
+)
+if(NOT retained_result EQUAL 0)
+  message(
+    FATAL_ERROR
+    "retained-trace continuation demo failed with ${retained_result}\n"
+    "stdout:\n${retained_output}\nstderr:\n${retained_error}"
+  )
+endif()
+if(NOT EXISTS "${retained_trace}")
+  message(FATAL_ERROR "default continuation workflow did not retain ${retained_trace}")
+endif()
+file(SIZE "${retained_trace}" retained_trace_size)
+if(retained_trace_size EQUAL 0)
+  message(FATAL_ERROR "retained scalar trace is empty: ${retained_trace}")
+endif()
+file(READ "${retained_bundle}/manifest.tsv" retained_manifest)
+string(FIND "${retained_manifest}" "scalar_trace_retained\ttrue" retained_flag)
+if(retained_flag EQUAL -1)
+  message(FATAL_ERROR "retained-trace manifest does not record scalar_trace_retained=true")
+endif()

@@ -38,15 +38,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `ContinuousMatsubaraPlan` with bounded binary64 phase reduction, exact
   seam/period behavior, stable interval transforms, and overflow-safe torus
   site phases.
+- Add validated `ImaginaryTimeLagSet` geometry plus
+  `ContinuousDensityLagPlan`, `ContinuousDensityLagValues`, and an exact
+  event-driven interval-overlap projector for selected density-correlation
+  lags without introducing a retained time grid.
 - Add `ContinuousParticleModes` and exact grouped-event projection of
   unnormalised density residence amplitudes and signed bond-midpoint hopping
   flux, including canonical-density and winding-preserving zero modes.
 - Add `DensityMatsubaraAccumulator` and the provenance-owning
   `ContinuousMatsubaraDensityCorrelations` result for analytically centred
   continuous-time density susceptibility and sampled mean amplitudes.
+- Add `DensityMatsubaraBlockAccumulator` and `DensityMatsubaraBlockSeries` for
+  complete equal-size density blocks, per-momentum frequency covariance of the
+  mean, standard errors, and leave-one-block-out means.
+- Add `DensityLagBlockAccumulator` and `DensityLagBlockSeries` for normalized
+  selected-lag density blocks, signed means, per-momentum cross-lag covariance,
+  standard errors, leave-one-block-out means, and exact fixed-particle-number
+  zero-momentum constraints.
+- Add an opt-in interacting-demo density continuation workflow that publishes
+  a validated `density-continuation-v1` bundle in either the
+  `bosonic_matsubara` or `imaginary_time_lag` basis, with values,
+  per-momentum covariance, normalized blocks, full interacting run provenance,
+  rank diagnostics, exact fixed-particle-number constraints, and atomic
+  no-overwrite directory publication.
+- Add a one-particle Lehmann regression for exact requested-lag density
+  correlations at several imaginary-time evaluation points and momenta.
+- Add a deterministic cross-backend regression that analytically integrates
+  every piecewise-affine requested-lag segment and reproduces the
+  time-reflection-symmetrized continuous Matsubara density observation,
+  including exact fixed-particle-number zero-momentum centering.
 - Add `HoppingResponseAccumulator` and `HoppingResponse` for analytically
   centred signed-flux gauge response, axis-resolved diamagnetic terms, derived
   paramagnetic current correlations, and sampled mean-flux diagnostics.
+- Add `HoppingResponseBlockAccumulator` and `HoppingResponseBlockSeries` for
+  complete equal-size response blocks, component-wise standard errors, and
+  leave-one-block-out means that retain the covariance between diamagnetic and
+  flux-response terms.
+- Add an opt-in interacting-demo hopping workflow and atomically published
+  `hopping-response-v1` export with separate response, diamagnetic, and
+  mean-flux value/block tables plus complete run provenance.
 - Add `ContinuousPairDensityModes` and exact occupancy-replay projection of
   unnormalised on-site pair-density Matsubara amplitudes, with atomic
   equal-time groups and an exact pair-overlap zero mode.
@@ -55,7 +85,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   invariance.
 - Add a finite-interaction statistical regression comparing continuous density
   susceptibility, hopping response, and the diamagnetic estimator with
-  small-system exact diagonalisation using blocked Markov-chain errors.
+  small-system exact diagonalisation using public density and hopping block
+  statistics, including both export round-trips.
 - Add self-describing segment, stitch, fixed-seam stitch-sweep, and random-seam
   stitch option values.
 - Add generated compile-time version metadata in `<qmc/version.hpp>`, sourced

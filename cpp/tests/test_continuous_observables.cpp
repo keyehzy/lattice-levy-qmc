@@ -37,6 +37,14 @@ static_assert(std::is_same_v<decltype(std::declval<const ContinuousMeasurementCo
 static_assert(!std::default_initializable<ContinuousMatsubaraPlan>);
 static_assert(std::is_same_v<decltype(std::declval<const ContinuousMatsubaraPlan &>().modes()),
                              const MatsubaraModeSet &>);
+static_assert(!std::default_initializable<ContinuousDensityLagPlan>);
+static_assert(std::is_same_v<decltype(std::declval<const ContinuousDensityLagPlan &>().lags()),
+                             const ImaginaryTimeLagSet &>);
+static_assert(!std::default_initializable<ContinuousDensityLagValues>);
+static_assert(std::is_same_v<decltype(std::declval<const ContinuousDensityLagValues &>().model()),
+                             const Model &>);
+static_assert(std::is_same_v<decltype(std::declval<const ContinuousDensityLagValues &>().lags()),
+                             const ImaginaryTimeLagSet &>);
 static_assert(!std::default_initializable<ContinuousParticleModes>);
 static_assert(std::is_same_v<decltype(std::declval<const ContinuousParticleModes &>().model()),
                              const Model &>);
@@ -55,12 +63,30 @@ static_assert(
     std::is_same_v<decltype(std::declval<const ContinuousMatsubaraDensityCorrelations &>().modes()),
                    const MatsubaraModeSet &>);
 static_assert(!std::default_initializable<DensityMatsubaraAccumulator>);
+static_assert(!std::default_initializable<DensityMatsubaraBlockSeries>);
+static_assert(std::is_same_v<decltype(std::declval<const DensityMatsubaraBlockSeries &>().model()),
+                             const Model &>);
+static_assert(std::is_same_v<decltype(std::declval<const DensityMatsubaraBlockSeries &>().modes()),
+                             const MatsubaraModeSet &>);
+static_assert(!std::default_initializable<DensityMatsubaraBlockAccumulator>);
+static_assert(!std::default_initializable<DensityLagBlockSeries>);
+static_assert(
+    std::is_same_v<decltype(std::declval<const DensityLagBlockSeries &>().model()), const Model &>);
+static_assert(std::is_same_v<decltype(std::declval<const DensityLagBlockSeries &>().lags()),
+                             const ImaginaryTimeLagSet &>);
+static_assert(!std::default_initializable<DensityLagBlockAccumulator>);
 static_assert(!std::default_initializable<HoppingResponse>);
 static_assert(
     std::is_same_v<decltype(std::declval<const HoppingResponse &>().model()), const Model &>);
 static_assert(std::is_same_v<decltype(std::declval<const HoppingResponse &>().modes()),
                              const MatsubaraModeSet &>);
 static_assert(!std::default_initializable<HoppingResponseAccumulator>);
+static_assert(!std::default_initializable<HoppingResponseBlockSeries>);
+static_assert(std::is_same_v<decltype(std::declval<const HoppingResponseBlockSeries &>().model()),
+                             const Model &>);
+static_assert(std::is_same_v<decltype(std::declval<const HoppingResponseBlockSeries &>().modes()),
+                             const MatsubaraModeSet &>);
+static_assert(!std::default_initializable<HoppingResponseBlockAccumulator>);
 
 MatsubaraModeSet make_continuous_modes(const double beta, const TorusLayout &layout,
                                        std::vector<std::vector<std::size_t>> momenta,
@@ -68,6 +94,14 @@ MatsubaraModeSet make_continuous_modes(const double beta, const TorusLayout &lay
   return MatsubaraModeSet(beta, layout,
                           MatsubaraModeRequest{.momentum_indices = std::move(momenta),
                                                .frequency_indices = std::move(frequencies)});
+}
+
+ImaginaryTimeLagSet make_continuous_lags(const double beta, const TorusLayout &layout,
+                                         std::vector<std::vector<std::size_t>> momenta,
+                                         std::vector<double> lags) {
+  return ImaginaryTimeLagSet(
+      beta, layout,
+      ImaginaryTimeLagRequest{.momentum_indices = std::move(momenta), .lags = std::move(lags)});
 }
 
 ContinuousConfiguration multidimensional_projection_configuration() {
@@ -130,6 +164,46 @@ ContinuousConfiguration atomic_pair_density_configuration() {
   return ContinuousConfiguration(model, Permutation({1, 0}), {first, second});
 }
 
+ContinuousConfiguration static_density_lag_configuration() {
+  const Model model(ModelParameters{
+      .particle_count = 2,
+      .beta = 1.0,
+      .linear_size = 4,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  return ContinuousConfiguration(
+      model, Permutation({0, 1}),
+      {ContinuousPath(1.0, {0}, {0}, {}), ContinuousPath(1.0, {1}, {1}, {})});
+}
+
+ContinuousConfiguration single_event_density_lag_configuration() {
+  const Model model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 1,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  return ContinuousConfiguration(
+      model, Permutation({0}),
+      {ContinuousPath(1.0, {0}, {1}, {{.time = 0.4, .axis = 0, .direction = 1}})});
+}
+
+ContinuousConfiguration multiple_cycle_density_lag_configuration() {
+  const Model model(ModelParameters{
+      .particle_count = 3,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const ContinuousPath first(1.0, {0}, {1}, {{.time = 0.3, .axis = 0, .direction = 1}});
+  const ContinuousPath second(1.0, {1}, {0}, {{.time = 0.7, .axis = 0, .direction = -1}});
+  const ContinuousPath third(1.0, {2}, {2}, {});
+  return ContinuousConfiguration(model, Permutation({1, 0, 2}), {first, second, third});
+}
+
 ContinuousConfiguration translated_configuration(const ContinuousConfiguration &configuration,
                                                  const Site &displacement) {
   std::vector<ContinuousPath> translated_worldlines;
@@ -139,6 +213,170 @@ ContinuousConfiguration translated_configuration(const ContinuousConfiguration &
   }
   return ContinuousConfiguration(configuration.model(), configuration.topology(),
                                  std::move(translated_worldlines));
+}
+
+std::complex<double> reference_density_at(const ContinuousConfiguration &configuration,
+                                          const ImaginaryTimeLagSet &lags,
+                                          const std::size_t momentum, const double tau) {
+  const TorusLayout &layout = lags.layout();
+  std::complex<double> density{0.0, 0.0};
+  for (const Site &position : configuration.positions_at(tau)) {
+    const std::vector<std::size_t> components = layout.decode(layout.encode_covering(position));
+    const double phase =
+        detail::phase_for_indices(lags.momentum_indices(momentum), components, layout);
+    density += std::polar(1.0, -phase);
+  }
+  return density;
+}
+
+double reference_raw_density_lag_overlap(const ContinuousConfiguration &configuration,
+                                         const ImaginaryTimeLagSet &lags,
+                                         const std::size_t momentum, const double tau) {
+  const double beta = lags.beta();
+  const ContinuousMeasurementContext context(configuration);
+  std::vector<double> boundaries{0.0, beta};
+  const auto append_boundary = [&boundaries, beta](double boundary) {
+    if (boundary == beta) {
+      boundary = 0.0;
+    }
+    if (boundary > 0.0 && boundary < beta) {
+      boundaries.push_back(boundary);
+    }
+  };
+  for (std::size_t group = 0; group < context.event_group_count(); ++group) {
+    double event_time = context.event_time(group);
+    append_boundary(event_time);
+    if (event_time == beta) {
+      event_time = 0.0;
+    }
+    double shifted = event_time - tau;
+    if (shifted < 0.0) {
+      shifted += beta;
+    }
+    append_boundary(shifted);
+  }
+  std::ranges::sort(boundaries);
+  boundaries.erase(std::ranges::unique(boundaries).begin(), boundaries.end());
+
+  double overlap = 0.0;
+  for (std::size_t interval = 0; interval + 1 < boundaries.size(); ++interval) {
+    const double begin = boundaries[interval];
+    const double end = boundaries[interval + 1];
+    const double midpoint = begin + (0.5 * (end - begin));
+    double shifted_midpoint = midpoint + tau;
+    if (shifted_midpoint >= beta) {
+      shifted_midpoint -= beta;
+    }
+    const std::complex<double> base = reference_density_at(configuration, lags, momentum, midpoint);
+    const std::complex<double> shifted =
+        reference_density_at(configuration, lags, momentum, shifted_midpoint);
+    overlap += (end - begin) * (shifted * std::conj(base)).real();
+  }
+  return overlap;
+}
+
+double reference_symmetrized_density_lag_overlap(const ContinuousConfiguration &configuration,
+                                                 const ImaginaryTimeLagSet &lags,
+                                                 const std::size_t momentum, const double tau) {
+  const double reflected = tau == 0.0 ? 0.0 : lags.beta() - tau;
+  return (0.5 * reference_raw_density_lag_overlap(configuration, lags, momentum, tau)) +
+         (0.5 * reference_raw_density_lag_overlap(configuration, lags, momentum, reflected));
+}
+
+std::vector<double>
+density_lag_linear_segment_boundaries(const ContinuousMeasurementContext &context) {
+  const double beta = context.model().beta();
+  std::vector<double> event_times{0.0};
+  event_times.reserve(context.event_group_count() + 1);
+  for (std::size_t group = 0; group < context.event_group_count(); ++group) {
+    const double time = context.event_time(group);
+    event_times.push_back(time == beta ? 0.0 : time);
+  }
+  std::ranges::sort(event_times);
+  event_times.erase(std::ranges::unique(event_times).begin(), event_times.end());
+
+  std::vector<double> boundaries{0.0, beta};
+  boundaries.reserve((event_times.size() * event_times.size()) + 2);
+  // A circular autocorrelation of step functions is affine between pairwise
+  // differences of their discontinuity times.
+  for (const double shifted_event : event_times) {
+    for (const double base_event : event_times) {
+      double boundary = shifted_event - base_event;
+      if (boundary < 0.0) {
+        boundary += beta;
+      }
+      if (boundary > 0.0 && boundary < beta) {
+        boundaries.push_back(boundary);
+      }
+    }
+  }
+  std::ranges::sort(boundaries);
+
+  const double merge_tolerance = 64.0 * std::numeric_limits<double>::epsilon() * beta;
+  std::vector<double> merged;
+  merged.reserve(boundaries.size());
+  for (const double boundary : boundaries) {
+    if (merged.empty() || boundary - merged.back() > merge_tolerance) {
+      merged.push_back(boundary);
+    }
+  }
+  merged.front() = 0.0;
+  merged.back() = beta;
+  return merged;
+}
+
+std::complex<double> integrate_affine_matsubara_segment(const double begin, const double end,
+                                                        const double value_at_begin,
+                                                        const double slope,
+                                                        const double frequency) {
+  const double duration = end - begin;
+  if (frequency == 0.0) {
+    return {value_at_begin * duration + 0.5 * slope * duration * duration, 0.0};
+  }
+
+  const std::complex<double> imaginary{0.0, 1.0};
+  const double phase_span = frequency * duration;
+  std::complex<double> constant_integral;
+  std::complex<double> linear_integral;
+  if (std::abs(phase_span) < 1e-4) {
+    std::complex<double> term{1.0, 0.0};
+    std::complex<double> constant_series{1.0, 0.0};
+    std::complex<double> linear_series{0.5, 0.0};
+    for (std::size_t order = 1; order <= 12; ++order) {
+      term *= imaginary * phase_span / static_cast<double>(order);
+      constant_series += term / static_cast<double>(order + 1);
+      linear_series += term / static_cast<double>(order + 2);
+    }
+    constant_integral = duration * constant_series;
+    linear_integral = duration * duration * linear_series;
+  } else {
+    const std::complex<double> end_phase = std::polar(1.0, phase_span);
+    constant_integral = (end_phase - 1.0) / (imaginary * frequency);
+    linear_integral = (end_phase * (1.0 - imaginary * phase_span) - 1.0) / (frequency * frequency);
+  }
+
+  return std::polar(1.0, frequency * begin) *
+         ((value_at_begin * constant_integral) + (slope * linear_integral));
+}
+
+std::complex<double> exact_piecewise_lag_transform(const ContinuousDensityLagValues &values,
+                                                   const std::span<const double> segment_boundaries,
+                                                   const std::size_t momentum,
+                                                   const double frequency) {
+  std::complex<double> transform{0.0, 0.0};
+  for (std::size_t segment = 0; segment + 1 < segment_boundaries.size(); ++segment) {
+    const double begin = segment_boundaries[segment];
+    const double end = segment_boundaries[segment + 1];
+    const double duration = end - begin;
+    const double first_lag = begin + duration / 3.0;
+    const double second_lag = begin + 2.0 * duration / 3.0;
+    const double first_value = values.overlap(2 * segment, momentum);
+    const double second_value = values.overlap((2 * segment) + 1, momentum);
+    const double slope = (second_value - first_value) / (second_lag - first_lag);
+    const double value_at_begin = first_value - slope * (first_lag - begin);
+    transform += integrate_affine_matsubara_segment(begin, end, value_at_begin, slope, frequency);
+  }
+  return transform;
 }
 
 TEST(ContinuousMatsubaraPlanTest, OwnsModesAndEnforcesSymmetricFrequencyBound) {
@@ -447,6 +685,220 @@ TEST(ContinuousMeasurementContextTest, HandlesSingleSiteAndMultidimensionalPhysi
             plane_context.layout().encode(std::array<std::size_t, 2>{2, 1}));
 }
 
+TEST(ContinuousDensityLagValuesTest, OwnsPlanAndResultProvenanceWithCheckedLagMajorAccess) {
+  const ContinuousConfiguration configuration = static_density_lag_configuration();
+  const Model model = configuration.model();
+  const ImaginaryTimeLagSet lags =
+      make_continuous_lags(model.beta(), TorusLayout(4, 1), {{0}, {1}, {3}}, {0.75, 0.0, 0.25});
+  const ContinuousDensityLagPlan plan(lags);
+  const ContinuousDensityLagValues from_context =
+      continuous_density_lag_values(ContinuousMeasurementContext(configuration), plan);
+  const ContinuousDensityLagValues convenience = continuous_density_lag_values(configuration, plan);
+
+  EXPECT_EQ(plan.lags(), lags);
+  EXPECT_EQ(from_context.model(), model);
+  EXPECT_EQ(from_context.lags(), lags);
+  for (std::size_t lag = 0; lag < lags.lag_count(); ++lag) {
+    EXPECT_DOUBLE_EQ(from_context.overlap(lag, 0), 4.0);
+    EXPECT_NEAR(from_context.overlap(lag, 1), 2.0, 2e-15);
+    EXPECT_NEAR(from_context.overlap(lag, 2), 2.0, 2e-15);
+    for (std::size_t momentum = 0; momentum < lags.momentum_count(); ++momentum) {
+      EXPECT_DOUBLE_EQ(convenience.overlap(lag, momentum), from_context.overlap(lag, momentum));
+    }
+  }
+  EXPECT_THROW(static_cast<void>(from_context.overlap(lags.lag_count(), 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(from_context.overlap(0, lags.momentum_count())),
+               std::out_of_range);
+}
+
+TEST(ContinuousDensityLagValuesTest, MatchesIndependentIntervalReferenceAcrossEdgeFixtures) {
+  std::vector<ContinuousConfiguration> configurations;
+  configurations.push_back(static_density_lag_configuration());
+  configurations.push_back(single_event_density_lag_configuration());
+  configurations.push_back(test::coincident_seam_configuration());
+  configurations.push_back(multidimensional_projection_configuration());
+  configurations.push_back(multiple_cycle_density_lag_configuration());
+  const Model empty_model(ModelParameters{
+      .particle_count = 0,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  configurations.emplace_back(empty_model, Permutation(), std::vector<ContinuousPath>{});
+
+  for (const ContinuousConfiguration &configuration : configurations) {
+    const Model &model = configuration.model();
+    const TorusLayout layout(model.linear_size(), model.dimension());
+    std::vector<std::vector<std::size_t>> momenta(1,
+                                                  std::vector<std::size_t>(model.dimension(), 0));
+    if (model.linear_size() > 1) {
+      std::vector<std::size_t> nonzero(model.dimension(), 0);
+      nonzero[0] = 1;
+      momenta.push_back(std::move(nonzero));
+    }
+    const ImaginaryTimeLagSet lags =
+        make_continuous_lags(model.beta(), layout, std::move(momenta), {0.0, 0.13, 0.4, 0.73});
+    const ContinuousDensityLagValues values =
+        continuous_density_lag_values(configuration, ContinuousDensityLagPlan(lags));
+
+    const double particle_count = static_cast<double>(model.particle_count());
+    const double exact_zero_momentum = (model.beta() * particle_count) * particle_count;
+    for (std::size_t lag = 0; lag < lags.lag_count(); ++lag) {
+      EXPECT_DOUBLE_EQ(values.overlap(lag, 0), exact_zero_momentum);
+      for (std::size_t momentum = 1; momentum < lags.momentum_count(); ++momentum) {
+        const double expected =
+            reference_symmetrized_density_lag_overlap(configuration, lags, momentum, lags.lag(lag));
+        const double tolerance = 3e-13 * (1.0 + std::abs(expected));
+        EXPECT_NEAR(values.overlap(lag, momentum), expected, tolerance);
+      }
+    }
+  }
+}
+
+TEST(ContinuousDensityLagValuesTest,
+     EnforcesTimeReflectionAndPreservesTranslationAndTimeOriginInvariance) {
+  const ContinuousConfiguration configuration = multidimensional_projection_configuration();
+  const ContinuousConfiguration translated = translated_configuration(configuration, Site{6, -7});
+  const ContinuousConfiguration rotated = rotate_configuration_time_origin(configuration, 0.25);
+  const Model model = configuration.model();
+  const ImaginaryTimeLagSet lags = make_continuous_lags(
+      model.beta(), TorusLayout(5, 2), {{0, 0}, {1, 2}, {4, 3}}, {0.0, 0.1, 0.25, 0.75, 0.9});
+  const ContinuousDensityLagPlan plan(lags);
+  const ContinuousDensityLagValues original = continuous_density_lag_values(configuration, plan);
+  const ContinuousDensityLagValues shifted = continuous_density_lag_values(translated, plan);
+  const ContinuousDensityLagValues time_rotated = continuous_density_lag_values(rotated, plan);
+
+  const std::array<std::size_t, 5> reflected_indices{0, 4, 3, 2, 1};
+  for (std::size_t lag = 0; lag < lags.lag_count(); ++lag) {
+    for (std::size_t momentum = 0; momentum < lags.momentum_count(); ++momentum) {
+      const double value = original.overlap(lag, momentum);
+      const double tolerance = 5e-13 * (1.0 + std::abs(value));
+      EXPECT_NEAR(value, original.overlap(reflected_indices[lag], momentum), tolerance);
+      EXPECT_NEAR(value, shifted.overlap(lag, momentum), tolerance);
+      EXPECT_NEAR(value, time_rotated.overlap(lag, momentum), tolerance);
+      if (lags.lag(lag) == 0.0) {
+        EXPECT_GE(value, 0.0);
+      }
+    }
+  }
+}
+
+TEST(ContinuousDensityLagValuesTest,
+     ExactPiecewiseLagTransformReproducesContinuousMatsubaraDensityObservation) {
+  const std::array configurations{
+      static_density_lag_configuration(),
+      test::coincident_seam_configuration(),
+      multidimensional_projection_configuration(),
+      multiple_cycle_density_lag_configuration(),
+  };
+
+  for (const ContinuousConfiguration &configuration : configurations) {
+    const Model &model = configuration.model();
+    const TorusLayout layout(model.linear_size(), model.dimension());
+    std::vector<std::vector<std::size_t>> momenta(1,
+                                                  std::vector<std::size_t>(model.dimension(), 0));
+    std::vector<std::size_t> forward(model.dimension(), 0);
+    forward[0] = 1;
+    momenta.push_back(forward);
+    forward[0] = static_cast<std::size_t>(model.linear_size() - 1);
+    momenta.push_back(forward);
+    if (model.dimension() > 1) {
+      std::vector<std::size_t> mixed(model.dimension(), 1);
+      mixed[0] = 2;
+      momenta.push_back(std::move(mixed));
+    }
+
+    const ContinuousMeasurementContext context(configuration);
+    const std::vector<double> boundaries = density_lag_linear_segment_boundaries(context);
+    std::vector<double> evaluation_lags;
+    evaluation_lags.reserve(2 * (boundaries.size() - 1));
+    for (std::size_t segment = 0; segment + 1 < boundaries.size(); ++segment) {
+      const double begin = boundaries[segment];
+      const double duration = boundaries[segment + 1] - begin;
+      evaluation_lags.push_back(begin + duration / 3.0);
+      evaluation_lags.push_back(begin + 2.0 * duration / 3.0);
+    }
+
+    const ImaginaryTimeLagSet lags =
+        make_continuous_lags(model.beta(), layout, momenta, std::move(evaluation_lags));
+    const ContinuousDensityLagValues lag_values =
+        continuous_density_lag_values(context, ContinuousDensityLagPlan(lags));
+    const MatsubaraModeSet modes =
+        make_continuous_modes(model.beta(), layout, momenta, {-2, -1, 0, 1, 2});
+    const ContinuousParticleModes mode_values =
+        continuous_particle_modes(context, ContinuousMatsubaraPlan(modes));
+    const double normalization = model.beta() * static_cast<double>(model.volume());
+
+    for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+      for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+        const std::size_t reflected_frequency = modes.frequency_count() - frequency - 1;
+        ASSERT_EQ(modes.frequency_index(reflected_frequency), -modes.frequency_index(frequency));
+        const auto centered_norm = [&](const std::size_t frequency_ordinal) {
+          std::complex<double> amplitude = mode_values.density(frequency_ordinal, momentum);
+          if (momentum == 0 && modes.frequency_index(frequency_ordinal) == 0) {
+            amplitude -= model.beta() * static_cast<double>(model.particle_count());
+          }
+          return std::norm(amplitude);
+        };
+        const double expected =
+            0.5 * (centered_norm(frequency) + centered_norm(reflected_frequency)) / normalization;
+        std::complex<double> integrated = exact_piecewise_lag_transform(
+            lag_values, boundaries, momentum, modes.frequency(frequency));
+        if (momentum == 0) {
+          const double particle_count = static_cast<double>(model.particle_count());
+          integrated -= integrate_affine_matsubara_segment(
+              0.0, model.beta(), model.beta() * particle_count * particle_count, 0.0,
+              modes.frequency(frequency));
+        }
+        integrated /= normalization;
+        const double tolerance = 2e-11 * (1.0 + expected);
+        EXPECT_NEAR(integrated.real(), expected, tolerance)
+            << "frequency index = " << modes.frequency_index(frequency)
+            << ", momentum ordinal = " << momentum;
+        EXPECT_NEAR(integrated.imag(), 0.0, tolerance)
+            << "frequency index = " << modes.frequency_index(frequency)
+            << ", momentum ordinal = " << momentum;
+      }
+    }
+  }
+}
+
+TEST(ContinuousDensityLagValuesTest, HandlesRepresentableLagsAdjacentToThePeriodicSeam) {
+  const ContinuousConfiguration configuration = test::coincident_seam_configuration();
+  const Model model = configuration.model();
+  const double first_positive = std::nextafter(0.0, 1.0);
+  const double last_before_beta = std::nextafter(model.beta(), 0.0);
+  const ImaginaryTimeLagSet lags = make_continuous_lags(model.beta(), TorusLayout(5, 1), {{1}, {4}},
+                                                        {0.0, first_positive, last_before_beta});
+  const ContinuousDensityLagValues values =
+      continuous_density_lag_values(configuration, ContinuousDensityLagPlan(lags));
+
+  for (std::size_t lag = 0; lag < lags.lag_count(); ++lag) {
+    for (std::size_t momentum = 0; momentum < lags.momentum_count(); ++momentum) {
+      EXPECT_TRUE(std::isfinite(values.overlap(lag, momentum)));
+    }
+  }
+  for (std::size_t momentum = 0; momentum < lags.momentum_count(); ++momentum) {
+    EXPECT_NEAR(values.overlap(0, momentum), values.overlap(1, momentum), 2e-14);
+    EXPECT_NEAR(values.overlap(0, momentum), values.overlap(2, momentum), 2e-14);
+  }
+}
+
+TEST(ContinuousDensityLagValuesTest, RejectsEveryContextAndPlanGeometryMismatch) {
+  const ContinuousConfiguration configuration = test::coincident_seam_configuration();
+  const ContinuousMeasurementContext context(configuration);
+  const ContinuousDensityLagPlan wrong_beta(
+      make_continuous_lags(2.0, TorusLayout(5, 1), {{0}, {1}}, {0.0, 0.5}));
+  const ContinuousDensityLagPlan wrong_layout(
+      make_continuous_lags(1.0, TorusLayout(4, 1), {{0}, {1}}, {0.0, 0.5}));
+
+  EXPECT_THROW(static_cast<void>(continuous_density_lag_values(context, wrong_beta)),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(continuous_density_lag_values(context, wrong_layout)),
+               std::invalid_argument);
+}
+
 TEST(ContinuousParticleModesTest, ProjectsStaticPathsAndCanonicalZeroMomentumExactly) {
   const Model model(ModelParameters{
       .particle_count = 2,
@@ -500,10 +952,12 @@ TEST(ContinuousParticleModesTest, ZeroModeFluxIsExactCoveringDisplacement) {
 
   ASSERT_EQ(winding_number, Site({1, -1}));
   EXPECT_EQ(values.density(0, 0), std::complex<double>(1.0, 0.0));
-  EXPECT_EQ(values.flux(0, 0, 0),
-            std::complex<double>(model.linear_size() * winding_number[0], 0.0));
-  EXPECT_EQ(values.flux(0, 0, 1),
-            std::complex<double>(model.linear_size() * winding_number[1], 0.0));
+  EXPECT_EQ(values.flux(0, 0, 0), std::complex<double>(static_cast<double>(model.linear_size()) *
+                                                           static_cast<double>(winding_number[0]),
+                                                       0.0));
+  EXPECT_EQ(values.flux(0, 0, 1), std::complex<double>(static_cast<double>(model.linear_size()) *
+                                                           static_cast<double>(winding_number[1]),
+                                                       0.0));
   EXPECT_EQ(values.axis_event_count(0), 3U);
   EXPECT_EQ(values.axis_event_count(1), 3U);
 }
@@ -1085,6 +1539,441 @@ TEST(DensityMatsubaraAccumulatorTest, HandlesTheEmptyFixedParticleEnsemble) {
   }
 }
 
+TEST(DensityMatsubaraBlockAccumulatorTest,
+     ReproducesKnownBlockStatisticsAndTheSimpleAccumulatorMean) {
+  const Model model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 2,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const MatsubaraModeSet modes =
+      make_continuous_modes(model.beta(), TorusLayout(2, 1), {{0}, {1}}, {0, 1});
+  const ContinuousMatsubaraPlan plan(modes);
+  const ContinuousConfiguration static_configuration(model, Permutation({0}),
+                                                     {ContinuousPath(model.beta(), {0}, {0}, {})});
+  const ContinuousConfiguration moving_configuration(
+      model, Permutation({0}),
+      {ContinuousPath(model.beta(), {0}, {0},
+                      {{.time = 0.25, .axis = 0, .direction = 1},
+                       {.time = 0.75, .axis = 0, .direction = -1}})});
+  const ContinuousParticleModes static_values =
+      continuous_particle_modes(static_configuration, plan);
+  const ContinuousParticleModes moving_values =
+      continuous_particle_modes(moving_configuration, plan);
+  DensityMatsubaraAccumulator simple_accumulator(model, modes);
+  DensityMatsubaraBlockAccumulator block_accumulator(model, modes, 2);
+
+  EXPECT_EQ(block_accumulator.model(), model);
+  EXPECT_EQ(block_accumulator.modes(), modes);
+  EXPECT_EQ(block_accumulator.measurements_per_block(), 2U);
+  EXPECT_EQ(block_accumulator.completed_block_count(), 0U);
+  EXPECT_EQ(block_accumulator.pending_sample_count(), 0U);
+  EXPECT_THROW(static_cast<void>(block_accumulator.finish()), std::logic_error);
+
+  const auto observe = [&](const ContinuousParticleModes &values) {
+    simple_accumulator.observe(values);
+    block_accumulator.observe(values);
+  };
+  observe(static_values);
+  EXPECT_EQ(block_accumulator.completed_block_count(), 0U);
+  EXPECT_EQ(block_accumulator.pending_sample_count(), 1U);
+  EXPECT_THROW(static_cast<void>(block_accumulator.finish()), std::logic_error);
+  observe(static_values);
+  EXPECT_EQ(block_accumulator.completed_block_count(), 1U);
+  EXPECT_EQ(block_accumulator.pending_sample_count(), 0U);
+  EXPECT_THROW(static_cast<void>(block_accumulator.finish()), std::logic_error);
+
+  observe(static_values);
+  EXPECT_EQ(block_accumulator.completed_block_count(), 1U);
+  EXPECT_EQ(block_accumulator.pending_sample_count(), 1U);
+  EXPECT_THROW(static_cast<void>(block_accumulator.finish()), std::logic_error);
+  observe(moving_values);
+  observe(moving_values);
+  observe(moving_values);
+
+  const DensityMatsubaraBlockSeries series = block_accumulator.finish();
+  const ContinuousMatsubaraDensityCorrelations simple = simple_accumulator.finish();
+  ASSERT_EQ(series.model(), model);
+  ASSERT_EQ(series.modes(), modes);
+  ASSERT_EQ(series.measurements_per_block(), 2U);
+  ASSERT_EQ(series.block_count(), 3U);
+  ASSERT_EQ(series.sample_count(), 6U);
+
+  const double inverse_pi_squared = 1.0 / (std::numbers::pi * std::numbers::pi);
+  EXPECT_NEAR(series.block_value(0, 0, 1), 0.5, 1e-15);
+  EXPECT_NEAR(series.block_value(0, 1, 1), 0.0, 1e-15);
+  EXPECT_NEAR(series.block_value(1, 0, 1), 0.25, 1e-15);
+  EXPECT_NEAR(series.block_value(1, 1, 1), inverse_pi_squared, 2e-15);
+  EXPECT_NEAR(series.block_value(2, 0, 1), 0.0, 1e-15);
+  EXPECT_NEAR(series.block_value(2, 1, 1), 2.0 * inverse_pi_squared, 3e-15);
+  EXPECT_NEAR(series.mean(0, 1), 0.25, 1e-15);
+  EXPECT_NEAR(series.mean(1, 1), inverse_pi_squared, 2e-15);
+
+  const double expected_frequency_zero_variance = 1.0 / 48.0;
+  const double expected_frequency_one_variance = 1.0 / (3.0 * std::pow(std::numbers::pi, 4));
+  const double expected_covariance = -1.0 / (12.0 * std::numbers::pi * std::numbers::pi);
+  EXPECT_NEAR(series.covariance_of_mean(1, 0, 0), expected_frequency_zero_variance, 1e-15);
+  EXPECT_NEAR(series.covariance_of_mean(1, 1, 1), expected_frequency_one_variance, 2e-16);
+  EXPECT_NEAR(series.covariance_of_mean(1, 0, 1), expected_covariance, 3e-16);
+  EXPECT_EQ(series.covariance_of_mean(1, 0, 1), series.covariance_of_mean(1, 1, 0));
+  EXPECT_NEAR(series.standard_error(0, 1), std::sqrt(expected_frequency_zero_variance), 1e-15);
+  EXPECT_NEAR(series.standard_error(1, 1), std::sqrt(expected_frequency_one_variance), 1e-15);
+
+  EXPECT_NEAR(series.jackknife_mean(0, 0, 1), 0.125, 1e-15);
+  EXPECT_NEAR(series.jackknife_mean(0, 1, 1), 1.5 * inverse_pi_squared, 2e-15);
+  EXPECT_NEAR(series.jackknife_mean(1, 0, 1), 0.25, 1e-15);
+  EXPECT_NEAR(series.jackknife_mean(1, 1, 1), inverse_pi_squared, 2e-15);
+  EXPECT_NEAR(series.jackknife_mean(2, 0, 1), 0.375, 1e-15);
+  EXPECT_NEAR(series.jackknife_mean(2, 1, 1), 0.5 * inverse_pi_squared, 2e-15);
+
+  for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+    EXPECT_EQ(series.block_value(0, frequency, 0), 0.0);
+    EXPECT_EQ(series.block_value(1, frequency, 0), 0.0);
+    EXPECT_EQ(series.block_value(2, frequency, 0), 0.0);
+    EXPECT_EQ(series.mean(frequency, 0), 0.0);
+    EXPECT_EQ(series.standard_error(frequency, 0), 0.0);
+    EXPECT_EQ(series.mean(frequency, 0), simple.at(frequency, 0));
+    EXPECT_NEAR(series.mean(frequency, 1), simple.at(frequency, 1), 2e-15);
+  }
+
+  EXPECT_THROW(static_cast<void>(series.block_value(3, 0, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.block_value(0, 2, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.block_value(0, 0, 2)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.mean(2, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.mean(0, 2)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.covariance_of_mean(2, 0, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.covariance_of_mean(0, 2, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.covariance_of_mean(0, 0, 2)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.standard_error(2, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.standard_error(0, 2)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.jackknife_mean(3, 0, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.jackknife_mean(0, 2, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.jackknife_mean(0, 0, 2)), std::out_of_range);
+}
+
+TEST(DensityMatsubaraBlockAccumulatorTest, RejectsInvalidConstructionAndProvenanceBeforeMutation) {
+  const Model model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const MatsubaraModeSet modes =
+      make_continuous_modes(model.beta(), TorusLayout(3, 1), {{0}, {1}}, {0, 1});
+  EXPECT_THROW(static_cast<void>(DensityMatsubaraBlockAccumulator(model, modes, 0)),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(DensityMatsubaraBlockAccumulator(
+                   model, make_continuous_modes(2.0, TorusLayout(3, 1), {{0}}, {0}), 2)),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(DensityMatsubaraBlockAccumulator(
+                   model, make_continuous_modes(1.0, TorusLayout(4, 1), {{0}}, {0}), 2)),
+               std::invalid_argument);
+
+  const ContinuousConfiguration configuration(model, Permutation({0}),
+                                              {ContinuousPath(model.beta(), {0}, {0}, {})});
+  const ContinuousParticleModes values =
+      continuous_particle_modes(configuration, ContinuousMatsubaraPlan(modes));
+  const Model different_model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 2.0,
+  });
+  const ContinuousConfiguration different_configuration(
+      different_model, Permutation({0}), {ContinuousPath(different_model.beta(), {0}, {0}, {})});
+  const ContinuousParticleModes different_model_values =
+      continuous_particle_modes(different_configuration, ContinuousMatsubaraPlan(modes));
+  const MatsubaraModeSet different_modes =
+      make_continuous_modes(model.beta(), TorusLayout(3, 1), {{0}, {1}}, {1});
+  const ContinuousParticleModes different_mode_values =
+      continuous_particle_modes(configuration, ContinuousMatsubaraPlan(different_modes));
+  DensityMatsubaraBlockAccumulator accumulator(model, modes, 2);
+
+  accumulator.observe(values);
+  ASSERT_EQ(accumulator.completed_block_count(), 0U);
+  ASSERT_EQ(accumulator.pending_sample_count(), 1U);
+  EXPECT_THROW(accumulator.observe(different_model_values), std::invalid_argument);
+  EXPECT_EQ(accumulator.completed_block_count(), 0U);
+  EXPECT_EQ(accumulator.pending_sample_count(), 1U);
+  EXPECT_THROW(accumulator.observe(different_mode_values), std::invalid_argument);
+  EXPECT_EQ(accumulator.completed_block_count(), 0U);
+  EXPECT_EQ(accumulator.pending_sample_count(), 1U);
+
+  accumulator.observe(values);
+  EXPECT_EQ(accumulator.completed_block_count(), 1U);
+  EXPECT_EQ(accumulator.pending_sample_count(), 0U);
+  EXPECT_THROW(static_cast<void>(accumulator.finish()), std::logic_error);
+  accumulator.observe(values);
+  EXPECT_EQ(accumulator.completed_block_count(), 1U);
+  EXPECT_EQ(accumulator.pending_sample_count(), 1U);
+  EXPECT_THROW(static_cast<void>(accumulator.finish()), std::logic_error);
+  accumulator.observe(values);
+  EXPECT_EQ(accumulator.completed_block_count(), 2U);
+  EXPECT_EQ(accumulator.pending_sample_count(), 0U);
+  EXPECT_NO_THROW(static_cast<void>(accumulator.finish()));
+}
+
+TEST(DensityMatsubaraBlockAccumulatorTest, PreservesRequestedFrequencyOrder) {
+  const Model model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 2,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const MatsubaraModeSet forward_modes =
+      make_continuous_modes(model.beta(), TorusLayout(2, 1), {{1}}, {0, 1});
+  const MatsubaraModeSet reverse_modes =
+      make_continuous_modes(model.beta(), TorusLayout(2, 1), {{1}}, {1, 0});
+  const ContinuousConfiguration static_configuration(model, Permutation({0}),
+                                                     {ContinuousPath(model.beta(), {0}, {0}, {})});
+  const ContinuousConfiguration moving_configuration(
+      model, Permutation({0}),
+      {ContinuousPath(model.beta(), {0}, {0},
+                      {{.time = 0.25, .axis = 0, .direction = 1},
+                       {.time = 0.75, .axis = 0, .direction = -1}})});
+  DensityMatsubaraBlockAccumulator forward(model, forward_modes, 1);
+  DensityMatsubaraBlockAccumulator reverse(model, reverse_modes, 1);
+  for (const ContinuousConfiguration *configuration :
+       {&static_configuration, &moving_configuration, &static_configuration}) {
+    forward.observe(
+        continuous_particle_modes(*configuration, ContinuousMatsubaraPlan(forward_modes)));
+    reverse.observe(
+        continuous_particle_modes(*configuration, ContinuousMatsubaraPlan(reverse_modes)));
+  }
+  const DensityMatsubaraBlockSeries forward_series = forward.finish();
+  const DensityMatsubaraBlockSeries reverse_series = reverse.finish();
+
+  for (std::size_t block = 0; block < forward_series.block_count(); ++block) {
+    EXPECT_NEAR(forward_series.block_value(block, 0, 0), reverse_series.block_value(block, 1, 0),
+                1e-15);
+    EXPECT_NEAR(forward_series.block_value(block, 1, 0), reverse_series.block_value(block, 0, 0),
+                1e-15);
+  }
+  EXPECT_NEAR(forward_series.mean(0, 0), reverse_series.mean(1, 0), 1e-15);
+  EXPECT_NEAR(forward_series.mean(1, 0), reverse_series.mean(0, 0), 1e-15);
+  for (std::size_t left = 0; left < 2; ++left) {
+    for (std::size_t right = 0; right < 2; ++right) {
+      EXPECT_NEAR(forward_series.covariance_of_mean(0, left, right),
+                  reverse_series.covariance_of_mean(0, 1 - left, 1 - right), 1e-15);
+    }
+  }
+}
+
+TEST(DensityLagBlockAccumulatorTest, ReproducesSignedBlockStatisticsAndInstallsExactZeroMomentum) {
+  const Model model(ModelParameters{
+      .particle_count = 1,
+      .beta = 2.0,
+      .linear_size = 2,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const ImaginaryTimeLagSet lags =
+      make_continuous_lags(model.beta(), TorusLayout(2, 1), {{0}, {1}}, {0.0, 1.0});
+  const ContinuousDensityLagPlan plan(lags);
+  const ContinuousConfiguration static_configuration(model, Permutation({0}),
+                                                     {ContinuousPath(model.beta(), {0}, {0}, {})});
+  const ContinuousConfiguration moving_configuration(
+      model, Permutation({0}),
+      {ContinuousPath(
+          model.beta(), {0}, {0},
+          {{.time = 0.5, .axis = 0, .direction = 1}, {.time = 1.5, .axis = 0, .direction = -1}})});
+  const ContinuousDensityLagValues static_values =
+      continuous_density_lag_values(static_configuration, plan);
+  const ContinuousDensityLagValues moving_values =
+      continuous_density_lag_values(moving_configuration, plan);
+  DensityLagBlockAccumulator accumulator(model, lags, 2);
+
+  EXPECT_EQ(accumulator.model(), model);
+  EXPECT_EQ(accumulator.lags(), lags);
+  EXPECT_EQ(accumulator.measurements_per_block(), 2U);
+  EXPECT_EQ(accumulator.completed_block_count(), 0U);
+  EXPECT_EQ(accumulator.pending_sample_count(), 0U);
+  EXPECT_THROW(static_cast<void>(accumulator.finish()), std::logic_error);
+
+  accumulator.observe(static_values);
+  EXPECT_EQ(accumulator.completed_block_count(), 0U);
+  EXPECT_EQ(accumulator.pending_sample_count(), 1U);
+  EXPECT_THROW(static_cast<void>(accumulator.finish()), std::logic_error);
+  accumulator.observe(static_values);
+  EXPECT_EQ(accumulator.completed_block_count(), 1U);
+  EXPECT_EQ(accumulator.pending_sample_count(), 0U);
+  EXPECT_THROW(static_cast<void>(accumulator.finish()), std::logic_error);
+  accumulator.observe(static_values);
+  EXPECT_EQ(accumulator.completed_block_count(), 1U);
+  EXPECT_EQ(accumulator.pending_sample_count(), 1U);
+  EXPECT_THROW(static_cast<void>(accumulator.finish()), std::logic_error);
+  accumulator.observe(moving_values);
+  accumulator.observe(moving_values);
+  accumulator.observe(moving_values);
+
+  const DensityLagBlockSeries series = accumulator.finish();
+  ASSERT_EQ(series.model(), model);
+  ASSERT_EQ(series.lags(), lags);
+  ASSERT_EQ(series.measurements_per_block(), 2U);
+  ASSERT_EQ(series.block_count(), 3U);
+  ASSERT_EQ(series.sample_count(), 6U);
+
+  for (std::size_t block = 0; block < series.block_count(); ++block) {
+    for (std::size_t lag = 0; lag < lags.lag_count(); ++lag) {
+      EXPECT_DOUBLE_EQ(series.block_value(block, lag, 0), 0.0);
+    }
+  }
+  EXPECT_DOUBLE_EQ(series.mean(0, 0), 0.0);
+  EXPECT_DOUBLE_EQ(series.mean(1, 0), 0.0);
+  EXPECT_DOUBLE_EQ(series.standard_error(0, 0), 0.0);
+  EXPECT_DOUBLE_EQ(series.standard_error(1, 0), 0.0);
+
+  EXPECT_NEAR(series.block_value(0, 0, 1), 0.5, 1e-15);
+  EXPECT_NEAR(series.block_value(1, 0, 1), 0.5, 1e-15);
+  EXPECT_NEAR(series.block_value(2, 0, 1), 0.5, 1e-15);
+  EXPECT_NEAR(series.block_value(0, 1, 1), 0.5, 1e-15);
+  EXPECT_NEAR(series.block_value(1, 1, 1), 0.0, 1e-15);
+  EXPECT_NEAR(series.block_value(2, 1, 1), -0.5, 1e-15);
+  EXPECT_NEAR(series.mean(0, 1), 0.5, 1e-15);
+  EXPECT_NEAR(series.mean(1, 1), 0.0, 1e-15);
+
+  EXPECT_NEAR(series.covariance_of_mean(1, 0, 0), 0.0, 1e-15);
+  EXPECT_NEAR(series.covariance_of_mean(1, 1, 1), 1.0 / 12.0, 1e-15);
+  EXPECT_NEAR(series.covariance_of_mean(1, 0, 1), 0.0, 1e-15);
+  EXPECT_DOUBLE_EQ(series.covariance_of_mean(1, 0, 1), series.covariance_of_mean(1, 1, 0));
+  EXPECT_NEAR(series.standard_error(0, 1), 0.0, 1e-15);
+  EXPECT_NEAR(series.standard_error(1, 1), std::sqrt(1.0 / 12.0), 1e-15);
+
+  EXPECT_NEAR(series.jackknife_mean(0, 1, 1), -0.25, 1e-15);
+  EXPECT_NEAR(series.jackknife_mean(1, 1, 1), 0.0, 1e-15);
+  EXPECT_NEAR(series.jackknife_mean(2, 1, 1), 0.25, 1e-15);
+
+  EXPECT_THROW(static_cast<void>(series.block_value(3, 0, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.block_value(0, 2, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.block_value(0, 0, 2)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.mean(2, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.mean(0, 2)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.covariance_of_mean(2, 0, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.covariance_of_mean(0, 2, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.covariance_of_mean(0, 0, 2)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.standard_error(2, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.standard_error(0, 2)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.jackknife_mean(3, 0, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.jackknife_mean(0, 2, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.jackknife_mean(0, 0, 2)), std::out_of_range);
+}
+
+TEST(DensityLagBlockAccumulatorTest, RejectsInvalidConstructionAndProvenanceBeforeMutation) {
+  const Model model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const ImaginaryTimeLagSet lags =
+      make_continuous_lags(model.beta(), TorusLayout(3, 1), {{0}, {1}}, {0.0, 0.5});
+  EXPECT_THROW(static_cast<void>(DensityLagBlockAccumulator(model, lags, 0)),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(DensityLagBlockAccumulator(
+                   model, make_continuous_lags(2.0, TorusLayout(3, 1), {{0}}, {0.0}), 2)),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(DensityLagBlockAccumulator(
+                   model, make_continuous_lags(1.0, TorusLayout(4, 1), {{0}}, {0.0}), 2)),
+               std::invalid_argument);
+
+  const ContinuousConfiguration configuration(model, Permutation({0}),
+                                              {ContinuousPath(model.beta(), {0}, {0}, {})});
+  const ContinuousDensityLagValues values =
+      continuous_density_lag_values(configuration, ContinuousDensityLagPlan(lags));
+  const Model different_model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 2.0,
+  });
+  const ContinuousConfiguration different_configuration(
+      different_model, Permutation({0}), {ContinuousPath(different_model.beta(), {0}, {0}, {})});
+  const ContinuousDensityLagValues different_model_values =
+      continuous_density_lag_values(different_configuration, ContinuousDensityLagPlan(lags));
+  const ImaginaryTimeLagSet different_lags =
+      make_continuous_lags(model.beta(), TorusLayout(3, 1), {{0}, {1}}, {0.25});
+  const ContinuousDensityLagValues different_lag_values =
+      continuous_density_lag_values(configuration, ContinuousDensityLagPlan(different_lags));
+  DensityLagBlockAccumulator accumulator(model, lags, 2);
+
+  accumulator.observe(values);
+  ASSERT_EQ(accumulator.completed_block_count(), 0U);
+  ASSERT_EQ(accumulator.pending_sample_count(), 1U);
+  EXPECT_THROW(accumulator.observe(different_model_values), std::invalid_argument);
+  EXPECT_EQ(accumulator.completed_block_count(), 0U);
+  EXPECT_EQ(accumulator.pending_sample_count(), 1U);
+  EXPECT_THROW(accumulator.observe(different_lag_values), std::invalid_argument);
+  EXPECT_EQ(accumulator.completed_block_count(), 0U);
+  EXPECT_EQ(accumulator.pending_sample_count(), 1U);
+
+  accumulator.observe(values);
+  EXPECT_EQ(accumulator.completed_block_count(), 1U);
+  EXPECT_EQ(accumulator.pending_sample_count(), 0U);
+  EXPECT_THROW(static_cast<void>(accumulator.finish()), std::logic_error);
+  accumulator.observe(values);
+  EXPECT_EQ(accumulator.completed_block_count(), 1U);
+  EXPECT_EQ(accumulator.pending_sample_count(), 1U);
+  EXPECT_THROW(static_cast<void>(accumulator.finish()), std::logic_error);
+  accumulator.observe(values);
+  EXPECT_EQ(accumulator.completed_block_count(), 2U);
+  EXPECT_EQ(accumulator.pending_sample_count(), 0U);
+  EXPECT_NO_THROW(static_cast<void>(accumulator.finish()));
+}
+
+TEST(DensityLagBlockAccumulatorTest, PreservesRequestedLagOrder) {
+  const Model model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 2,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const ImaginaryTimeLagSet forward_lags =
+      make_continuous_lags(model.beta(), TorusLayout(2, 1), {{1}}, {0.0, 0.5});
+  const ImaginaryTimeLagSet reverse_lags =
+      make_continuous_lags(model.beta(), TorusLayout(2, 1), {{1}}, {0.5, 0.0});
+  const ContinuousConfiguration static_configuration(model, Permutation({0}),
+                                                     {ContinuousPath(model.beta(), {0}, {0}, {})});
+  const ContinuousConfiguration moving_configuration(
+      model, Permutation({0}),
+      {ContinuousPath(model.beta(), {0}, {0},
+                      {{.time = 0.25, .axis = 0, .direction = 1},
+                       {.time = 0.75, .axis = 0, .direction = -1}})});
+  DensityLagBlockAccumulator forward(model, forward_lags, 1);
+  DensityLagBlockAccumulator reverse(model, reverse_lags, 1);
+  for (const ContinuousConfiguration *configuration :
+       {&static_configuration, &moving_configuration, &static_configuration}) {
+    forward.observe(
+        continuous_density_lag_values(*configuration, ContinuousDensityLagPlan(forward_lags)));
+    reverse.observe(
+        continuous_density_lag_values(*configuration, ContinuousDensityLagPlan(reverse_lags)));
+  }
+  const DensityLagBlockSeries forward_series = forward.finish();
+  const DensityLagBlockSeries reverse_series = reverse.finish();
+
+  for (std::size_t block = 0; block < forward_series.block_count(); ++block) {
+    EXPECT_NEAR(forward_series.block_value(block, 0, 0), reverse_series.block_value(block, 1, 0),
+                1e-15);
+    EXPECT_NEAR(forward_series.block_value(block, 1, 0), reverse_series.block_value(block, 0, 0),
+                1e-15);
+  }
+  EXPECT_NEAR(forward_series.mean(0, 0), reverse_series.mean(1, 0), 1e-15);
+  EXPECT_NEAR(forward_series.mean(1, 0), reverse_series.mean(0, 0), 1e-15);
+  for (std::size_t left = 0; left < 2; ++left) {
+    for (std::size_t right = 0; right < 2; ++right) {
+      EXPECT_NEAR(forward_series.covariance_of_mean(0, left, right),
+                  reverse_series.covariance_of_mean(0, 1 - left, 1 - right), 1e-15);
+    }
+  }
+}
+
 TEST(HoppingResponseAccumulatorTest,
      UsesExactZeroMeanAndPublishesHermitianResponseWithCompleteProvenance) {
   const ContinuousConfiguration configuration = multidimensional_projection_configuration();
@@ -1150,6 +2039,221 @@ TEST(HoppingResponseAccumulatorTest,
   EXPECT_THROW(static_cast<void>(result.diamagnetic(model.dimension())), std::out_of_range);
   EXPECT_THROW(static_cast<void>(result.paramagnetic(modes.frequency_count(), 0, 0, 0)),
                std::out_of_range);
+}
+
+TEST(HoppingResponseBlockAccumulatorTest,
+     ReproducesSimpleMeansAndBlockErrorsForEveryAuthoritativeTerm) {
+  const Model model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 2,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const MatsubaraModeSet modes =
+      make_continuous_modes(model.beta(), TorusLayout(2, 1), {{0}, {1}}, {0, 1});
+  const ContinuousMatsubaraPlan plan(modes);
+  const std::vector configurations{
+      ContinuousConfiguration(model, Permutation({0}),
+                              {ContinuousPath(model.beta(), {0}, {0}, {})}),
+      ContinuousConfiguration(model, Permutation({0}),
+                              {ContinuousPath(model.beta(), {0}, {0},
+                                              {{.time = 0.25, .axis = 0, .direction = 1},
+                                               {.time = 0.75, .axis = 0, .direction = -1}})}),
+      ContinuousConfiguration(model, Permutation({0}),
+                              {ContinuousPath(model.beta(), {0}, {2},
+                                              {{.time = 0.25, .axis = 0, .direction = 1},
+                                               {.time = 0.75, .axis = 0, .direction = 1}})}),
+  };
+  HoppingResponseAccumulator simple_accumulator(model, modes);
+  HoppingResponseBlockAccumulator block_accumulator(model, modes, 1);
+  std::vector<HoppingResponse> block_references;
+  block_references.reserve(configurations.size());
+
+  EXPECT_EQ(block_accumulator.model(), model);
+  EXPECT_EQ(block_accumulator.modes(), modes);
+  EXPECT_EQ(block_accumulator.measurements_per_block(), 1U);
+  EXPECT_EQ(block_accumulator.completed_block_count(), 0U);
+  EXPECT_EQ(block_accumulator.pending_sample_count(), 0U);
+  EXPECT_THROW(static_cast<void>(block_accumulator.finish()), std::logic_error);
+  for (const ContinuousConfiguration &configuration : configurations) {
+    const ContinuousParticleModes values = continuous_particle_modes(configuration, plan);
+    simple_accumulator.observe(values);
+    block_accumulator.observe(values);
+    HoppingResponseAccumulator reference_accumulator(model, modes);
+    reference_accumulator.observe(values);
+    block_references.push_back(reference_accumulator.finish());
+  }
+
+  const HoppingResponse simple = simple_accumulator.finish();
+  const HoppingResponseBlockSeries series = block_accumulator.finish();
+  ASSERT_EQ(series.model(), model);
+  ASSERT_EQ(series.modes(), modes);
+  ASSERT_EQ(series.measurements_per_block(), 1U);
+  ASSERT_EQ(series.block_count(), configurations.size());
+  ASSERT_EQ(series.sample_count(), configurations.size());
+  ASSERT_EQ(block_accumulator.completed_block_count(), configurations.size());
+  ASSERT_EQ(block_accumulator.pending_sample_count(), 0U);
+
+  const auto real_standard_error = [](const std::vector<std::complex<double>> &values) {
+    const double count = static_cast<double>(values.size());
+    double mean = 0.0;
+    for (const std::complex<double> value : values) {
+      mean += value.real() / count;
+    }
+    double squared_difference_sum = 0.0;
+    for (const std::complex<double> value : values) {
+      squared_difference_sum += std::pow(value.real() - mean, 2);
+    }
+    return std::sqrt(squared_difference_sum / (count * (count - 1.0)));
+  };
+  const auto imaginary_standard_error = [](const std::vector<std::complex<double>> &values) {
+    const double count = static_cast<double>(values.size());
+    double mean = 0.0;
+    for (const std::complex<double> value : values) {
+      mean += value.imag() / count;
+    }
+    double squared_difference_sum = 0.0;
+    for (const std::complex<double> value : values) {
+      squared_difference_sum += std::pow(value.imag() - mean, 2);
+    }
+    return std::sqrt(squared_difference_sum / (count * (count - 1.0)));
+  };
+
+  for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+    for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+      std::vector<std::complex<double>> flux_blocks;
+      std::vector<std::complex<double>> response_blocks;
+      std::vector<std::complex<double>> paramagnetic_blocks;
+      for (std::size_t block = 0; block < block_references.size(); ++block) {
+        const HoppingResponse &reference = block_references[block];
+        flux_blocks.push_back(reference.mean_flux(frequency, momentum, 0));
+        response_blocks.push_back(reference.flux_response(frequency, momentum, 0, 0));
+        paramagnetic_blocks.push_back(reference.paramagnetic(frequency, momentum, 0, 0));
+        EXPECT_EQ(series.block_mean_flux(block, frequency, momentum, 0), flux_blocks.back());
+        EXPECT_EQ(series.block_flux_response(block, frequency, momentum, 0, 0),
+                  response_blocks.back());
+        EXPECT_EQ(series.block_paramagnetic(block, frequency, momentum, 0, 0),
+                  paramagnetic_blocks.back());
+      }
+      EXPECT_NEAR(std::abs(series.mean_flux(frequency, momentum, 0) -
+                           simple.mean_flux(frequency, momentum, 0)),
+                  0.0, 1e-15);
+      EXPECT_NEAR(std::abs(series.flux_response(frequency, momentum, 0, 0) -
+                           simple.flux_response(frequency, momentum, 0, 0)),
+                  0.0, 1e-15);
+      EXPECT_NEAR(std::abs(series.paramagnetic(frequency, momentum, 0, 0) -
+                           simple.paramagnetic(frequency, momentum, 0, 0)),
+                  0.0, 1e-15);
+      EXPECT_NEAR(
+          series.mean_flux_standard_error(frequency, momentum, 0, HoppingResponseComponent::Real),
+          real_standard_error(flux_blocks), 1e-15);
+      EXPECT_NEAR(series.mean_flux_standard_error(frequency, momentum, 0,
+                                                  HoppingResponseComponent::Imaginary),
+                  imaginary_standard_error(flux_blocks), 1e-15);
+      EXPECT_NEAR(series.flux_response_standard_error(frequency, momentum, 0, 0,
+                                                      HoppingResponseComponent::Real),
+                  real_standard_error(response_blocks), 1e-15);
+      EXPECT_NEAR(series.flux_response_standard_error(frequency, momentum, 0, 0,
+                                                      HoppingResponseComponent::Imaginary),
+                  imaginary_standard_error(response_blocks), 1e-15);
+      EXPECT_NEAR(series.paramagnetic_standard_error(frequency, momentum, 0, 0,
+                                                     HoppingResponseComponent::Real),
+                  real_standard_error(paramagnetic_blocks), 1e-15);
+      EXPECT_NEAR(series.paramagnetic_standard_error(frequency, momentum, 0, 0,
+                                                     HoppingResponseComponent::Imaginary),
+                  imaginary_standard_error(paramagnetic_blocks), 1e-15);
+      for (std::size_t omitted = 0; omitted < block_references.size(); ++omitted) {
+        const std::size_t left = (omitted + 1) % block_references.size();
+        const std::size_t right = (omitted + 2) % block_references.size();
+        EXPECT_NEAR(std::abs(series.jackknife_mean_flux(omitted, frequency, momentum, 0) -
+                             ((flux_blocks[left] + flux_blocks[right]) / 2.0)),
+                    0.0, 1e-15);
+        EXPECT_NEAR(std::abs(series.jackknife_flux_response(omitted, frequency, momentum, 0, 0) -
+                             ((response_blocks[left] + response_blocks[right]) / 2.0)),
+                    0.0, 1e-15);
+        EXPECT_NEAR(std::abs(series.jackknife_paramagnetic(omitted, frequency, momentum, 0, 0) -
+                             ((paramagnetic_blocks[left] + paramagnetic_blocks[right]) / 2.0)),
+                    0.0, 1e-15);
+      }
+    }
+  }
+
+  std::vector<double> diamagnetic_blocks;
+  for (std::size_t block = 0; block < block_references.size(); ++block) {
+    diamagnetic_blocks.push_back(block_references[block].diamagnetic(0));
+    EXPECT_EQ(series.block_diamagnetic(block, 0), diamagnetic_blocks.back());
+  }
+  double diamagnetic_mean = 0.0;
+  for (const double value : diamagnetic_blocks) {
+    diamagnetic_mean += value / static_cast<double>(diamagnetic_blocks.size());
+  }
+  double diamagnetic_squared_difference_sum = 0.0;
+  for (const double value : diamagnetic_blocks) {
+    diamagnetic_squared_difference_sum += std::pow(value - diamagnetic_mean, 2);
+  }
+  const double diamagnetic_error = std::sqrt(diamagnetic_squared_difference_sum /
+                                             (static_cast<double>(diamagnetic_blocks.size()) *
+                                              static_cast<double>(diamagnetic_blocks.size() - 1)));
+  EXPECT_NEAR(series.diamagnetic(0), simple.diamagnetic(0), 1e-15);
+  EXPECT_NEAR(series.diamagnetic_standard_error(0), diamagnetic_error, 1e-15);
+  for (std::size_t omitted = 0; omitted < block_references.size(); ++omitted) {
+    const std::size_t left = (omitted + 1) % block_references.size();
+    const std::size_t right = (omitted + 2) % block_references.size();
+    EXPECT_NEAR(series.jackknife_diamagnetic(omitted, 0),
+                (diamagnetic_blocks[left] + diamagnetic_blocks[right]) / 2.0, 1e-15);
+  }
+
+  EXPECT_THROW(static_cast<void>(series.block_mean_flux(3, 0, 0, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.block_flux_response(0, 2, 0, 0, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.block_paramagnetic(0, 0, 2, 0, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.block_diamagnetic(0, 1)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.jackknife_diamagnetic(3, 0)), std::out_of_range);
+}
+
+TEST(HoppingResponseBlockAccumulatorTest,
+     RejectsInvalidConstructionAndProvenanceWithoutLosingPendingSamples) {
+  const Model model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const MatsubaraModeSet modes =
+      make_continuous_modes(model.beta(), TorusLayout(3, 1), {{0}, {1}}, {0});
+  EXPECT_THROW(static_cast<void>(HoppingResponseBlockAccumulator(model, modes, 0)),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(HoppingResponseBlockAccumulator(
+                   model, make_continuous_modes(2.0, TorusLayout(3, 1), {{0}}, {0}), 2)),
+               std::invalid_argument);
+
+  const ContinuousConfiguration configuration(model, Permutation({0}),
+                                              {ContinuousPath(model.beta(), {0}, {0}, {})});
+  const ContinuousParticleModes values =
+      continuous_particle_modes(configuration, ContinuousMatsubaraPlan(modes));
+  const Model different_model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 2.0,
+  });
+  const ContinuousConfiguration different_configuration(
+      different_model, Permutation({0}), {ContinuousPath(model.beta(), {0}, {0}, {})});
+  const ContinuousParticleModes different_values =
+      continuous_particle_modes(different_configuration, ContinuousMatsubaraPlan(modes));
+  HoppingResponseBlockAccumulator accumulator(model, modes, 2);
+  accumulator.observe(values);
+  ASSERT_EQ(accumulator.pending_sample_count(), 1U);
+  EXPECT_THROW(accumulator.observe(different_values), std::invalid_argument);
+  EXPECT_EQ(accumulator.pending_sample_count(), 1U);
+  EXPECT_EQ(accumulator.completed_block_count(), 0U);
+  accumulator.observe(values);
+  accumulator.observe(values);
+  EXPECT_THROW(static_cast<void>(accumulator.finish()), std::logic_error);
+  accumulator.observe(values);
+  EXPECT_NO_THROW(static_cast<void>(accumulator.finish()));
 }
 
 TEST(HoppingResponseAccumulatorTest, ZeroModeResponseMatchesWindingAndEventCountIdentities) {

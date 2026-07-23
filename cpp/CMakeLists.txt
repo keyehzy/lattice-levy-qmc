@@ -30,6 +30,7 @@ add_library(
   src/configuration.cpp
   src/free_boson.cpp
   src/free_numerics.cpp
+  src/imaginary_time_lags.cpp
   src/matsubara_modes.cpp
   src/model.cpp
   src/canonical_observables.cpp

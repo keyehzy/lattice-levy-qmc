@@ -2,6 +2,7 @@
 #define QMC_CONTINUOUS_OBSERVABLES_HPP
 
 #include "qmc/continuous_configuration.hpp"
+#include "qmc/imaginary_time_lags.hpp"
 #include "qmc/matsubara_modes.hpp"
 #include "qmc/torus_layout.hpp"
 
@@ -14,10 +15,14 @@
 namespace qmc {
 
 class ContinuousMeasurementContext;
+class ContinuousDensityLagValues;
 class ContinuousParticleModes;
 class ContinuousPairDensityModes;
+class DensityLagBlockAccumulator;
 class DensityMatsubaraAccumulator;
+class DensityMatsubaraBlockAccumulator;
 class HoppingResponseAccumulator;
+class HoppingResponseBlockAccumulator;
 
 // Reusable continuous-time phase plan. The stricter signed-frequency bound is
 // a binary64 phase-reduction contract and is intentionally not imposed by the
@@ -43,6 +48,24 @@ private:
   std::vector<std::complex<double>> site_step_phases_;
   std::vector<std::complex<double>> positive_midpoint_phases_;
   std::vector<std::complex<double>> negative_midpoint_phases_;
+};
+
+// Reusable selected-lag plan for exact density auto-correlations. Spatial step
+// phases are immutable and shared by every projected configuration.
+class ContinuousDensityLagPlan {
+public:
+  explicit ContinuousDensityLagPlan(ImaginaryTimeLagSet lags);
+
+  [[nodiscard]] const ImaginaryTimeLagSet &lags() const noexcept { return lags_; }
+
+private:
+  friend ContinuousDensityLagValues
+  continuous_density_lag_values(const ContinuousMeasurementContext &context,
+                                const ContinuousDensityLagPlan &plan);
+
+  ImaginaryTimeLagSet lags_;
+  // Momentum-major, then axis.
+  std::vector<std::complex<double>> site_step_phases_;
 };
 
 // One physical nearest-neighbor hop in a continuous configuration. Time is in
@@ -149,6 +172,30 @@ private:
   MatsubaraModeField<std::complex<double>> pair_density_;
 };
 
+// Unnormalised, uncentred time-origin-averaged density auto-correlations for
+// one continuous configuration. Values use lag-major, then momentum request
+// order and store the real time-reversal-symmetrised overlap
+// integral ds Re[n_q(s+lag) n_q(s)^*].
+class ContinuousDensityLagValues {
+public:
+  [[nodiscard]] const Model &model() const noexcept { return model_; }
+  [[nodiscard]] const ImaginaryTimeLagSet &lags() const noexcept { return lags_; }
+  // Checked lag and momentum access throws out_of_range.
+  [[nodiscard]] double overlap(std::size_t lag, std::size_t momentum) const;
+
+private:
+  friend ContinuousDensityLagValues
+  continuous_density_lag_values(const ContinuousMeasurementContext &context,
+                                const ContinuousDensityLagPlan &plan);
+
+  ContinuousDensityLagValues(Model model, ImaginaryTimeLagSet lags,
+                             std::vector<double> overlap_values);
+
+  Model model_;
+  ImaginaryTimeLagSet lags_;
+  std::vector<double> overlap_values_;
+};
+
 // Connected density susceptibility for one homogeneous fixed-particle-number
 // ensemble. Values are <|delta rho(q,n)|^2>/(beta*V), have units of inverse
 // energy per site, and use the result's frequency-major Matsubara mode order.
@@ -204,8 +251,174 @@ private:
   MatsubaraModeSet modes_;
   std::size_t sample_count_ = 0;
   std::vector<std::complex<double>> amplitude_sums_;
-  std::vector<double> centered_norm_sums_;
+  std::vector<double> centered_observation_sums_;
   std::vector<std::complex<double>> analytic_means_;
+};
+
+// Consecutive equal-size block means of the connected density susceptibility.
+// Values and means have units of inverse energy per site. Statistical
+// covariance is the covariance of the reported mean, calculated independently
+// across frequencies for each requested momentum.
+class DensityMatsubaraBlockSeries {
+public:
+  [[nodiscard]] const Model &model() const noexcept { return model_; }
+  [[nodiscard]] const MatsubaraModeSet &modes() const noexcept { return modes_; }
+  [[nodiscard]] std::size_t measurements_per_block() const noexcept {
+    return measurements_per_block_;
+  }
+  [[nodiscard]] std::size_t block_count() const noexcept { return block_count_; }
+  [[nodiscard]] std::size_t sample_count() const noexcept { return sample_count_; }
+
+  // All accessors check every supplied block, frequency, and momentum axis.
+  [[nodiscard]] double block_value(std::size_t block, std::size_t frequency,
+                                   std::size_t momentum) const;
+  [[nodiscard]] double mean(std::size_t frequency, std::size_t momentum) const;
+  [[nodiscard]] double covariance_of_mean(std::size_t momentum, std::size_t left_frequency,
+                                          std::size_t right_frequency) const;
+  [[nodiscard]] double standard_error(std::size_t frequency, std::size_t momentum) const;
+  [[nodiscard]] double jackknife_mean(std::size_t omitted_block, std::size_t frequency,
+                                      std::size_t momentum) const;
+
+private:
+  friend class DensityMatsubaraBlockAccumulator;
+
+  DensityMatsubaraBlockSeries(Model model, MatsubaraModeSet modes,
+                              std::size_t measurements_per_block, std::vector<double> block_values,
+                              std::size_t sample_count);
+
+  [[nodiscard]] std::size_t mode_index(std::size_t frequency, std::size_t momentum) const;
+  [[nodiscard]] std::size_t covariance_index(std::size_t momentum, std::size_t left_frequency,
+                                             std::size_t right_frequency) const;
+
+  Model model_;
+  MatsubaraModeSet modes_;
+  std::size_t measurements_per_block_;
+  std::size_t block_count_ = 0;
+  std::size_t sample_count_;
+  std::vector<double> block_values_;
+  std::vector<double> means_;
+  std::vector<double> covariances_;
+};
+
+// Forms consecutive equal-size block means from exact density-mode samples.
+// Per-sample values use the same analytic fixed-N centering and normalization
+// as DensityMatsubaraAccumulator. Failed observations leave all state
+// unchanged, and finish() never drops a partial block.
+class DensityMatsubaraBlockAccumulator {
+public:
+  // Throws invalid_argument for zero block size or differing model/mode
+  // geometry, and length_error/overflow_error for unrepresentable extents.
+  DensityMatsubaraBlockAccumulator(Model model, MatsubaraModeSet modes,
+                                   std::size_t measurements_per_block);
+
+  [[nodiscard]] const Model &model() const noexcept { return model_; }
+  [[nodiscard]] const MatsubaraModeSet &modes() const noexcept { return modes_; }
+  [[nodiscard]] std::size_t measurements_per_block() const noexcept {
+    return measurements_per_block_;
+  }
+  [[nodiscard]] std::size_t completed_block_count() const noexcept {
+    return block_values_.size() / modes_.mode_count();
+  }
+  [[nodiscard]] std::size_t pending_sample_count() const noexcept { return pending_sample_count_; }
+
+  // Throws invalid_argument for different model or mode provenance and
+  // overflow_error/length_error if candidate state is not representable.
+  // Validation and a completing block's allocation occur before mutation.
+  void observe(const ContinuousParticleModes &values);
+  // Requires at least two complete blocks and no pending partial block.
+  [[nodiscard]] DensityMatsubaraBlockSeries finish() const;
+
+private:
+  Model model_;
+  MatsubaraModeSet modes_;
+  std::size_t measurements_per_block_;
+  std::size_t sample_count_ = 0;
+  std::size_t pending_sample_count_ = 0;
+  std::vector<double> pending_sums_;
+  std::vector<double> block_values_;
+  std::vector<std::complex<double>> analytic_means_;
+};
+
+// Consecutive equal-size block means of the connected density correlation at
+// selected imaginary-time lags. Values are dimensionless per site and may be
+// signed. Statistical covariance is the covariance of the reported mean,
+// calculated independently across lags for each requested momentum.
+class DensityLagBlockSeries {
+public:
+  [[nodiscard]] const Model &model() const noexcept { return model_; }
+  [[nodiscard]] const ImaginaryTimeLagSet &lags() const noexcept { return lags_; }
+  [[nodiscard]] std::size_t measurements_per_block() const noexcept {
+    return measurements_per_block_;
+  }
+  [[nodiscard]] std::size_t block_count() const noexcept { return block_count_; }
+  [[nodiscard]] std::size_t sample_count() const noexcept { return sample_count_; }
+
+  // All accessors check every supplied block, lag, and momentum axis.
+  [[nodiscard]] double block_value(std::size_t block, std::size_t lag, std::size_t momentum) const;
+  [[nodiscard]] double mean(std::size_t lag, std::size_t momentum) const;
+  [[nodiscard]] double covariance_of_mean(std::size_t momentum, std::size_t left_lag,
+                                          std::size_t right_lag) const;
+  [[nodiscard]] double standard_error(std::size_t lag, std::size_t momentum) const;
+  [[nodiscard]] double jackknife_mean(std::size_t omitted_block, std::size_t lag,
+                                      std::size_t momentum) const;
+
+private:
+  friend class DensityLagBlockAccumulator;
+
+  DensityLagBlockSeries(Model model, ImaginaryTimeLagSet lags, std::size_t measurements_per_block,
+                        std::vector<double> block_values, std::size_t sample_count);
+
+  [[nodiscard]] std::size_t value_index(std::size_t lag, std::size_t momentum) const;
+  [[nodiscard]] std::size_t covariance_index(std::size_t momentum, std::size_t left_lag,
+                                             std::size_t right_lag) const;
+
+  Model model_;
+  ImaginaryTimeLagSet lags_;
+  std::size_t measurements_per_block_;
+  std::size_t block_count_ = 0;
+  std::size_t sample_count_;
+  std::vector<double> block_values_;
+  std::vector<double> means_;
+  std::vector<double> covariances_;
+};
+
+// Forms consecutive equal-size block means from exact selected-lag density
+// overlaps. Nonzero momenta are normalized by 1/(beta*V); fixed-particle-number
+// zero momentum is installed as exact zero without rounded subtraction. Failed
+// observations leave all state unchanged, and finish() never drops a partial
+// block.
+class DensityLagBlockAccumulator {
+public:
+  // Throws invalid_argument for zero block size or differing model/lag
+  // geometry, and length_error/overflow_error for unrepresentable extents.
+  DensityLagBlockAccumulator(Model model, ImaginaryTimeLagSet lags,
+                             std::size_t measurements_per_block);
+
+  [[nodiscard]] const Model &model() const noexcept { return model_; }
+  [[nodiscard]] const ImaginaryTimeLagSet &lags() const noexcept { return lags_; }
+  [[nodiscard]] std::size_t measurements_per_block() const noexcept {
+    return measurements_per_block_;
+  }
+  [[nodiscard]] std::size_t completed_block_count() const noexcept {
+    return block_values_.size() / lags_.value_count();
+  }
+  [[nodiscard]] std::size_t pending_sample_count() const noexcept { return pending_sample_count_; }
+
+  // Throws invalid_argument for different model or lag provenance and
+  // overflow_error/length_error if candidate state is not representable.
+  // Validation and a completing block's allocation occur before mutation.
+  void observe(const ContinuousDensityLagValues &values);
+  // Requires at least two complete blocks and no pending partial block.
+  [[nodiscard]] DensityLagBlockSeries finish() const;
+
+private:
+  Model model_;
+  ImaginaryTimeLagSet lags_;
+  std::size_t measurements_per_block_;
+  std::size_t sample_count_ = 0;
+  std::size_t pending_sample_count_ = 0;
+  std::vector<double> pending_sums_;
+  std::vector<double> block_values_;
 };
 
 // Gauge response to the dimensionless positive-bond Peierls source. The full
@@ -280,6 +493,142 @@ private:
   std::vector<std::size_t> axis_event_count_sums_;
 };
 
+// Selects one Cartesian component when reporting a standard error for a
+// complex blocked observable.
+enum class HoppingResponseComponent : std::uint8_t {
+  Real,
+  Imaginary,
+};
+
+// Consecutive equal-size block means of the hopping response. The stored
+// authoritative block observables are the complex mean flux, the Hermitian
+// full gauge response R, and the real diamagnetic term D. Paramagnetic values
+// are derived block by block as D*delta-R, so their errors retain the sampled
+// covariance between the two terms.
+class HoppingResponseBlockSeries {
+public:
+  [[nodiscard]] const Model &model() const noexcept { return model_; }
+  [[nodiscard]] const MatsubaraModeSet &modes() const noexcept { return modes_; }
+  [[nodiscard]] std::size_t measurements_per_block() const noexcept {
+    return measurements_per_block_;
+  }
+  [[nodiscard]] std::size_t block_count() const noexcept { return block_count_; }
+  [[nodiscard]] std::size_t sample_count() const noexcept { return sample_count_; }
+
+  // All accessors check every supplied block, frequency, momentum, and axis.
+  [[nodiscard]] std::complex<double> block_mean_flux(std::size_t block, std::size_t frequency,
+                                                     std::size_t momentum, std::size_t axis) const;
+  [[nodiscard]] std::complex<double> mean_flux(std::size_t frequency, std::size_t momentum,
+                                               std::size_t axis) const;
+  [[nodiscard]] double mean_flux_standard_error(std::size_t frequency, std::size_t momentum,
+                                                std::size_t axis,
+                                                HoppingResponseComponent component) const;
+  [[nodiscard]] std::complex<double> jackknife_mean_flux(std::size_t omitted_block,
+                                                         std::size_t frequency,
+                                                         std::size_t momentum,
+                                                         std::size_t axis) const;
+
+  [[nodiscard]] std::complex<double> block_flux_response(std::size_t block, std::size_t frequency,
+                                                         std::size_t momentum, std::size_t left,
+                                                         std::size_t right) const;
+  [[nodiscard]] std::complex<double> flux_response(std::size_t frequency, std::size_t momentum,
+                                                   std::size_t left, std::size_t right) const;
+  [[nodiscard]] double flux_response_standard_error(std::size_t frequency, std::size_t momentum,
+                                                    std::size_t left, std::size_t right,
+                                                    HoppingResponseComponent component) const;
+  [[nodiscard]] std::complex<double> jackknife_flux_response(std::size_t omitted_block,
+                                                             std::size_t frequency,
+                                                             std::size_t momentum, std::size_t left,
+                                                             std::size_t right) const;
+
+  [[nodiscard]] double block_diamagnetic(std::size_t block, std::size_t axis) const;
+  [[nodiscard]] double diamagnetic(std::size_t axis) const;
+  [[nodiscard]] double diamagnetic_standard_error(std::size_t axis) const;
+  [[nodiscard]] double jackknife_diamagnetic(std::size_t omitted_block, std::size_t axis) const;
+
+  [[nodiscard]] std::complex<double> block_paramagnetic(std::size_t block, std::size_t frequency,
+                                                        std::size_t momentum, std::size_t left,
+                                                        std::size_t right) const;
+  [[nodiscard]] std::complex<double> paramagnetic(std::size_t frequency, std::size_t momentum,
+                                                  std::size_t left, std::size_t right) const;
+  [[nodiscard]] double paramagnetic_standard_error(std::size_t frequency, std::size_t momentum,
+                                                   std::size_t left, std::size_t right,
+                                                   HoppingResponseComponent component) const;
+  [[nodiscard]] std::complex<double> jackknife_paramagnetic(std::size_t omitted_block,
+                                                            std::size_t frequency,
+                                                            std::size_t momentum, std::size_t left,
+                                                            std::size_t right) const;
+
+private:
+  friend class HoppingResponseBlockAccumulator;
+
+  HoppingResponseBlockSeries(Model model, MatsubaraModeSet modes,
+                             std::size_t measurements_per_block,
+                             std::vector<std::complex<double>> mean_flux_block_values,
+                             std::vector<std::complex<double>> flux_response_block_values,
+                             std::vector<double> diamagnetic_block_values,
+                             std::size_t sample_count);
+
+  [[nodiscard]] std::size_t flux_index(std::size_t frequency, std::size_t momentum,
+                                       std::size_t axis) const;
+  [[nodiscard]] std::size_t response_index(std::size_t frequency, std::size_t momentum,
+                                           std::size_t left, std::size_t right) const;
+  void validate_block(std::size_t block) const;
+
+  Model model_;
+  MatsubaraModeSet modes_;
+  std::size_t measurements_per_block_;
+  std::size_t block_count_ = 0;
+  std::size_t sample_count_;
+  std::vector<std::complex<double>> mean_flux_block_values_;
+  std::vector<std::complex<double>> flux_response_block_values_;
+  std::vector<double> diamagnetic_block_values_;
+  std::vector<std::complex<double>> mean_flux_values_;
+  std::vector<std::complex<double>> flux_response_values_;
+  std::vector<double> diamagnetic_values_;
+};
+
+// Forms consecutive equal-size block means from exact signed hopping-flux
+// amplitudes and event counts. Failed observations leave all state unchanged,
+// and finish() never drops a partial block.
+class HoppingResponseBlockAccumulator {
+public:
+  // Throws invalid_argument for zero block size or differing model/mode
+  // geometry, and length_error/overflow_error for unrepresentable extents.
+  HoppingResponseBlockAccumulator(Model model, MatsubaraModeSet modes,
+                                  std::size_t measurements_per_block);
+
+  [[nodiscard]] const Model &model() const noexcept { return model_; }
+  [[nodiscard]] const MatsubaraModeSet &modes() const noexcept { return modes_; }
+  [[nodiscard]] std::size_t measurements_per_block() const noexcept {
+    return measurements_per_block_;
+  }
+  [[nodiscard]] std::size_t completed_block_count() const noexcept {
+    return diamagnetic_block_values_.size() / model_.dimension();
+  }
+  [[nodiscard]] std::size_t pending_sample_count() const noexcept { return pending_sample_count_; }
+
+  // Throws invalid_argument for different model or mode provenance and
+  // overflow_error/length_error if candidate state is not representable.
+  // Validation and a completing block's allocation occur before mutation.
+  void observe(const ContinuousParticleModes &values);
+  // Requires at least two complete blocks and no pending partial block.
+  [[nodiscard]] HoppingResponseBlockSeries finish() const;
+
+private:
+  Model model_;
+  MatsubaraModeSet modes_;
+  std::size_t measurements_per_block_;
+  std::size_t sample_count_ = 0;
+  std::size_t pending_sample_count_ = 0;
+  std::vector<std::complex<double>> pending_flux_sums_;
+  std::vector<std::complex<double>> pending_response_sums_;
+  std::vector<std::size_t> pending_axis_event_count_sums_;
+  std::vector<std::complex<double>> mean_flux_block_values_;
+  std::vector<std::complex<double>> flux_response_block_values_;
+  std::vector<double> diamagnetic_block_values_;
+};
+
 // Projects exact residence integrals and event impulses in one grouped event
 // sweep. Throws invalid_argument when the context and plan geometry differ and
 // overflow_error/length_error when an amplitude or result shape is not finite
@@ -308,6 +657,22 @@ continuous_pair_density_modes(const ContinuousMeasurementContext &context,
 [[nodiscard]] ContinuousPairDensityModes
 continuous_pair_density_modes(const ContinuousConfiguration &configuration,
                               const ContinuousMatsubaraPlan &plan);
+
+// Projects exact selected imaginary-time density overlaps from residence
+// intervals. Equal-time event groups are applied atomically, events at zero
+// precede the first positive-duration interval, and no time grid is introduced.
+// Throws invalid_argument when context and plan geometry differ and
+// overflow_error/length_error when an overlap or result shape is not finite
+// and representable.
+[[nodiscard]] ContinuousDensityLagValues
+continuous_density_lag_values(const ContinuousMeasurementContext &context,
+                              const ContinuousDensityLagPlan &plan);
+
+// One-off convenience overload that first owns the configuration's event
+// geometry in a ContinuousMeasurementContext.
+[[nodiscard]] ContinuousDensityLagValues
+continuous_density_lag_values(const ContinuousConfiguration &configuration,
+                              const ContinuousDensityLagPlan &plan);
 
 } // namespace qmc
 

@@ -2,9 +2,18 @@
 
 Date: 2026-07-23
 
-Status: design specification. The exact continuous-time Matsubara density
-estimator is implemented. Block-resolved statistics, continuation-data export,
-and direct requested-lag output are not implemented.
+Status: staged implementation specification. The exact continuous-time
+Matsubara density estimator, its block-resolved statistics, and the versioned
+continuation-data export/demo workflow are implemented. The exact primitive
+requested-lag plan, interval-overlap projector, and block-resolved statistics
+are also implemented, together with requested-lag export, demo integration,
+small-system Lehmann regression, and a deterministic exact cross-backend
+Fourier-identity regression. A separately maintained adapter for the vendored
+TRIQS/maxent `DataKernel` is implemented in `python/qmc_maxent.py`; it is not
+part of the QMC measurement library. The downstream
+`python/qmc_dynamic_structure.py` workflow batches that adapter over momenta,
+converts to per-particle \(S(q,\omega)\), propagates block jackknife errors,
+and writes combined tables and plots.
 
 ## Goal and boundary
 
@@ -261,7 +270,7 @@ regularisation or default-model uncertainty. A continuation consumer is
 responsible for holding all non-data choices fixed across replicates and for
 recording them.
 
-## Proposed block-statistics ownership
+## Implemented block-statistics ownership
 
 The core `DensityMatsubaraAccumulator` remains the small ensemble-mean
 accumulator. A separate analysis accumulator owns block state:
@@ -306,7 +315,7 @@ public:
 };
 ```
 
-The names are provisional, but the ownership is not:
+These names and ownership rules are implemented:
 
 - `observe()` consumes the same primitive values as the existing accumulator;
 - analytic centring is identical to `DensityMatsubaraAccumulator`;
@@ -330,11 +339,10 @@ the result at construction, but it must not lazily mutate through a `const`
 accessor. Because `g` is real, the sampling covariance is a real symmetric
 matrix; calculate one triangle and mirror it structurally.
 
-## Versioned continuation-data bundle
+## Implemented versioned continuation-data bundle
 
-The initial interchange format should be a directory of small UTF-8,
-tab-separated files rather than a solver-specific input file or a new binary
-dependency:
+The initial interchange format is a directory of small UTF-8, tab-separated
+files rather than a solver-specific input file or a new binary dependency:
 
 ```text
 density-continuation-v1/
@@ -385,29 +393,31 @@ block  momentum  frequency_or_lag  value
 
 Keeping block data makes the covariance reproducible, permits coarser
 reblocking without rerunning QMC, and supplies the leave-one-block-out
-replicates. A solver-specific adapter may translate this bundle to a MaxEnt or
-stochastic-continuation input format, but the QMC demo should not emit a format
-that implies one downstream implementation is authoritative.
+replicates. The separately maintained `python/qmc_maxent.py` adapter translates
+this bundle into arrays for the vendored TRIQS/maxent `DataKernel`; other
+solver-specific adapters may be added without changing the bundle. The QMC
+demo does not emit a format that implies one downstream implementation is
+authoritative.
 
 The writer validates all tables and metadata before creating the destination.
-It should write to a sibling temporary directory and atomically rename the
-complete bundle where the platform supports it. It must reject an existing
-destination by default and report partial cleanup failures. Output code belongs
-with the example/run workflow rather than the core measurement types.
+It writes to a sibling temporary directory and atomically renames the complete
+bundle where the platform supports it. It rejects an existing destination and
+reports partial cleanup failures. The private writer support code belongs to
+the example/run workflow rather than the core measurement types.
 
 The complete `InteractingModel` is run provenance even though primitive
 particle modes own only the free `Model`. A bundle must never infer `U` from a
 measurement result; the run workflow supplies it explicitly and verifies that
 its free model matches the block series.
 
-## Direct requested-lag backend
+## Implemented direct requested-lag primitive
 
 Some continuation programs and diagnostic plots prefer `C(q,tau)` to
 Matsubara data. Inverting a finite set of Matsubara modes is not an exact
 continuous-time estimator and can ring at the frequency cutoff. The direct
 backend should therefore evaluate selected lags from residence intervals.
 
-Conceptually:
+The implemented primitive API is:
 
 ```cpp
 struct ImaginaryTimeLagRequest {
@@ -448,8 +458,7 @@ continuous_density_lag_values(
     const ContinuousDensityLagPlan &);
 ```
 
-The exact public names can change during implementation. The required
-semantics are:
+The implemented semantics are:
 
 - `beta` is positive and every lag is finite and canonical in `[0,beta)`;
 - momentum and lag requests are nonempty, duplicate-free, and preserve request
@@ -460,12 +469,20 @@ semantics are:
 - the source-free auto-correlation stores the real, time-reversal-symmetrised
   estimator, eliminating an exactly zero ensemble imaginary part without
   changing its mean;
-- the accumulator subtracts `beta*N*N` only at `q == 0`, applies
-  `1/(beta*V)`, owns sample/block counts, and installs the exact fixed-`N`
-  zero rather than subtracting two rounded values; and
 - a future background gauge field or genuinely complex mixed correlation
   requires a different result type rather than silently discarding its
   imaginary part.
+
+`DensityLagBlockAccumulator` consumes these primitive overlaps, applies
+`1/(beta*V)` at every nonzero momentum, and installs exact zero at `q == 0`
+rather than subtracting two rounded values. Its owning
+`DensityLagBlockSeries` retains the complete model and requested-lag
+provenance, block size, sample count, signed block observations, means,
+per-momentum cross-lag covariance of the mean, standard errors, and
+leave-one-block-out means. It has the same complete-block rules as the
+Matsubara path and rejects failed observations before mutation. Unlike a
+Matsubara susceptibility observation, a nonzero-lag correlation and its block
+mean may be negative.
 
 ### Exact interval-overlap algorithm
 
@@ -506,19 +523,25 @@ streaming-run work tracked separately by repository issue 5 is implemented, a
 caller can construct the plan and block accumulator around the existing
 explicit sampling loop.
 
-The interacting demo should gain opt-in density-continuation arguments for:
+The interacting demo has opt-in density-continuation arguments for:
 
-- one or more momentum component rows;
-- a nonnegative Matsubara-index range or explicit lag list;
-- measurements per block;
-- continuation-bundle output directory; and
-- whether to retain the existing scalar trace alongside the bundle.
+- `--density-momenta`, using semicolon-separated rows and comma-separated
+  components;
+- `--density-frequency-max`, selecting the inclusive nonnegative range from
+  zero through the supplied Matsubara index;
+- `--density-lags`, selecting comma-separated canonical evaluation points in
+  `[0,beta)` for the mutually exclusive `imaginary_time_lag` basis;
+- `--density-measurements-per-block`;
+- `--density-continuation-dir`; and
+- `--no-trace`, when the existing scalar trace should not be retained beside
+  the bundle.
 
-The defaults should preserve the current inexpensive scalar demo. Request
-validation and all output-path checks occur before burn-in or random draws.
-The requested measurement count must form complete blocks. The demo supplies
-the complete interacting model and run schedule to the bundle writer and
-prints the number of completed blocks plus the largest standard error.
+The defaults preserve the current inexpensive scalar demo. Continuation
+request validation and all output-path checks occur before sampler
+construction. The requested measurement count must form at least two complete
+blocks. The demo supplies the complete interacting model and run schedule to
+the bundle writer and prints the number of completed blocks plus the largest
+standard error.
 
 When a general streaming observer becomes available, the demo should adopt it
 without changing the block-series or bundle formats. The measurement observer
@@ -560,9 +583,14 @@ loop.
 - Static, single-event, coincident-event, zero/beta seam, single-site, empty,
   and multiple-cycle configurations match a direct interval-intersection
   reference.
-- Exact integration of the piecewise lag correlation against a Matsubara phase
-  reproduces `|delta rho(q,n)|^2/(beta*V)` for deterministic fixtures. Sampling
-  a finite lag list and applying a quadrature is explicitly not this test.
+- **Completed 2026-07-23:** Exact integration of the real,
+  time-reflection-symmetrised piecewise lag correlation against a Matsubara
+  phase reproduces
+  `[|delta rho(q,n)|^2 + |delta rho(q,-n)|^2]/(2*beta*V)` for deterministic
+  fixtures. The two terms have the same ensemble mean, and at `n == 0` this
+  reduces configuration by configuration to
+  `|delta rho(q,0)|^2/(beta*V)`. Sampling a finite lag list and applying a
+  quadrature is explicitly not this test.
 - Small-system Lehmann values agree at several lags and momenta.
 
 ### Markov-chain and continuation-data tests
@@ -582,28 +610,44 @@ loop.
 
 ## Implementation order
 
-1. Add `DensityMatsubaraBlockAccumulator` and its provenance-owning block-series
-   result over the existing primitive particle modes.
-2. Add per-momentum covariance, standard-error, and leave-one-block-out
-   accessors with deterministic table tests.
-3. Add the versioned bundle writer and opt-in interacting-demo workflow,
-   including complete run and interaction provenance.
-4. Extend the finite-`U` statistical regression to exercise the public block
-   workflow and exported values.
-5. Add the separate requested-lag plan, exact interval-overlap projector, block
-   accumulator, and deterministic/Lehmann tests when a direct-`tau` consumer is
-   selected.
-6. Provide thin, separately maintained adapters for concrete continuation
-   programs only after their input conventions are pinned by integration
-   tests. Do not add a continuation solver to the QMC core by default.
+1. **Completed 2026-07-23:** Add `DensityMatsubaraBlockAccumulator` and its
+   provenance-owning block-series result over the existing primitive particle
+   modes.
+2. **Completed 2026-07-23:** Add per-momentum covariance, standard-error, and
+   leave-one-block-out accessors with deterministic table tests.
+3. **Completed 2026-07-23:** Add the versioned bundle writer and opt-in
+   interacting-demo workflow, including complete run and interaction
+   provenance.
+4. **Completed 2026-07-23:** Extend the finite-`U` statistical regression to
+   exercise the public block workflow and exported values.
+5. **Primitive completed 2026-07-23:** Add the separate requested-lag geometry
+   and plan, provenance-owning raw-overlap result, exact interval-overlap
+   projector, and deterministic seam/symmetry/invariance/reference tests.
+6. **Block statistics completed 2026-07-23:** Add the requested-lag block
+   accumulator and provenance-owning series with signed block values,
+   per-momentum cross-lag covariance, standard errors, and jackknife means.
+7. **Completed 2026-07-23:** Extend the versioned bundle and demo workflow to
+   the `imaginary_time_lag` basis, and add a small-system Lehmann regression at
+   several requested lags and momenta.
+8. **Completed 2026-07-23 for TRIQS/maxent:** Provide a thin, separately
+   maintained adapter with integration tests. The adapter uses the exact
+   positive bosonic kernels through `DataKernel`, consumes the full
+   per-momentum covariance, and leaves the QMC core independent of the solver.
+9. **Completed 2026-07-23 as a separate non-continuation schema:** Add public
+   hopping-response block statistics and the atomic `hopping-response-v1`
+   export. It retains the authoritative full gauge response, diamagnetic term,
+   derived block-level paramagnetic response, and mean-flux diagnostic without
+   prescribing conductivity continuation.
 
 ## Non-goals
 
 - No Trotter, retained, or quadrature time grid for interacting measurements.
 - No inverse transform of a truncated Matsubara set presented as exact
   `C(q,tau)`.
-- No automatic MaxEnt default model, real-frequency cutoff/grid,
-  regularisation selection, or covariance regularisation.
+- No automatic MaxEnt choices in the QMC core or continuation bundle writer.
+  The separate TRIQS/maxent adapter requires an explicit real-frequency cutoff,
+  exposes its mesh/alpha/analyzer choices, records its flat default model, and
+  applies no covariance ridge or diagonal replacement.
 - No claim that jackknife variation captures continuation-method systematic
   uncertainty.
 - No continuation of `q == 0` fixed-`N` density data.
