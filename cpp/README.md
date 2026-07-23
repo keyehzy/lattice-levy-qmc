@@ -205,8 +205,12 @@ incompatible samples before mutation, and returns
 `ContinuousMatsubaraDensityCorrelations`. The result reports the sampled
 complex mean amplitude and the connected susceptibility
 `<|delta rho(q,n)|^2>/(beta*V)` with the exact homogeneous fixed-particle-number
-mean subtracted at amplitude level. `HoppingResponseAccumulator` consumes the
-same primitive sample and returns the full signed-flux gauge response
+mean subtracted at amplitude level. `DensityMatsubaraBlockAccumulator` consumes
+the same normalized observation into consecutive equal-size blocks; its owning
+result exposes block values, means, per-momentum frequency covariance of the
+mean, standard errors, and leave-one-block-out means.
+`HoppingResponseAccumulator` consumes the same primitive sample and returns the
+full signed-flux gauge response
 `R=<I I^*>/(beta*V)`, axis-resolved diamagnetic term
 `D=<K_axis>/(beta*V)`, and derived paramagnetic current correlation
 `Lambda^p=D*delta-R`, together with sampled complex mean flux diagnostics.
@@ -220,8 +224,9 @@ See [`docs/MEASUREMENTS.md`](../docs/MEASUREMENTS.md) for estimator definitions,
 normalizations, exactness, and retained-grid conventions. The event-based
 continuous measurement design is documented in
 [`docs/CONTINUOUS_TIME_MEASUREMENTS.md`](../docs/CONTINUOUS_TIME_MEASUREMENTS.md).
-Block-resolved statistics, continuation-data export, and exact requested-lag
-density output are designed in
+The implemented block-resolved statistics and the remaining
+continuation-data export and exact requested-lag density output are specified
+in
 [`docs/ANALYTIC_CONTINUATION_DATA.md`](../docs/ANALYTIC_CONTINUATION_DATA.md).
 
 ## Measurement and plotting demo

@@ -2,9 +2,9 @@
 
 Date: 2026-07-23
 
-Status: design specification. The exact continuous-time Matsubara density
-estimator is implemented. Block-resolved statistics, continuation-data export,
-and direct requested-lag output are not implemented.
+Status: staged implementation specification. The exact continuous-time
+Matsubara density estimator and its block-resolved statistics are implemented.
+Continuation-data export and direct requested-lag output are not implemented.
 
 ## Goal and boundary
 
@@ -261,7 +261,7 @@ regularisation or default-model uncertainty. A continuation consumer is
 responsible for holding all non-data choices fixed across replicates and for
 recording them.
 
-## Proposed block-statistics ownership
+## Implemented block-statistics ownership
 
 The core `DensityMatsubaraAccumulator` remains the small ensemble-mean
 accumulator. A separate analysis accumulator owns block state:
@@ -306,7 +306,7 @@ public:
 };
 ```
 
-The names are provisional, but the ownership is not:
+These names and ownership rules are implemented:
 
 - `observe()` consumes the same primitive values as the existing accumulator;
 - analytic centring is identical to `DensityMatsubaraAccumulator`;
@@ -582,10 +582,11 @@ loop.
 
 ## Implementation order
 
-1. Add `DensityMatsubaraBlockAccumulator` and its provenance-owning block-series
-   result over the existing primitive particle modes.
-2. Add per-momentum covariance, standard-error, and leave-one-block-out
-   accessors with deterministic table tests.
+1. **Completed 2026-07-23:** Add `DensityMatsubaraBlockAccumulator` and its
+   provenance-owning block-series result over the existing primitive particle
+   modes.
+2. **Completed 2026-07-23:** Add per-momentum covariance, standard-error, and
+   leave-one-block-out accessors with deterministic table tests.
 3. Add the versioned bundle writer and opt-in interacting-demo workflow,
    including complete run and interaction provenance.
 4. Extend the finite-`U` statistical regression to exercise the public block

@@ -1344,10 +1344,12 @@ derivative and returned decomposition explicit.
    three concrete loops until another projector demonstrates a useful smaller
    generic contract.
 
-Continuation data, requested-lag output, remaining statistical regressions,
-benchmark-gated optimisations, and an ensemble pair-density response are
-deliberately outside this completed implementation order. They are specified
-or tracked by
+Matsubara block statistics are implemented under
+[`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md).
+Continuation-bundle export, requested-lag output, remaining statistical
+regressions, benchmark-gated optimisations, and an ensemble pair-density
+response remain outside this completed implementation order. They are
+specified or tracked by
 [`ANALYTIC_CONTINUATION_DATA.md`](ANALYTIC_CONTINUATION_DATA.md) and
 [issues 12](https://github.com/keyehzy/lattice-levy-qmc/issues/12),
 [13](https://github.com/keyehzy/lattice-levy-qmc/issues/13),

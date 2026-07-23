@@ -55,6 +55,12 @@ static_assert(
     std::is_same_v<decltype(std::declval<const ContinuousMatsubaraDensityCorrelations &>().modes()),
                    const MatsubaraModeSet &>);
 static_assert(!std::default_initializable<DensityMatsubaraAccumulator>);
+static_assert(!std::default_initializable<DensityMatsubaraBlockSeries>);
+static_assert(std::is_same_v<decltype(std::declval<const DensityMatsubaraBlockSeries &>().model()),
+                             const Model &>);
+static_assert(std::is_same_v<decltype(std::declval<const DensityMatsubaraBlockSeries &>().modes()),
+                             const MatsubaraModeSet &>);
+static_assert(!std::default_initializable<DensityMatsubaraBlockAccumulator>);
 static_assert(!std::default_initializable<HoppingResponse>);
 static_assert(
     std::is_same_v<decltype(std::declval<const HoppingResponse &>().model()), const Model &>);
@@ -1081,6 +1087,231 @@ TEST(DensityMatsubaraAccumulatorTest, HandlesTheEmptyFixedParticleEnsemble) {
     for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
       EXPECT_EQ(result.mean_amplitude(frequency, momentum), std::complex<double>(0.0, 0.0));
       EXPECT_EQ(result.at(frequency, momentum), 0.0);
+    }
+  }
+}
+
+TEST(DensityMatsubaraBlockAccumulatorTest,
+     ReproducesKnownBlockStatisticsAndTheSimpleAccumulatorMean) {
+  const Model model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 2,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const MatsubaraModeSet modes =
+      make_continuous_modes(model.beta(), TorusLayout(2, 1), {{0}, {1}}, {0, 1});
+  const ContinuousMatsubaraPlan plan(modes);
+  const ContinuousConfiguration static_configuration(model, Permutation({0}),
+                                                     {ContinuousPath(model.beta(), {0}, {0}, {})});
+  const ContinuousConfiguration moving_configuration(
+      model, Permutation({0}),
+      {ContinuousPath(model.beta(), {0}, {0},
+                      {{.time = 0.25, .axis = 0, .direction = 1},
+                       {.time = 0.75, .axis = 0, .direction = -1}})});
+  const ContinuousParticleModes static_values =
+      continuous_particle_modes(static_configuration, plan);
+  const ContinuousParticleModes moving_values =
+      continuous_particle_modes(moving_configuration, plan);
+  DensityMatsubaraAccumulator simple_accumulator(model, modes);
+  DensityMatsubaraBlockAccumulator block_accumulator(model, modes, 2);
+
+  EXPECT_EQ(block_accumulator.model(), model);
+  EXPECT_EQ(block_accumulator.modes(), modes);
+  EXPECT_EQ(block_accumulator.measurements_per_block(), 2U);
+  EXPECT_EQ(block_accumulator.completed_block_count(), 0U);
+  EXPECT_EQ(block_accumulator.pending_sample_count(), 0U);
+  EXPECT_THROW(static_cast<void>(block_accumulator.finish()), std::logic_error);
+
+  const auto observe = [&](const ContinuousParticleModes &values) {
+    simple_accumulator.observe(values);
+    block_accumulator.observe(values);
+  };
+  observe(static_values);
+  EXPECT_EQ(block_accumulator.completed_block_count(), 0U);
+  EXPECT_EQ(block_accumulator.pending_sample_count(), 1U);
+  EXPECT_THROW(static_cast<void>(block_accumulator.finish()), std::logic_error);
+  observe(static_values);
+  EXPECT_EQ(block_accumulator.completed_block_count(), 1U);
+  EXPECT_EQ(block_accumulator.pending_sample_count(), 0U);
+  EXPECT_THROW(static_cast<void>(block_accumulator.finish()), std::logic_error);
+
+  observe(static_values);
+  EXPECT_EQ(block_accumulator.completed_block_count(), 1U);
+  EXPECT_EQ(block_accumulator.pending_sample_count(), 1U);
+  EXPECT_THROW(static_cast<void>(block_accumulator.finish()), std::logic_error);
+  observe(moving_values);
+  observe(moving_values);
+  observe(moving_values);
+
+  const DensityMatsubaraBlockSeries series = block_accumulator.finish();
+  const ContinuousMatsubaraDensityCorrelations simple = simple_accumulator.finish();
+  ASSERT_EQ(series.model(), model);
+  ASSERT_EQ(series.modes(), modes);
+  ASSERT_EQ(series.measurements_per_block(), 2U);
+  ASSERT_EQ(series.block_count(), 3U);
+  ASSERT_EQ(series.sample_count(), 6U);
+
+  const double inverse_pi_squared = 1.0 / (std::numbers::pi * std::numbers::pi);
+  EXPECT_NEAR(series.block_value(0, 0, 1), 0.5, 1e-15);
+  EXPECT_NEAR(series.block_value(0, 1, 1), 0.0, 1e-15);
+  EXPECT_NEAR(series.block_value(1, 0, 1), 0.25, 1e-15);
+  EXPECT_NEAR(series.block_value(1, 1, 1), inverse_pi_squared, 2e-15);
+  EXPECT_NEAR(series.block_value(2, 0, 1), 0.0, 1e-15);
+  EXPECT_NEAR(series.block_value(2, 1, 1), 2.0 * inverse_pi_squared, 3e-15);
+  EXPECT_NEAR(series.mean(0, 1), 0.25, 1e-15);
+  EXPECT_NEAR(series.mean(1, 1), inverse_pi_squared, 2e-15);
+
+  const double expected_frequency_zero_variance = 1.0 / 48.0;
+  const double expected_frequency_one_variance = 1.0 / (3.0 * std::pow(std::numbers::pi, 4));
+  const double expected_covariance = -1.0 / (12.0 * std::numbers::pi * std::numbers::pi);
+  EXPECT_NEAR(series.covariance_of_mean(1, 0, 0), expected_frequency_zero_variance, 1e-15);
+  EXPECT_NEAR(series.covariance_of_mean(1, 1, 1), expected_frequency_one_variance, 2e-16);
+  EXPECT_NEAR(series.covariance_of_mean(1, 0, 1), expected_covariance, 3e-16);
+  EXPECT_EQ(series.covariance_of_mean(1, 0, 1), series.covariance_of_mean(1, 1, 0));
+  EXPECT_NEAR(series.standard_error(0, 1), std::sqrt(expected_frequency_zero_variance), 1e-15);
+  EXPECT_NEAR(series.standard_error(1, 1), std::sqrt(expected_frequency_one_variance), 1e-15);
+
+  EXPECT_NEAR(series.jackknife_mean(0, 0, 1), 0.125, 1e-15);
+  EXPECT_NEAR(series.jackknife_mean(0, 1, 1), 1.5 * inverse_pi_squared, 2e-15);
+  EXPECT_NEAR(series.jackknife_mean(1, 0, 1), 0.25, 1e-15);
+  EXPECT_NEAR(series.jackknife_mean(1, 1, 1), inverse_pi_squared, 2e-15);
+  EXPECT_NEAR(series.jackknife_mean(2, 0, 1), 0.375, 1e-15);
+  EXPECT_NEAR(series.jackknife_mean(2, 1, 1), 0.5 * inverse_pi_squared, 2e-15);
+
+  for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+    EXPECT_EQ(series.block_value(0, frequency, 0), 0.0);
+    EXPECT_EQ(series.block_value(1, frequency, 0), 0.0);
+    EXPECT_EQ(series.block_value(2, frequency, 0), 0.0);
+    EXPECT_EQ(series.mean(frequency, 0), 0.0);
+    EXPECT_EQ(series.standard_error(frequency, 0), 0.0);
+    EXPECT_EQ(series.mean(frequency, 0), simple.at(frequency, 0));
+    EXPECT_NEAR(series.mean(frequency, 1), simple.at(frequency, 1), 2e-15);
+  }
+
+  EXPECT_THROW(static_cast<void>(series.block_value(3, 0, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.block_value(0, 2, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.block_value(0, 0, 2)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.mean(2, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.mean(0, 2)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.covariance_of_mean(2, 0, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.covariance_of_mean(0, 2, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.covariance_of_mean(0, 0, 2)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.standard_error(2, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.standard_error(0, 2)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.jackknife_mean(3, 0, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.jackknife_mean(0, 2, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(series.jackknife_mean(0, 0, 2)), std::out_of_range);
+}
+
+TEST(DensityMatsubaraBlockAccumulatorTest, RejectsInvalidConstructionAndProvenanceBeforeMutation) {
+  const Model model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const MatsubaraModeSet modes =
+      make_continuous_modes(model.beta(), TorusLayout(3, 1), {{0}, {1}}, {0, 1});
+  EXPECT_THROW(static_cast<void>(DensityMatsubaraBlockAccumulator(model, modes, 0)),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(DensityMatsubaraBlockAccumulator(
+                   model, make_continuous_modes(2.0, TorusLayout(3, 1), {{0}}, {0}), 2)),
+               std::invalid_argument);
+  EXPECT_THROW(static_cast<void>(DensityMatsubaraBlockAccumulator(
+                   model, make_continuous_modes(1.0, TorusLayout(4, 1), {{0}}, {0}), 2)),
+               std::invalid_argument);
+
+  const ContinuousConfiguration configuration(model, Permutation({0}),
+                                              {ContinuousPath(model.beta(), {0}, {0}, {})});
+  const ContinuousParticleModes values =
+      continuous_particle_modes(configuration, ContinuousMatsubaraPlan(modes));
+  const Model different_model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 3,
+      .dimension = 1,
+      .hopping = 2.0,
+  });
+  const ContinuousConfiguration different_configuration(
+      different_model, Permutation({0}), {ContinuousPath(different_model.beta(), {0}, {0}, {})});
+  const ContinuousParticleModes different_model_values =
+      continuous_particle_modes(different_configuration, ContinuousMatsubaraPlan(modes));
+  const MatsubaraModeSet different_modes =
+      make_continuous_modes(model.beta(), TorusLayout(3, 1), {{0}, {1}}, {1});
+  const ContinuousParticleModes different_mode_values =
+      continuous_particle_modes(configuration, ContinuousMatsubaraPlan(different_modes));
+  DensityMatsubaraBlockAccumulator accumulator(model, modes, 2);
+
+  accumulator.observe(values);
+  ASSERT_EQ(accumulator.completed_block_count(), 0U);
+  ASSERT_EQ(accumulator.pending_sample_count(), 1U);
+  EXPECT_THROW(accumulator.observe(different_model_values), std::invalid_argument);
+  EXPECT_EQ(accumulator.completed_block_count(), 0U);
+  EXPECT_EQ(accumulator.pending_sample_count(), 1U);
+  EXPECT_THROW(accumulator.observe(different_mode_values), std::invalid_argument);
+  EXPECT_EQ(accumulator.completed_block_count(), 0U);
+  EXPECT_EQ(accumulator.pending_sample_count(), 1U);
+
+  accumulator.observe(values);
+  EXPECT_EQ(accumulator.completed_block_count(), 1U);
+  EXPECT_EQ(accumulator.pending_sample_count(), 0U);
+  EXPECT_THROW(static_cast<void>(accumulator.finish()), std::logic_error);
+  accumulator.observe(values);
+  EXPECT_EQ(accumulator.completed_block_count(), 1U);
+  EXPECT_EQ(accumulator.pending_sample_count(), 1U);
+  EXPECT_THROW(static_cast<void>(accumulator.finish()), std::logic_error);
+  accumulator.observe(values);
+  EXPECT_EQ(accumulator.completed_block_count(), 2U);
+  EXPECT_EQ(accumulator.pending_sample_count(), 0U);
+  EXPECT_NO_THROW(static_cast<void>(accumulator.finish()));
+}
+
+TEST(DensityMatsubaraBlockAccumulatorTest, PreservesRequestedFrequencyOrder) {
+  const Model model(ModelParameters{
+      .particle_count = 1,
+      .beta = 1.0,
+      .linear_size = 2,
+      .dimension = 1,
+      .hopping = 1.0,
+  });
+  const MatsubaraModeSet forward_modes =
+      make_continuous_modes(model.beta(), TorusLayout(2, 1), {{1}}, {0, 1});
+  const MatsubaraModeSet reverse_modes =
+      make_continuous_modes(model.beta(), TorusLayout(2, 1), {{1}}, {1, 0});
+  const ContinuousConfiguration static_configuration(model, Permutation({0}),
+                                                     {ContinuousPath(model.beta(), {0}, {0}, {})});
+  const ContinuousConfiguration moving_configuration(
+      model, Permutation({0}),
+      {ContinuousPath(model.beta(), {0}, {0},
+                      {{.time = 0.25, .axis = 0, .direction = 1},
+                       {.time = 0.75, .axis = 0, .direction = -1}})});
+  DensityMatsubaraBlockAccumulator forward(model, forward_modes, 1);
+  DensityMatsubaraBlockAccumulator reverse(model, reverse_modes, 1);
+  for (const ContinuousConfiguration *configuration :
+       {&static_configuration, &moving_configuration, &static_configuration}) {
+    forward.observe(
+        continuous_particle_modes(*configuration, ContinuousMatsubaraPlan(forward_modes)));
+    reverse.observe(
+        continuous_particle_modes(*configuration, ContinuousMatsubaraPlan(reverse_modes)));
+  }
+  const DensityMatsubaraBlockSeries forward_series = forward.finish();
+  const DensityMatsubaraBlockSeries reverse_series = reverse.finish();
+
+  for (std::size_t block = 0; block < forward_series.block_count(); ++block) {
+    EXPECT_NEAR(forward_series.block_value(block, 0, 0), reverse_series.block_value(block, 1, 0),
+                1e-15);
+    EXPECT_NEAR(forward_series.block_value(block, 1, 0), reverse_series.block_value(block, 0, 0),
+                1e-15);
+  }
+  EXPECT_NEAR(forward_series.mean(0, 0), reverse_series.mean(1, 0), 1e-15);
+  EXPECT_NEAR(forward_series.mean(1, 0), reverse_series.mean(0, 0), 1e-15);
+  for (std::size_t left = 0; left < 2; ++left) {
+    for (std::size_t right = 0; right < 2; ++right) {
+      EXPECT_NEAR(forward_series.covariance_of_mean(0, left, right),
+                  reverse_series.covariance_of_mean(0, 1 - left, 1 - right), 1e-15);
     }
   }
 }

@@ -44,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `DensityMatsubaraAccumulator` and the provenance-owning
   `ContinuousMatsubaraDensityCorrelations` result for analytically centred
   continuous-time density susceptibility and sampled mean amplitudes.
+- Add `DensityMatsubaraBlockAccumulator` and `DensityMatsubaraBlockSeries` for
+  complete equal-size density blocks, per-momentum frequency covariance of the
+  mean, standard errors, and leave-one-block-out means.
 - Add `HoppingResponseAccumulator` and `HoppingResponse` for analytically
   centred signed-flux gauge response, axis-resolved diamagnetic terms, derived
   paramagnetic current correlations, and sampled mean-flux diagnostics.

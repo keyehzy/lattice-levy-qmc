@@ -81,6 +81,25 @@ private:
   double imaginary_correction_ = 0.0;
 };
 
+class CompensatedRealSum {
+public:
+  void add(const double value) noexcept {
+    const double next = sum_ + value;
+    if (std::abs(sum_) >= std::abs(value)) {
+      correction_ += (sum_ - next) + value;
+    } else {
+      correction_ += (value - next) + sum_;
+    }
+    sum_ = next;
+  }
+
+  [[nodiscard]] double value() const noexcept { return sum_ + correction_; }
+
+private:
+  double sum_ = 0.0;
+  double correction_ = 0.0;
+};
+
 template <class T>
 std::vector<T> make_checked_vector(const std::size_t extent, const char *description) {
   if (extent > std::vector<T>{}.max_size()) {
@@ -111,6 +130,205 @@ MatsubaraModeSet validated_density_accumulator_modes(const Model &model, Matsuba
   validate_model_mode_geometry(model, modes,
                                "density accumulator model and Matsubara geometry differ");
   return modes;
+}
+
+std::size_t validated_measurements_per_block(const std::size_t measurements_per_block) {
+  if (measurements_per_block == 0) {
+    throw std::invalid_argument("density block size must be positive");
+  }
+  return measurements_per_block;
+}
+
+std::size_t density_covariance_extent(const MatsubaraModeSet &modes) {
+  const std::size_t frequency_square =
+      detail::checked_product(modes.frequency_count(), modes.frequency_count(),
+                              "density covariance frequency extent exceeds size_t");
+  return detail::checked_product(modes.momentum_count(), frequency_square,
+                                 "density covariance extent exceeds size_t");
+}
+
+std::vector<std::complex<double>> density_analytic_means(const Model &model,
+                                                         const MatsubaraModeSet &modes) {
+  auto means = make_checked_vector<std::complex<double>>(
+      modes.mode_count(), "density analytic means exceed vector capacity");
+  for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+    if (modes.frequency_index(frequency) != 0) {
+      continue;
+    }
+    for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+      if (!is_zero_momentum(modes, momentum)) {
+        continue;
+      }
+      const double zero_mode_mean = model.beta() * static_cast<double>(model.particle_count());
+      if (!std::isfinite(zero_mode_mean)) {
+        throw std::overflow_error("density analytic zero-mode mean is non-finite");
+      }
+      means[(frequency * modes.momentum_count()) + momentum] = {zero_mode_mean, 0.0};
+    }
+  }
+  return means;
+}
+
+struct DensityModeObservation {
+  std::vector<std::complex<double>> amplitudes;
+  std::vector<double> connected_values;
+};
+
+DensityModeObservation
+density_mode_observation(const ContinuousParticleModes &values, const Model &model,
+                         const MatsubaraModeSet &modes,
+                         const std::span<const std::complex<double>> analytic_means) {
+  if (values.model() != model) {
+    throw std::invalid_argument("density observation has a different model");
+  }
+  if (values.modes() != modes) {
+    throw std::invalid_argument("density observation has different Matsubara modes");
+  }
+  if (analytic_means.size() != modes.mode_count()) {
+    throw std::logic_error("density analytic means have the wrong extent");
+  }
+
+  DensityModeObservation observation{
+      .amplitudes = make_checked_vector<std::complex<double>>(
+          modes.mode_count(), "density observation amplitudes exceed vector capacity"),
+      .connected_values = make_checked_vector<double>(
+          modes.mode_count(), "density observations exceed vector capacity"),
+  };
+  const auto volume_divisor = static_cast<double>(model.volume());
+  for (std::size_t frequency = 0; frequency < modes.frequency_count(); ++frequency) {
+    for (std::size_t momentum = 0; momentum < modes.momentum_count(); ++momentum) {
+      const std::size_t mode = (frequency * modes.momentum_count()) + momentum;
+      const std::complex<double> amplitude = values.density(frequency, momentum);
+      if (!is_finite(amplitude)) {
+        throw std::overflow_error("density observation amplitude is non-finite");
+      }
+      observation.amplitudes[mode] = amplitude;
+
+      const std::complex<double> centered = amplitude - analytic_means[mode];
+      if (!is_finite(centered)) {
+        throw std::overflow_error("centered density amplitude is non-finite");
+      }
+      const double centered_norm = std::norm(centered);
+      if (!std::isfinite(centered_norm)) {
+        throw std::overflow_error("density susceptibility observation is non-finite");
+      }
+      const double connected_value = (centered_norm / model.beta()) / volume_divisor;
+      if (!std::isfinite(connected_value) || connected_value < 0.0) {
+        throw std::overflow_error("normalized density observation is non-finite");
+      }
+      observation.connected_values[mode] = connected_value;
+    }
+  }
+  return observation;
+}
+
+std::size_t validate_density_block_series(const MatsubaraModeSet &modes,
+                                          const std::size_t measurements_per_block,
+                                          const std::span<const double> block_values,
+                                          const std::size_t sample_count) {
+  if (block_values.size() % modes.mode_count() != 0) {
+    throw std::invalid_argument("density block series has the wrong block-value extent");
+  }
+  const std::size_t block_count = block_values.size() / modes.mode_count();
+  if (block_count < 2) {
+    throw std::invalid_argument("density block series requires at least two blocks");
+  }
+  const std::size_t expected_sample_count = detail::checked_product(
+      block_count, measurements_per_block, "density block-series sample count exceeds size_t");
+  if (sample_count != expected_sample_count) {
+    throw std::invalid_argument("density block series has an inconsistent sample count");
+  }
+  for (const double value : block_values) {
+    if (!std::isfinite(value) || value < 0.0) {
+      throw std::invalid_argument("density block value is invalid");
+    }
+  }
+  return block_count;
+}
+
+std::vector<double> density_block_means(const MatsubaraModeSet &modes,
+                                        const std::span<const double> block_values,
+                                        const std::size_t block_count) {
+  auto means =
+      make_checked_vector<double>(modes.mode_count(), "density block means exceed vector capacity");
+  const auto block_divisor = static_cast<double>(block_count);
+  for (std::size_t mode = 0; mode < modes.mode_count(); ++mode) {
+    CompensatedRealSum mean_sum;
+    for (std::size_t block = 0; block < block_count; ++block) {
+      mean_sum.add(block_values[(block * modes.mode_count()) + mode] / block_divisor);
+    }
+    means[mode] = mean_sum.value();
+    if (!std::isfinite(means[mode]) || means[mode] < 0.0) {
+      throw std::overflow_error("density block-series mean is non-finite");
+    }
+  }
+  return means;
+}
+
+double density_covariance_of_mean(const std::span<const double> block_values,
+                                  const std::span<const double> means, const std::size_t mode_count,
+                                  const std::size_t block_count, const std::size_t left_mode,
+                                  const std::size_t right_mode, const bool diagonal) {
+  CompensatedRealSum covariance_sum;
+  for (std::size_t block = 0; block < block_count; ++block) {
+    const std::size_t block_offset = block * mode_count;
+    const double left_difference = block_values[block_offset + left_mode] - means[left_mode];
+    const double right_difference = block_values[block_offset + right_mode] - means[right_mode];
+    const double product = left_difference * right_difference;
+    if (!std::isfinite(product)) {
+      throw std::overflow_error("density covariance product is non-finite");
+    }
+    covariance_sum.add(product);
+  }
+  const auto block_divisor = static_cast<double>(block_count);
+  const auto dof_divisor = static_cast<double>(block_count - 1);
+  const double covariance = (covariance_sum.value() / block_divisor) / dof_divisor;
+  if (!std::isfinite(covariance) || (diagonal && covariance < 0.0)) {
+    throw std::overflow_error("density covariance of mean is invalid");
+  }
+  return covariance;
+}
+
+struct DensityCovarianceCoordinates {
+  std::size_t row_frequency;
+  std::size_t column_frequency;
+};
+
+std::size_t density_covariance_index(const std::size_t frequency_count, const std::size_t momentum,
+                                     const DensityCovarianceCoordinates coordinates) noexcept {
+  return ((((momentum * frequency_count) + coordinates.row_frequency) * frequency_count) +
+          coordinates.column_frequency);
+}
+
+std::vector<double> density_block_covariances(const MatsubaraModeSet &modes,
+                                              const std::span<const double> block_values,
+                                              const std::span<const double> means,
+                                              const std::size_t block_count) {
+  auto covariances = make_checked_vector<double>(density_covariance_extent(modes),
+                                                 "density covariances exceed vector capacity");
+  const std::size_t frequency_count = modes.frequency_count();
+  const std::size_t momentum_count = modes.momentum_count();
+  for (std::size_t momentum = 0; momentum < momentum_count; ++momentum) {
+    for (std::size_t left_frequency = 0; left_frequency < frequency_count; ++left_frequency) {
+      const std::size_t left_mode = (left_frequency * momentum_count) + momentum;
+      for (std::size_t right_frequency = left_frequency; right_frequency < frequency_count;
+           ++right_frequency) {
+        const std::size_t right_mode = (right_frequency * momentum_count) + momentum;
+        const double covariance =
+            density_covariance_of_mean(block_values, means, modes.mode_count(), block_count,
+                                       left_mode, right_mode, left_frequency == right_frequency);
+        const std::size_t upper = density_covariance_index(
+            frequency_count, momentum,
+            {.row_frequency = left_frequency, .column_frequency = right_frequency});
+        const std::size_t lower = density_covariance_index(
+            frequency_count, momentum,
+            {.row_frequency = right_frequency, .column_frequency = left_frequency});
+        covariances[upper] = covariance;
+        covariances[lower] = covariance;
+      }
+    }
+  }
+  return covariances;
 }
 
 MatsubaraModeSet validated_hopping_accumulator_modes(const Model &model, MatsubaraModeSet modes) {
@@ -775,69 +993,30 @@ DensityMatsubaraAccumulator::DensityMatsubaraAccumulator(Model model, MatsubaraM
     : model_(model), modes_(validated_density_accumulator_modes(model_, std::move(modes))),
       amplitude_sums_(make_checked_vector<std::complex<double>>(
           modes_.mode_count(), "density amplitude sums exceed vector capacity")),
-      centered_norm_sums_(make_checked_vector<double>(
+      centered_observation_sums_(make_checked_vector<double>(
           modes_.mode_count(), "density susceptibility sums exceed vector capacity")),
-      analytic_means_(make_checked_vector<std::complex<double>>(
-          modes_.mode_count(), "density analytic means exceed vector capacity")) {
-  for (std::size_t frequency = 0; frequency < modes_.frequency_count(); ++frequency) {
-    if (modes_.frequency_index(frequency) != 0) {
-      continue;
-    }
-    for (std::size_t momentum = 0; momentum < modes_.momentum_count(); ++momentum) {
-      if (is_zero_momentum(modes_, momentum)) {
-        const double zero_mode_mean = model_.beta() * static_cast<double>(model_.particle_count());
-        if (!std::isfinite(zero_mode_mean)) {
-          throw std::overflow_error("density analytic zero-mode mean is non-finite");
-        }
-        const std::size_t mode = (frequency * modes_.momentum_count()) + momentum;
-        analytic_means_[mode] = {zero_mode_mean, 0.0};
-      }
-    }
-  }
-}
+      analytic_means_(density_analytic_means(model_, modes_)) {}
 
 void DensityMatsubaraAccumulator::observe(const ContinuousParticleModes &values) {
-  if (values.model() != model_) {
-    throw std::invalid_argument("density observation has a different model");
-  }
-  if (values.modes() != modes_) {
-    throw std::invalid_argument("density observation has different Matsubara modes");
-  }
-
   const std::size_t updated_sample_count =
       detail::checked_add_size(sample_count_, 1, "density accumulator sample count exceeds size_t");
+  const DensityModeObservation observation =
+      density_mode_observation(values, model_, modes_, analytic_means_);
   std::vector<std::complex<double>> updated_amplitude_sums = amplitude_sums_;
-  std::vector<double> updated_centered_norm_sums = centered_norm_sums_;
-  for (std::size_t frequency = 0; frequency < modes_.frequency_count(); ++frequency) {
-    for (std::size_t momentum = 0; momentum < modes_.momentum_count(); ++momentum) {
-      const std::size_t mode = (frequency * modes_.momentum_count()) + momentum;
-      const std::complex<double> amplitude = values.density(frequency, momentum);
-      if (!is_finite(amplitude)) {
-        throw std::overflow_error("density observation amplitude is non-finite");
-      }
-
-      updated_amplitude_sums[mode] += amplitude;
-      if (!is_finite(updated_amplitude_sums[mode])) {
-        throw std::overflow_error("density mean-amplitude sum is non-finite");
-      }
-
-      const std::complex<double> centered = amplitude - analytic_means_[mode];
-      if (!is_finite(centered)) {
-        throw std::overflow_error("centered density amplitude is non-finite");
-      }
-      const double centered_norm = std::norm(centered);
-      if (!std::isfinite(centered_norm)) {
-        throw std::overflow_error("density susceptibility observation is non-finite");
-      }
-      updated_centered_norm_sums[mode] += centered_norm;
-      if (!std::isfinite(updated_centered_norm_sums[mode])) {
-        throw std::overflow_error("density susceptibility sum is non-finite");
-      }
+  std::vector<double> updated_centered_observation_sums = centered_observation_sums_;
+  for (std::size_t mode = 0; mode < modes_.mode_count(); ++mode) {
+    updated_amplitude_sums[mode] += observation.amplitudes[mode];
+    if (!is_finite(updated_amplitude_sums[mode])) {
+      throw std::overflow_error("density mean-amplitude sum is non-finite");
+    }
+    updated_centered_observation_sums[mode] += observation.connected_values[mode];
+    if (!std::isfinite(updated_centered_observation_sums[mode])) {
+      throw std::overflow_error("density susceptibility sum is non-finite");
     }
   }
 
   amplitude_sums_.swap(updated_amplitude_sums);
-  centered_norm_sums_.swap(updated_centered_norm_sums);
+  centered_observation_sums_.swap(updated_centered_observation_sums);
   sample_count_ = updated_sample_count;
 }
 
@@ -851,11 +1030,9 @@ ContinuousMatsubaraDensityCorrelations DensityMatsubaraAccumulator::finish() con
   auto correlations = make_checked_vector<double>(
       modes_.mode_count(), "density susceptibility result exceeds vector capacity");
   const auto sample_divisor = static_cast<double>(sample_count_);
-  const auto volume_divisor = static_cast<double>(model_.volume());
   for (std::size_t mode = 0; mode < modes_.mode_count(); ++mode) {
     mean_amplitudes[mode] = amplitude_sums_[mode] / sample_divisor;
-    correlations[mode] =
-        ((centered_norm_sums_[mode] / sample_divisor) / model_.beta()) / volume_divisor;
+    correlations[mode] = centered_observation_sums_[mode] / sample_divisor;
     if (!is_finite(mean_amplitudes[mode])) {
       throw std::overflow_error("density mean result is non-finite");
     }
@@ -866,6 +1043,159 @@ ContinuousMatsubaraDensityCorrelations DensityMatsubaraAccumulator::finish() con
 
   return {model_, MatsubaraModeField<double>(modes_, std::move(correlations)),
           std::move(mean_amplitudes), sample_count_};
+}
+
+DensityMatsubaraBlockSeries::DensityMatsubaraBlockSeries(Model model, MatsubaraModeSet modes,
+                                                         const std::size_t measurements_per_block,
+                                                         std::vector<double> block_values,
+                                                         const std::size_t sample_count)
+    : model_(model), modes_(validated_density_accumulator_modes(model_, std::move(modes))),
+      measurements_per_block_(validated_measurements_per_block(measurements_per_block)),
+      sample_count_(sample_count), block_values_(std::move(block_values)) {
+  block_count_ =
+      validate_density_block_series(modes_, measurements_per_block_, block_values_, sample_count_);
+  means_ = density_block_means(modes_, block_values_, block_count_);
+  covariances_ = density_block_covariances(modes_, block_values_, means_, block_count_);
+}
+
+std::size_t DensityMatsubaraBlockSeries::mode_index(const std::size_t frequency,
+                                                    const std::size_t momentum) const {
+  if (frequency >= modes_.frequency_count()) {
+    throw std::out_of_range("density block-series frequency index is out of range");
+  }
+  if (momentum >= modes_.momentum_count()) {
+    throw std::out_of_range("density block-series momentum index is out of range");
+  }
+  return (frequency * modes_.momentum_count()) + momentum;
+}
+
+std::size_t DensityMatsubaraBlockSeries::covariance_index(const std::size_t momentum,
+                                                          const std::size_t left_frequency,
+                                                          const std::size_t right_frequency) const {
+  if (momentum >= modes_.momentum_count()) {
+    throw std::out_of_range("density covariance momentum index is out of range");
+  }
+  if (left_frequency >= modes_.frequency_count()) {
+    throw std::out_of_range("density covariance left-frequency index is out of range");
+  }
+  if (right_frequency >= modes_.frequency_count()) {
+    throw std::out_of_range("density covariance right-frequency index is out of range");
+  }
+  return density_covariance_index(
+      modes_.frequency_count(), momentum,
+      {.row_frequency = left_frequency, .column_frequency = right_frequency});
+}
+
+double DensityMatsubaraBlockSeries::block_value(const std::size_t block,
+                                                const std::size_t frequency,
+                                                const std::size_t momentum) const {
+  if (block >= block_count_) {
+    throw std::out_of_range("density block index is out of range");
+  }
+  return block_values_[(block * modes_.mode_count()) + mode_index(frequency, momentum)];
+}
+
+double DensityMatsubaraBlockSeries::mean(const std::size_t frequency,
+                                         const std::size_t momentum) const {
+  return means_[mode_index(frequency, momentum)];
+}
+
+double DensityMatsubaraBlockSeries::covariance_of_mean(const std::size_t momentum,
+                                                       const std::size_t left_frequency,
+                                                       const std::size_t right_frequency) const {
+  return covariances_[covariance_index(momentum, left_frequency, right_frequency)];
+}
+
+double DensityMatsubaraBlockSeries::standard_error(const std::size_t frequency,
+                                                   const std::size_t momentum) const {
+  const std::size_t covariance = covariance_index(momentum, frequency, frequency);
+  return std::sqrt(covariances_[covariance]);
+}
+
+double DensityMatsubaraBlockSeries::jackknife_mean(const std::size_t omitted_block,
+                                                   const std::size_t frequency,
+                                                   const std::size_t momentum) const {
+  if (omitted_block >= block_count_) {
+    throw std::out_of_range("density jackknife block index is out of range");
+  }
+  const std::size_t mode = mode_index(frequency, momentum);
+  const auto jackknife_divisor = static_cast<double>(block_count_ - 1);
+  CompensatedRealSum jackknife_sum;
+  for (std::size_t block = 0; block < block_count_; ++block) {
+    if (block != omitted_block) {
+      jackknife_sum.add(block_values_[(block * modes_.mode_count()) + mode] / jackknife_divisor);
+    }
+  }
+  const double mean_without_block = jackknife_sum.value();
+  if (!std::isfinite(mean_without_block) || mean_without_block < 0.0) {
+    throw std::overflow_error("density jackknife mean is invalid");
+  }
+  return mean_without_block;
+}
+
+DensityMatsubaraBlockAccumulator::DensityMatsubaraBlockAccumulator(
+    Model model, MatsubaraModeSet modes, const std::size_t measurements_per_block)
+    : model_(model), modes_(validated_density_accumulator_modes(model_, std::move(modes))),
+      measurements_per_block_(validated_measurements_per_block(measurements_per_block)),
+      pending_sums_(make_checked_vector<double>(
+          modes_.mode_count(), "density pending block sums exceed vector capacity")),
+      analytic_means_(density_analytic_means(model_, modes_)) {}
+
+void DensityMatsubaraBlockAccumulator::observe(const ContinuousParticleModes &values) {
+  const std::size_t updated_sample_count = detail::checked_add_size(
+      sample_count_, 1, "density block accumulator sample count exceeds size_t");
+  const std::size_t updated_pending_sample_count = detail::checked_add_size(
+      pending_sample_count_, 1, "density pending sample count exceeds size_t");
+  if (updated_pending_sample_count > measurements_per_block_) {
+    throw std::logic_error("density pending sample count exceeds its block size");
+  }
+  const DensityModeObservation observation =
+      density_mode_observation(values, model_, modes_, analytic_means_);
+
+  std::vector<double> updated_pending_sums = pending_sums_;
+  for (std::size_t mode = 0; mode < modes_.mode_count(); ++mode) {
+    updated_pending_sums[mode] += observation.connected_values[mode];
+    if (!std::isfinite(updated_pending_sums[mode])) {
+      throw std::overflow_error("density pending block sum is non-finite");
+    }
+  }
+
+  if (updated_pending_sample_count < measurements_per_block_) {
+    pending_sums_.swap(updated_pending_sums);
+    pending_sample_count_ = updated_pending_sample_count;
+    sample_count_ = updated_sample_count;
+    return;
+  }
+
+  auto completed_block = make_checked_vector<double>(
+      modes_.mode_count(), "density completed block exceeds vector capacity");
+  const auto block_divisor = static_cast<double>(measurements_per_block_);
+  for (std::size_t mode = 0; mode < modes_.mode_count(); ++mode) {
+    completed_block[mode] = updated_pending_sums[mode] / block_divisor;
+    if (!std::isfinite(completed_block[mode]) || completed_block[mode] < 0.0) {
+      throw std::overflow_error("density completed block value is invalid");
+    }
+  }
+  const std::size_t updated_block_value_count = detail::checked_add_size(
+      block_values_.size(), modes_.mode_count(), "density block-value extent exceeds size_t");
+  if (updated_block_value_count > block_values_.max_size()) {
+    throw std::length_error("density block values exceed vector capacity");
+  }
+
+  block_values_.insert(block_values_.end(), completed_block.begin(), completed_block.end());
+  std::ranges::fill(pending_sums_, 0.0);
+  pending_sample_count_ = 0;
+  sample_count_ = updated_sample_count;
+}
+
+DensityMatsubaraBlockSeries DensityMatsubaraBlockAccumulator::finish() const {
+  if (pending_sample_count_ != 0) {
+    throw std::logic_error("cannot finish a density block accumulator with a partial block");
+  }
+  if (completed_block_count() < 2) {
+    throw std::logic_error("density block accumulator requires at least two complete blocks");
+  }
+  return {model_, modes_, measurements_per_block_, block_values_, sample_count_};
 }
 
 HoppingResponse::HoppingResponse(Model model, MatsubaraModeSet modes,
